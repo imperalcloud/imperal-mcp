@@ -51,7 +51,8 @@ class ImperalClient:
                 "git_url": f"https://imperal.io/ir-apps/{app_id}",
             })
         except ImperalError as e:
-            if e.status_code == 409 or "exists" in str(e).lower():
+            msg = str(e).lower()
+            if e.status_code == 409 or "already in use" in msg or "exists" in msg:
                 return  # already created — fine
             raise
 
@@ -72,6 +73,13 @@ class ImperalClient:
 
     async def get_app(self, app_id: str) -> dict:
         return await self._request("GET", f"/v1/developer/apps/{app_id}")
+
+    async def get_marketplace_app(self, app_id: str) -> dict:
+        """Fetch app manifest from the marketplace catalog. Returns {} on 404/error."""
+        try:
+            return await self._request("GET", f"/v1/marketplace/apps/{app_id}")
+        except ImperalError:
+            return {}
 
     async def run_tool(self, app_id: str, function: str, params: dict) -> dict:
         uid = await self.whoami()

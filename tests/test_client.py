@@ -71,3 +71,61 @@ async def test_ensure_app_reraises_500():
     with pytest.raises(ImperalError) as exc_info:
         await c.ensure_app("demo", "Demo App")
     assert exc_info.value.status_code == 500
+
+
+# F3 — gateway returns HTTP 400 "already in use" for first-party extension apps
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_app_swallows_400_already_in_use():
+    """Real gateway: re-creating a first-party app returns 400 with 'already in use'."""
+    respx.post("http://gw/v1/developer/apps").mock(
+        return_value=httpx.Response(
+            400,
+            json={"detail": "App ID 'x' is already in use by a first-party extension"},
+        )
+    )
+    c = ImperalClient(CFG)
+    # Must NOT raise — treat as idempotent
+    await c.ensure_app("x", "X App")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_app_reraises_400_other_reason():
+    """A 400 for a different reason (e.g. invalid app_id format) must still raise."""
+    respx.post("http://gw/v1/developer/apps").mock(
+        return_value=httpx.Response(
+            400, json={"detail": "app_id contains invalid characters"}
+        )
+    )
+    c = ImperalClient(CFG)
+    with pytest.raises(ImperalError) as exc_info:
+        await c.ensure_app("bad id!", "Bad")
+    assert exc_info.value.status_code == 400
+
+
+# F1 — get_marketplace_app returns {} on 404 (no crash)
+@respx.mock
+@pytest.mark.asyncio
+async def test_get_marketplace_app_returns_empty_on_404():
+    respx.get("http://gw/v1/marketplace/apps/nonexistent").mock(
+        return_value=httpx.Response(404, json={"detail": "not found"})
+    )
+    c = ImperalClient(CFG)
+    result = await c.get_marketplace_app("nonexistent")
+    assert result == {}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_get_marketplace_app_returns_data_on_success():
+    respx.get("http://gw/v1/marketplace/apps/notes").mock(
+        return_value=httpx.Response(
+            200,
+            json={"app_id": "notes", "tools": [{"name": "list_notes", "action_type": "read"}]},
+        )
+    )
+    c = ImperalClient(CFG)
+    result = await c.get_marketplace_app("notes")
+    assert result["app_id"] == "notes"
+    assert result["tools"][0]["name"] == "list_notes"

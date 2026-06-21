@@ -1,8 +1,56 @@
 from __future__ import annotations
 
+import json
+
 from imperal_sdk.ir.validator import validate_ir_dict
 from imperal_sdk.ir.actions import validate_step
 import imperal_sdk.ui as _ui
+
+# Canonical link-saver example — schema-valid (passes validate_ir).
+# Uses real declarative step shape: op + args{kind, data}.
+LINK_SAVER_EXAMPLE: dict = {
+    "ir_version": "1.0",
+    "app": {
+        "id": "link-saver",
+        "version": "1.0.0",
+        "title": "Link Saver",
+        "capabilities": ["store"],
+        "functions": [
+            {
+                "name": "save_link",
+                "action_type": "write",
+                "params_schema": {"url": {"type": "string"}},
+                "return_schema": {"type": "object"},
+                "impl": {
+                    "kind": "declarative",
+                    "steps": [
+                        {
+                            "id": "s1",
+                            "op": "store.create",
+                            "args": {"kind": "link", "data": {"url": "{{args.url}}"}},
+                        }
+                    ],
+                },
+            },
+            {
+                "name": "list_links",
+                "action_type": "read",
+                "params_schema": {},
+                "return_schema": {"type": "array"},
+                "impl": {
+                    "kind": "declarative",
+                    "steps": [
+                        {
+                            "id": "s1",
+                            "op": "store.list",
+                            "args": {"kind": "link"},
+                        }
+                    ],
+                },
+            },
+        ],
+    },
+}
 
 
 def _issue(rule: str, level: str, message: str) -> dict:
@@ -41,14 +89,25 @@ def ir_spec_text() -> str:
         "# Imperal IR envelope (app.ir.json)\n\n"
         "An IR app is a declarative envelope:\n"
         "{\n"
-        '  "ir_version": "1",\n'
+        '  "ir_version": "1.0",\n'
         '  "app": {\n'
-        '    "id": "<app_id>", "version": "1.0.0",\n'
-        '    "functions": [ {"name": "save_link", "action_type": "write",\n'
-        '        "impl": {"kind": "declarative", "steps": [ ... ]}} ]\n'
+        '    "id": "<app_id>", "version": "1.0.0", "title": "<display name>",\n'
+        '    "capabilities": ["store"],\n'
+        '    "functions": [\n'
+        '      {"name": "save_link", "action_type": "write",\n'
+        '       "params_schema": {"url": {"type": "string"}},\n'
+        '       "return_schema": {"type": "object"},\n'
+        '       "impl": {"kind": "declarative", "steps": [\n'
+        '         {"id": "s1", "op": "store.create",\n'
+        '          "args": {"kind": "link", "data": {"url": "{{args.url}}"}}}\n'
+        "       ]}}\n"
+        "    ]\n"
         "  }\n}\n\n"
+        "Declarative step vocabulary:\n"
+        "- op: store.create / store.list / store.get / store.update / store.delete\n"
+        "- args: {kind, data} for create/update; {kind} for list/get/delete\n"
+        "- Use {{args.<param>}} template syntax to reference function parameters.\n\n"
         "- Every function declares action_type: read | write | destructive.\n"
-        "- Declarative steps use the small action vocabulary (e.g. store.create/store.list).\n"
         "- Validate locally with the validate_ir tool BEFORE deploy.\n"
         "- Render with ui.* components (see the ui-catalog resource)."
     )
@@ -58,19 +117,8 @@ def examples_text() -> str:
     return (
         "# Example app.ir.json — link-saver\n\n"
         "```json\n"
-        "{\n"
-        '  "ir_version": "1",\n'
-        '  "app": {"id": "link-saver", "version": "1.0.0", "functions": [\n'
-        '    {"name": "save_link", "action_type": "write",\n'
-        '     "impl": {"kind": "declarative", "steps": [\n'
-        '       {"verb": "store.create", "collection": "links", "data": {"url": "{{args.url}}"}}\n'
-        "     ]}},\n"
-        '    {"name": "list_links", "action_type": "read",\n'
-        '     "impl": {"kind": "declarative", "steps": [\n'
-        '       {"verb": "store.list", "collection": "links"}\n'
-        "     ]}}\n"
-        "  ]}\n}\n"
-        "```\n"
+        + json.dumps(LINK_SAVER_EXAMPLE, indent=2)
+        + "\n```\n"
     )
 
 

@@ -1,8 +1,16 @@
+import asyncio
+import json
 import pytest
 
 from imperal_mcp.config import Config
 from imperal_mcp.client import ImperalClient
-from imperal_mcp.server import build_server, _resolve_action_type, run_read_tool_logic
+from imperal_mcp.server import (
+    build_server,
+    _resolve_action_type,
+    _tools_of,
+    run_read_tool_logic,
+    deploy_ir_logic,
+)
 
 
 class FakeClient(ImperalClient):
@@ -15,6 +23,9 @@ class FakeClient(ImperalClient):
             {"name": "list_notes", "action_type": "read"},
             {"name": "delete_note", "action_type": "destructive"},
         ]}
+
+    async def get_marketplace_app(self, app_id):
+        return {}
 
     async def run_tool(self, app_id, function, params):
         self.ran.append((app_id, function))
@@ -57,3 +68,153 @@ async def test_run_read_tool_refuses_synthetic():
     out = await run_read_tool_logic(c, "app", "__panel__home", {})
     assert c.ran == []            # never executed
     assert out["refused"] is True
+
+
+# F1 — _tools_of handles manifest_json as a JSON string
+def test_tools_of_tools_json_list():
+    app = {"tools_json": [{"name": "foo", "action_type": "read"}]}
+    assert _tools_of(app) == [{"name": "foo", "action_type": "read"}]
+
+
+def test_tools_of_manifest_json_dict():
+    app = {"manifest_json": {"tools": [{"name": "bar", "action_type": "write"}]}}
+    assert _tools_of(app) == [{"name": "bar", "action_type": "write"}]
+
+
+def test_tools_of_manifest_json_string():
+    tools = [{"name": "list_links", "action_type": "read"}]
+    app = {"manifest_json": json.dumps({"tools": tools})}
+    assert _tools_of(app) == tools
+
+
+def test_tools_of_manifest_json_none():
+    assert _tools_of({"manifest_json": None}) == []
+
+
+def test_tools_of_manifest_json_invalid_string():
+    # Malformed JSON → returns []
+    assert _tools_of({"manifest_json": "not-json"}) == []
+
+
+# F1 — _resolve_action_type with manifest_json as JSON string
+@pytest.mark.asyncio
+async def test_resolve_action_type_manifest_json_string():
+    """get_app returns manifest_json as a JSON string → must parse and resolve action_type."""
+    class StringManifestClient(ImperalClient):
+        def __init__(self):
+            super().__init__(Config(api_url="http://gw", token="t"))
+
+        async def get_app(self, app_id):
+            tools = [{"name": "list_links", "action_type": "read"}]
+            return {"manifest_json": json.dumps({"tools": tools})}
+
+        async def get_marketplace_app(self, app_id):
+            return {}
+
+    c = StringManifestClient()
+    result = await _resolve_action_type(c, "link-saver", "list_links")
+    assert result == "read"
+
+
+# F1 — _resolve_action_type falls back to marketplace when get_app has no tools
+@pytest.mark.asyncio
+async def test_resolve_action_type_marketplace_fallback():
+    """When get_app returns no tools, marketplace catalog is consulted."""
+    class MarketplaceClient(ImperalClient):
+        def __init__(self):
+            super().__init__(Config(api_url="http://gw", token="t"))
+
+        async def get_app(self, app_id):
+            return {"manifest_json": None}  # no tools from dev record
+
+        async def get_marketplace_app(self, app_id):
+            return {"tools": [{"name": "read_notes", "action_type": "read"}]}
+
+    c = MarketplaceClient()
+    result = await _resolve_action_type(c, "notes", "read_notes")
+    assert result == "read"
+
+
+@pytest.mark.asyncio
+async def test_resolve_action_type_returns_none_when_neither_has_tool():
+    """Unknown function → None regardless of marketplace response."""
+    class EmptyClient(ImperalClient):
+        def __init__(self):
+            super().__init__(Config(api_url="http://gw", token="t"))
+
+        async def get_app(self, app_id):
+            return {}
+
+        async def get_marketplace_app(self, app_id):
+            return {}
+
+    c = EmptyClient()
+    result = await _resolve_action_type(c, "app", "nonexistent")
+    assert result is None
+
+
+# F2 — deploy_ir_logic retries once on transient error
+@pytest.mark.asyncio
+async def test_deploy_ir_logic_retries_once_on_error(monkeypatch):
+    """First deploy returns status=error; second returns success. Must retry exactly once."""
+    call_count = 0
+    sleep_calls = []
+
+    async def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    class RetryClient(ImperalClient):
+        def __init__(self):
+            super().__init__(Config(api_url="http://gw", token="t"))
+            self.deploy_calls = 0
+
+        async def whoami(self):
+            return "imp_u_test"
+
+        async def deploy_ir(self, app_id, ir_dict):
+            self.deploy_calls += 1
+            if self.deploy_calls == 1:
+                return {"status": "error", "message": "ownership check failed"}
+            return {"status": "success", "data": {"app_id": app_id}}
+
+    c = RetryClient()
+    ir = {"ir_version": "1.0", "app": {"id": "demo"}}
+    result = await deploy_ir_logic(c, ir, "demo")
+
+    assert result["status"] == "success"
+    assert c.deploy_calls == 2  # called exactly twice
+    assert len(sleep_calls) == 1  # slept once
+    assert sleep_calls[0] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_deploy_ir_logic_no_retry_on_immediate_success(monkeypatch):
+    """First deploy succeeds → no retry, no sleep."""
+    sleep_calls = []
+
+    async def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    class SuccessClient(ImperalClient):
+        def __init__(self):
+            super().__init__(Config(api_url="http://gw", token="t"))
+            self.deploy_calls = 0
+
+        async def whoami(self):
+            return "imp_u_test"
+
+        async def deploy_ir(self, app_id, ir_dict):
+            self.deploy_calls += 1
+            return {"status": "success", "data": {"app_id": app_id}}
+
+    c = SuccessClient()
+    ir = {"ir_version": "1.0", "app": {"id": "demo"}}
+    result = await deploy_ir_logic(c, ir, "demo")
+
+    assert result["status"] == "success"
+    assert c.deploy_calls == 1  # called once only
+    assert sleep_calls == []    # no sleep

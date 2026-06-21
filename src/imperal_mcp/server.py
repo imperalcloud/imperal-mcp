@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -18,13 +20,26 @@ from .mask import defensive_scrub
 
 
 def _tools_of(app: dict) -> list[dict]:
-    """Normalize a get_app payload to a list of {name, action_type}."""
+    """Normalize a get_app payload to a list of {name, action_type}.
+
+    Handles all real shapes returned by the gateway:
+    1. tools_json is a list → return directly.
+    2. manifest_json is a dict → return manifest_json["tools"].
+    3. manifest_json is a non-empty JSON string → parse it, return ["tools"].
+    4. Anything else → [].
+    """
     tj = app.get("tools_json")
     if isinstance(tj, list):
         return tj
-    mj = app.get("manifest_json") or {}
+    mj = app.get("manifest_json")
     if isinstance(mj, dict):
         return mj.get("tools", []) or []
+    if isinstance(mj, str) and mj:
+        try:
+            parsed = json.loads(mj)
+            return parsed.get("tools", []) or []
+        except (json.JSONDecodeError, AttributeError):
+            return []
     return []
 
 
@@ -33,7 +48,24 @@ async def _resolve_action_type(client: ImperalClient, app_id: str, function: str
     for t in _tools_of(app):
         if t.get("name") == function:
             return t.get("action_type")
+    # Fallback: check the marketplace catalog
+    try:
+        mkt = await client.get_marketplace_app(app_id)
+        for t in (mkt.get("tools") or []):
+            if t.get("name") == function:
+                return t.get("action_type")
+    except Exception:
+        pass
     return None
+
+
+async def deploy_ir_logic(client: ImperalClient, app_ir: dict, app_id: str) -> dict:
+    """Deploy app_ir; retry once after 1 s on a transient first-deploy failure."""
+    result = await client.deploy_ir(app_id, app_ir)
+    if result.get("status") != "success":
+        await asyncio.sleep(1.0)
+        result = await client.deploy_ir(app_id, app_ir)
+    return result
 
 
 async def run_read_tool_logic(client: ImperalClient, app_id: str, function: str, args: dict) -> Any:
@@ -66,7 +98,7 @@ def build_server(client: ImperalClient) -> FastMCP:
         """Deploy an app.ir.json into the caller's account (creates the app record if needed)."""
         display = (app_ir.get("app", {}) or {}).get("id", app_id)
         await client.ensure_app(app_id, display)
-        return await client.deploy_ir(app_id, app_ir)
+        return await deploy_ir_logic(client, app_ir, app_id)
 
     @mcp.tool()
     async def list_apps() -> Any:
