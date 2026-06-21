@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "imperal": {
+      "command": "imperal-mcp",
+      "env": {
+        "IMPERAL_API_URL": "https://auth.imperal.io",
+        "IMPERAL_TOKEN": "<your-imperal-access-jwt>"
+      }
+    }
+  }
+}

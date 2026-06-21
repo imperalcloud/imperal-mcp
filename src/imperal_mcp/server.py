@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+from typing import Any
+
+from mcp.server.fastmcp import FastMCP
+
+from .client import ImperalClient
+from .config import Config
+from .gate import is_read_only, is_synthetic
+from .irkit import (
+    validate_ir as _validate_ir,
+    ui_catalog_text,
+    ir_spec_text,
+    examples_text,
+    build_prompt_text,
+)
+from .mask import defensive_scrub
+
+
+def _tools_of(app: dict) -> list[dict]:
+    """Normalize a get_app payload to a list of {name, action_type}."""
+    tj = app.get("tools_json")
+    if isinstance(tj, list):
+        return tj
+    mj = app.get("manifest_json") or {}
+    if isinstance(mj, dict):
+        return mj.get("tools", []) or []
+    return []
+
+
+async def _resolve_action_type(client: ImperalClient, app_id: str, function: str) -> str | None:
+    app = await client.get_app(app_id)
+    for t in _tools_of(app):
+        if t.get("name") == function:
+            return t.get("action_type")
+    return None
+
+
+async def run_read_tool_logic(client: ImperalClient, app_id: str, function: str, args: dict) -> Any:
+    if is_synthetic(function):
+        return {"refused": True, "reason": "synthetic system entry, not a callable tool"}
+    action_type = await _resolve_action_type(client, app_id, function)
+    if not is_read_only(function, action_type):
+        return {"refused": True,
+                "reason": f"tool '{function}' is action_type={action_type!r}; "
+                          "this MCP runs read-only tools only"}
+    out = await client.run_tool(app_id, function, args or {})
+    return defensive_scrub(out)
+
+
+def build_server(client: ImperalClient) -> FastMCP:
+    mcp = FastMCP("imperal")
+
+    @mcp.tool()
+    def validate_ir(app_ir: dict) -> dict:
+        """Validate an app.ir.json locally (envelope + every declarative step)."""
+        return _validate_ir(app_ir)
+
+    @mcp.tool()
+    async def smoke_ir(app_ir: dict, function: str, args: dict | None = None) -> dict:
+        """Run one function of an app.ir.json in an ISOLATED store and report {ok,result,trace}."""
+        return await client.smoke_ir(app_ir, function, args or {})
+
+    @mcp.tool()
+    async def deploy_ir(app_ir: dict, app_id: str) -> dict:
+        """Deploy an app.ir.json into the caller's account (creates the app record if needed)."""
+        display = (app_ir.get("app", {}) or {}).get("id", app_id)
+        await client.ensure_app(app_id, display)
+        return await client.deploy_ir(app_id, app_ir)
+
+    @mcp.tool()
+    async def list_apps() -> Any:
+        """List the caller's developer apps (PII-masked)."""
+        return defensive_scrub(await client.list_apps())
+
+    @mcp.tool()
+    async def get_app(app_id: str) -> Any:
+        """Get one app's manifest + tools (with action_type) (PII-masked)."""
+        return defensive_scrub(await client.get_app(app_id))
+
+    @mcp.tool()
+    async def run_read_tool(app_id: str, function: str, args: dict | None = None) -> Any:
+        """Run a READ-only tool of a deployed app (refuses write/destructive)."""
+        return await run_read_tool_logic(client, app_id, function, args or {})
+
+    @mcp.resource("imperal://ir-spec")
+    def _r_spec() -> str:
+        return ir_spec_text()
+
+    @mcp.resource("imperal://ui-catalog")
+    def _r_ui() -> str:
+        return ui_catalog_text()
+
+    @mcp.resource("imperal://examples")
+    def _r_ex() -> str:
+        return examples_text()
+
+    @mcp.prompt()
+    def build_imperal_app() -> str:
+        """Guidance for building an Imperal app from intent."""
+        return build_prompt_text()
+
+    return mcp
+
+
+def main() -> None:
+    client = ImperalClient(Config.from_env())
+    build_server(client).run()  # stdio transport
+
+
+if __name__ == "__main__":
+    main()
