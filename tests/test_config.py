@@ -1,4 +1,3 @@
-import os
 from imperal_mcp.config import Config
 from imperal_mcp import __version__
 

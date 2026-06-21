@@ -49,3 +49,11 @@ async def test_run_read_tool_refuses_write():
     out = await run_read_tool_logic(c, "app", "delete_note", {})
     assert c.ran == []  # never executed
     assert out["refused"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_read_tool_refuses_synthetic():
+    c = FakeClient()
+    out = await run_read_tool_logic(c, "app", "__panel__home", {})
+    assert c.ran == []            # never executed
+    assert out["refused"] is True
