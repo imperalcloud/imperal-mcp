@@ -72,3 +72,14 @@ async def test_logout_revokes_and_wipes(tmp_path, monkeypatch):
     respx.post("http://gw/v1/auth/logout").mock(return_value=httpx.Response(200, json={"message": "Logged out"}))
     await auth.logout(Config(api_url="http://gw", token=None))
     assert auth.load_creds() is None  # creds file removed
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_logout_wipes_local_creds_even_when_server_errors(tmp_path, monkeypatch):
+    """Best-effort revoke: a 500 from the server must NOT prevent local creds deletion."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    auth.save_creds({"refresh_token": "r", "access_token": "a", "access_expires_at": 9e9})
+    respx.post("http://gw/v1/auth/logout").mock(return_value=httpx.Response(500, text="internal error"))
+    await auth.logout(Config(api_url="http://gw", token=None))
+    assert auth.load_creds() is None  # local creds wiped despite server error

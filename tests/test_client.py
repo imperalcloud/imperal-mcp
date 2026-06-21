@@ -12,9 +12,10 @@ CFG = Config(api_url="http://gw", token="jwt-abc")
 
 
 @pytest.mark.asyncio
-async def test_requires_token():
+async def test_requires_token(tmp_path, monkeypatch):
     # With no token and no stored credentials, the client raises an auth-related error.
-    # Previously ImperalAuthError (sync path); now NotLoggedInError from auth.ensure_access_token.
+    # Use a clean tmp home so real on-disk creds don't interfere.
+    monkeypatch.setenv("HOME", str(tmp_path))
     c = ImperalClient(Config(api_url="http://gw", token=None))
     with pytest.raises((ImperalAuthError, NotLoggedInError)):
         await c.whoami()
@@ -136,7 +137,7 @@ async def test_get_marketplace_app_returns_data_on_success():
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_client_uses_token_provider(monkeypatch):
+async def test_client_uses_token_provider():
     calls = {"n": 0}
 
     async def provider():

@@ -24,7 +24,7 @@ class ImperalClient:
         if token_provider is not None:
             self._token_provider = token_provider
         elif cfg.token:
-            async def _static():
+            async def _static() -> str:
                 return cfg.token
             self._token_provider = _static
         else:

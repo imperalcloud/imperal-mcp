@@ -25,3 +25,8 @@ def test_panel_url_default_and_override(monkeypatch):
     assert Config.from_env().panel_url == "https://panel.imperal.io"
     monkeypatch.setenv("IMPERAL_PANEL_URL", "http://localhost:3000")
     assert Config.from_env().panel_url == "http://localhost:3000"
+
+
+def test_panel_url_strips_trailing_slash(monkeypatch):
+    monkeypatch.setenv("IMPERAL_PANEL_URL", "http://localhost:3000/")
+    assert Config.from_env().panel_url == "http://localhost:3000"

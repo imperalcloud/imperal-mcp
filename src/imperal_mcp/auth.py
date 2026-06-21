@@ -17,6 +17,8 @@ import httpx
 
 # refresh this many seconds before the access token's stated expiry
 _REFRESH_SKEW = 60
+# seconds to wait for the user to complete browser login before giving up
+_LOGIN_TIMEOUT = 300
 
 
 class NotLoggedInError(RuntimeError):
@@ -94,7 +96,7 @@ async def exchange_code(api_url: str, code: str, code_verifier: str, redirect_ur
     return resp.json()
 
 
-_OK_HTML = b"<html><body><h2>imperal-mcp: you're logged in.</h2>You can close this tab.</body></html>"
+_OK_HTML = b"<html><body><h2>imperal-mcp: received.</h2>You can close this tab and return to your terminal.</body></html>"
 _ERR_HTML = b"<html><body><h2>imperal-mcp: login was cancelled or failed.</h2></body></html>"
 
 
@@ -115,8 +117,8 @@ class _LoopbackHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(_OK_HTML if ok else _ERR_HTML)
 
-    def log_message(self, *a):  # silence server log output
-        pass
+    def log_message(self, fmt, *args):  # noqa: ARG002
+        pass  # silence server log output
 
 
 def login(cfg, *, open_browser: bool = True) -> str:
@@ -142,8 +144,11 @@ def login(cfg, *, open_browser: bool = True) -> str:
     print(f"Opening {url}")
     if open_browser:
         webbrowser.open(url)
-    t.join(timeout=300)
+    t.join(timeout=_LOGIN_TIMEOUT)
     server.server_close()
+
+    if not _LoopbackHandler.captured:
+        print("Login timed out — re-run `imperal-mcp login` to try again.")
 
     cap = _LoopbackHandler.captured
     if cap.get("state") != state:

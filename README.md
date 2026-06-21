@@ -91,3 +91,14 @@ read the spec, author the IR, validate, smoke, deploy.
 any tool that is not explicitly `action_type: "read"`. Write and destructive tools are never
 executed. All read responses pass through a client-side PII scrub (email/phone redaction) before
 being returned to the LLM.
+
+---
+
+## Development
+
+```bash
+git clone https://github.com/imperalcloud/imperal-mcp
+cd imperal-mcp
+pip install -e '.[dev]'
+python -m pytest
+```
