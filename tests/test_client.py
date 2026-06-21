@@ -6,14 +6,17 @@ import respx
 
 from imperal_mcp.config import Config
 from imperal_mcp.client import ImperalClient, ImperalAuthError, ImperalError
+from imperal_mcp.auth import NotLoggedInError
 
 CFG = Config(api_url="http://gw", token="jwt-abc")
 
 
 @pytest.mark.asyncio
 async def test_requires_token():
+    # With no token and no stored credentials, the client raises an auth-related error.
+    # Previously ImperalAuthError (sync path); now NotLoggedInError from auth.ensure_access_token.
     c = ImperalClient(Config(api_url="http://gw", token=None))
-    with pytest.raises(ImperalAuthError):
+    with pytest.raises((ImperalAuthError, NotLoggedInError)):
         await c.whoami()
 
 
@@ -129,3 +132,19 @@ async def test_get_marketplace_app_returns_data_on_success():
     result = await c.get_marketplace_app("notes")
     assert result["app_id"] == "notes"
     assert result["tools"][0]["name"] == "list_notes"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_client_uses_token_provider(monkeypatch):
+    calls = {"n": 0}
+
+    async def provider():
+        calls["n"] += 1
+        return "tok-from-provider"
+
+    respx.get("http://gw/v1/auth/me").mock(return_value=httpx.Response(200, json={"imperal_id": "imp_x"}))
+    c = ImperalClient(Config(api_url="http://gw", token=None), token_provider=provider)
+    assert await c.whoami() == "imp_x"
+    assert calls["n"] >= 1
+    assert respx.calls.last.request.headers["authorization"] == "Bearer tok-from-provider"

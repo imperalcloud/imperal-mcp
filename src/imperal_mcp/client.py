@@ -18,19 +18,33 @@ class ImperalError(RuntimeError):
 
 
 class ImperalClient:
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, token_provider=None):
         self._cfg = cfg
         self._imperal_id: str | None = None
+        if token_provider is not None:
+            self._token_provider = token_provider
+        elif cfg.token:
+            async def _static():
+                return cfg.token
+            self._token_provider = _static
+        else:
+            from . import auth
 
-    def _headers(self) -> dict[str, str]:
-        if not self._cfg.token:
-            raise ImperalAuthError("IMPERAL_TOKEN is not set — cannot call the Imperal API.")
-        return {"Authorization": f"Bearer {self._cfg.token}"}
+            async def _stored():
+                return await auth.ensure_access_token(cfg)
+            self._token_provider = _stored
+
+    async def _headers(self) -> dict[str, str]:
+        token = await self._token_provider()
+        if not token:
+            raise ImperalAuthError("no Imperal token — run `imperal-mcp login` or set IMPERAL_TOKEN")
+        return {"Authorization": f"Bearer {token}"}
 
     async def _request(self, method: str, path: str, *, json: Any = None) -> Any:
         url = f"{self._cfg.api_url}{path}"
+        headers = await self._headers()
         async with httpx.AsyncClient(timeout=60) as cli:
-            resp = await cli.request(method, url, json=json, headers=self._headers())
+            resp = await cli.request(method, url, json=json, headers=headers)
         if resp.status_code >= 400:
             raise ImperalError(f"{method} {path} -> {resp.status_code}: {resp.text[:300]}", status_code=resp.status_code)
         return resp.json()

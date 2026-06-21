@@ -136,8 +136,8 @@ def build_server(client: ImperalClient) -> FastMCP:
 
 
 def main() -> None:
-    client = ImperalClient(Config.from_env())
-    build_server(client).run()  # stdio transport
+    from .cli import main as cli_main
+    cli_main()
 
 
 if __name__ == "__main__":

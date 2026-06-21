@@ -18,3 +18,10 @@ def test_from_env_overrides(monkeypatch):
     c = Config.from_env()
     assert c.api_url == "http://127.0.0.1:8085"
     assert c.token == "jwt-abc"
+
+
+def test_panel_url_default_and_override(monkeypatch):
+    monkeypatch.delenv("IMPERAL_PANEL_URL", raising=False)
+    assert Config.from_env().panel_url == "https://panel.imperal.io"
+    monkeypatch.setenv("IMPERAL_PANEL_URL", "http://localhost:3000")
+    assert Config.from_env().panel_url == "http://localhost:3000"
