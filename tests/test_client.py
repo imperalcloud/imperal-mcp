@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from imperal_mcp.config import Config
-from imperal_mcp.client import ImperalClient, ImperalAuthError
+from imperal_mcp.client import ImperalClient, ImperalAuthError, ImperalError
 
 CFG = Config(api_url="http://gw", token="jwt-abc")
 
@@ -46,3 +46,28 @@ async def test_run_tool_targets_app_call():
     c = ImperalClient(CFG)
     await c.run_tool("notes", "list_notes", {})
     assert route.called
+    body = json.loads(route.calls.last.request.read().decode())
+    assert body["user_id"] == "imp_u_1"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_app_swallows_409():
+    respx.post("http://gw/v1/developer/apps").mock(
+        return_value=httpx.Response(409, text="app already exists")
+    )
+    c = ImperalClient(CFG)
+    # Must not raise
+    await c.ensure_app("demo", "Demo App")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_app_reraises_500():
+    respx.post("http://gw/v1/developer/apps").mock(
+        return_value=httpx.Response(500, text="internal server error")
+    )
+    c = ImperalClient(CFG)
+    with pytest.raises(ImperalError) as exc_info:
+        await c.ensure_app("demo", "Demo App")
+    assert exc_info.value.status_code == 500

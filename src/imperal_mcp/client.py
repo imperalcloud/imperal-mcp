@@ -12,7 +12,9 @@ class ImperalAuthError(RuntimeError):
 
 
 class ImperalError(RuntimeError):
-    pass
+    def __init__(self, message: str, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class ImperalClient:
@@ -30,7 +32,7 @@ class ImperalClient:
         async with httpx.AsyncClient(timeout=60) as cli:
             resp = await cli.request(method, url, json=json, headers=self._headers())
         if resp.status_code >= 400:
-            raise ImperalError(f"{method} {path} -> {resp.status_code}: {resp.text[:300]}")
+            raise ImperalError(f"{method} {path} -> {resp.status_code}: {resp.text[:300]}", status_code=resp.status_code)
         return resp.json()
 
     async def whoami(self) -> str:
@@ -49,7 +51,7 @@ class ImperalClient:
                 "git_url": f"https://imperal.io/ir-apps/{app_id}",
             })
         except ImperalError as e:
-            if "409" in str(e) or "exists" in str(e).lower():
+            if e.status_code == 409 or "exists" in str(e).lower():
                 return  # already created — fine
             raise
 
