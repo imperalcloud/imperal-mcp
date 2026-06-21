@@ -1,8 +1,8 @@
 name: Publish to PyPI
 
-# Publishes on a version tag (v*) via PyPI Trusted Publishing (OIDC) — no
-# long-lived API token. The trusted publisher is configured on PyPI against
-# this repo + this workflow filename + the "pypi" GitHub Actions environment.
+# Publishes on a version tag (v*) using the account PyPI API token stored as the
+# GitHub Actions secret PYPI_API_TOKEN (our standard publish credential for
+# Imperal PyPI packages — promote it to an org-level secret to share across repos).
 on:
   push:
     tags:
@@ -11,9 +11,6 @@ on:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write  # required for OIDC trusted publishing
     steps:
       - uses: actions/checkout@v4
 
@@ -28,5 +25,7 @@ jobs:
       - name: Build sdist and wheel
         run: python -m build
 
-      - name: Publish to PyPI (OIDC trusted publisher)
+      - name: Publish to PyPI (API token)
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
