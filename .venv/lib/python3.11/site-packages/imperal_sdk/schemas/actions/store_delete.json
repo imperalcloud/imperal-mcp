@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imperal.io/schemas/actions/store_delete.json",
+  "title": "store.delete step args",
+  "description": "Args for the 'store.delete' declarative step verb — delete one or more records.",
+  "type": "object",
+  "required": ["kind"],
+  "properties": {
+    "kind":  {"type": "string", "description": "Data store entity kind (collection name)"},
+    "id":    {"type": "string", "description": "Single record id to delete"},
+    "ids":   {"type": "array",  "description": "List of ids to delete in bulk", "items": {"type": "string"}},
+    "where": {"type": "object", "description": "Filter criteria selecting records to delete"}
+  },
+  "additionalProperties": true
+}

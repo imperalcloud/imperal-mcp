@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imperal.io/schemas/ui_children/tree.json",
+  "title": "Tree nodes",
+  "description": "Array of nodes for ui.Tree. Each node: {id, label, children?, icon?}.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["id", "label"],
+    "properties": {
+      "id":       {"type": "string"},
+      "label":    {"type": "string"},
+      "children": {},
+      "icon":     {"type": "string"}
+    },
+    "additionalProperties": true
+  }
+}

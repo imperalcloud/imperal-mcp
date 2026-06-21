@@ -1,0 +1,38 @@
+{
+  "additionalProperties": false,
+  "description": "Response from ctx.storage.upload() and .list() \u2014 storage path, size, MIME, and signed URL.",
+  "properties": {
+    "path": {
+      "minLength": 1,
+      "title": "Path",
+      "type": "string"
+    },
+    "size": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Size",
+      "type": "integer"
+    },
+    "content_type": {
+      "default": "",
+      "title": "Content Type",
+      "type": "string"
+    },
+    "created_at": {
+      "default": "",
+      "title": "Created At",
+      "type": "string"
+    },
+    "url": {
+      "default": "",
+      "title": "Url",
+      "type": "string"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "title": "Imperal FileInfo",
+  "type": "object",
+  "$id": "https://imperal.io/schemas/file_info.schema.json"
+}

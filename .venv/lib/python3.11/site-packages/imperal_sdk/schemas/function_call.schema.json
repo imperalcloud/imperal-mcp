@@ -1,0 +1,60 @@
+{
+  "additionalProperties": false,
+  "description": "Record of a single @chat.function invocation inside a ChatResult. Used by the kernel executor to replay, audit, and bill the chain of calls made during one chat turn.",
+  "properties": {
+    "name": {
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+    },
+    "params": {
+      "additionalProperties": true,
+      "title": "Params",
+      "type": "object"
+    },
+    "action_type": {
+      "enum": [
+        "read",
+        "write",
+        "destructive"
+      ],
+      "title": "Action Type",
+      "type": "string"
+    },
+    "success": {
+      "title": "Success",
+      "type": "boolean"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Result"
+    },
+    "intercepted": {
+      "default": false,
+      "title": "Intercepted",
+      "type": "boolean"
+    },
+    "event": {
+      "default": "",
+      "title": "Event",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "action_type",
+    "success"
+  ],
+  "title": "Imperal FunctionCall Record",
+  "type": "object",
+  "$id": "https://imperal.io/schemas/function_call.schema.json"
+}

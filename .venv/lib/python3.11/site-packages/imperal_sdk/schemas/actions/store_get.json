@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imperal.io/schemas/actions/store_get.json",
+  "title": "store.get step args",
+  "description": "Args for the 'store.get' declarative step verb — fetch one record by id.",
+  "type": "object",
+  "required": ["kind", "id"],
+  "properties": {
+    "kind": {"type": "string", "description": "Data store entity kind (collection name)"},
+    "id":   {"type": "string", "description": "Record id to fetch"}
+  },
+  "additionalProperties": true
+}

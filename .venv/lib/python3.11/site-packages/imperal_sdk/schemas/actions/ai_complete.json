@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imperal.io/schemas/actions/ai_complete.json",
+  "title": "ai.complete step args",
+  "description": "Args for the 'ai.complete' declarative step verb — request an LLM completion inside a declarative workflow.",
+  "type": "object",
+  "required": ["prompt"],
+  "properties": {
+    "prompt":      {"type": "string", "description": "Prompt text or template sent to the model"},
+    "model":       {"type": "string", "description": "Optional model override"},
+    "temperature": {"type": "number", "description": "Sampling temperature (0.0 – 2.0)"},
+    "max_tokens":  {"type": "integer", "description": "Maximum tokens in the completion"},
+    "output":      {"type": "string",  "description": "Step-output alias to bind the result to"}
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imperal.io/schemas/actions/navigate.json",
+  "title": "navigate step args",
+  "description": "Args for the 'navigate' declarative step verb — open a URL or in-app route.",
+  "type": "object",
+  "required": ["url"],
+  "properties": {
+    "url":    {"type": "string", "description": "Destination URL or in-app path"},
+    "target": {"type": "string", "description": "Link target (_self, _blank, panel, etc.)"}
+  },
+  "additionalProperties": true
+}

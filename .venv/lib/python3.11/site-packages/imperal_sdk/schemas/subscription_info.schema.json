@@ -1,0 +1,39 @@
+{
+  "additionalProperties": false,
+  "description": "Response from ctx.billing.get_subscription() \u2014 plan ID/name/status and billing period.",
+  "properties": {
+    "plan_id": {
+      "default": "",
+      "title": "Plan Id",
+      "type": "string"
+    },
+    "plan_name": {
+      "default": "",
+      "title": "Plan Name",
+      "type": "string"
+    },
+    "status": {
+      "default": "",
+      "title": "Status",
+      "type": "string"
+    },
+    "period": {
+      "default": "monthly",
+      "title": "Period",
+      "type": "string"
+    },
+    "current_period_start": {
+      "default": "",
+      "title": "Current Period Start",
+      "type": "string"
+    },
+    "current_period_end": {
+      "default": "",
+      "title": "Current Period End",
+      "type": "string"
+    }
+  },
+  "title": "Imperal SubscriptionInfo",
+  "type": "object",
+  "$id": "https://imperal.io/schemas/subscription_info.schema.json"
+}

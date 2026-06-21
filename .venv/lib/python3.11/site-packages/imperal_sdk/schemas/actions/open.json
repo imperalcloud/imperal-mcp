@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imperal.io/schemas/actions/open.json",
+  "title": "open step args",
+  "description": "Args for the 'open' declarative step verb — open a panel, modal, or external resource.",
+  "type": "object",
+  "required": ["target"],
+  "properties": {
+    "target": {"type": "string", "description": "Panel id, modal name, or resource identifier"},
+    "params": {"type": "object", "description": "Optional params passed to the opened target"}
+  },
+  "additionalProperties": true
+}

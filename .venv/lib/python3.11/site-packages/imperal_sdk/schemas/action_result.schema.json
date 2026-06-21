@@ -1,0 +1,75 @@
+{
+  "additionalProperties": false,
+  "description": "Canonical return-value contract for every @chat.function. Produced by `ActionResult.to_dict()`; consumed by the Imperal kernel executor, Temporal activity history, automation template resolver, and SSE delivery.",
+  "properties": {
+    "status": {
+      "enum": [
+        "success",
+        "error"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "summary": {
+      "default": "",
+      "title": "Summary",
+      "type": "string"
+    },
+    "data": {
+      "additionalProperties": true,
+      "title": "Data",
+      "type": "object"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error"
+    },
+    "retryable": {
+      "default": false,
+      "title": "Retryable",
+      "type": "boolean"
+    },
+    "ui": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ui"
+    },
+    "refresh_panels": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Refresh Panels"
+    }
+  },
+  "required": [
+    "status"
+  ],
+  "title": "Imperal ActionResult Payload",
+  "type": "object",
+  "$id": "https://imperal.io/schemas/action_result.schema.json"
+}

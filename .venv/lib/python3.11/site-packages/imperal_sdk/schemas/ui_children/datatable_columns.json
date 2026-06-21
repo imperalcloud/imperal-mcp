@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imperal.io/schemas/ui_children/datatable_columns.json",
+  "title": "DataTable columns",
+  "description": "Array of column definitions for ui.DataTable. Each column: {key, label, ...}.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["key", "label"],
+    "properties": {
+      "key":       {"type": "string"},
+      "label":     {"type": "string"},
+      "sortable":  {"type": "boolean"},
+      "width":     {"type": "string"},
+      "editable":  {"type": "boolean"},
+      "edit_type": {"type": "string"}
+    },
+    "additionalProperties": true
+  }
+}

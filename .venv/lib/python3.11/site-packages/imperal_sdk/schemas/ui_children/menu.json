@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imperal.io/schemas/ui_children/menu.json",
+  "title": "Menu items",
+  "description": "Array of items for ui.Menu. Each item: {label?, icon?, on_click?, separator?}. separator=true items may omit label.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "if": {
+      "properties": {"separator": {"const": true}},
+      "required": ["separator"]
+    },
+    "then": {},
+    "else": {
+      "required": ["label"],
+      "properties": {
+        "label": {"type": "string"}
+      }
+    },
+    "additionalProperties": true
+  }
+}

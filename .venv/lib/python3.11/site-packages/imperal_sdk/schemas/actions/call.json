@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imperal.io/schemas/actions/call.json",
+  "title": "call step args",
+  "description": "Args for the 'call' declarative step verb — invoke an extension function by name.",
+  "type": "object",
+  "required": ["function"],
+  "properties": {
+    "function": {"type": "string", "description": "Function name to invoke"},
+    "params":   {"type": "object", "description": "Named params forwarded to the function"}
+  },
+  "additionalProperties": true
+}

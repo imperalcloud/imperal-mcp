@@ -1,0 +1,42 @@
+{
+  "additionalProperties": false,
+  "description": "Wrapped response from ctx.http.* \u2014 status code, body (dict/str/list), and headers. Bytes bodies are not JSON-boundary-safe and are excluded from the schema; use HTTPResponse.text()/json() locally.",
+  "properties": {
+    "status_code": {
+      "maximum": 599,
+      "minimum": 100,
+      "title": "Status Code",
+      "type": "integer"
+    },
+    "body": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "items": {},
+          "type": "array"
+        }
+      ],
+      "default": "",
+      "title": "Body"
+    },
+    "headers": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Headers",
+      "type": "object"
+    }
+  },
+  "required": [
+    "status_code"
+  ],
+  "title": "Imperal HTTPResponse",
+  "type": "object",
+  "$id": "https://imperal.io/schemas/http_response.schema.json"
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imperal.io/schemas/ui_children/datatable_rows.json",
+  "title": "DataTable rows",
+  "description": "Array of row dicts for ui.DataTable. Keys mirror column 'key' values; all fields optional.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": true
+  }
+}

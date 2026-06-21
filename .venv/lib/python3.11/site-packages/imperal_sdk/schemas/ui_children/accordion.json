@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imperal.io/schemas/ui_children/accordion.json",
+  "title": "Accordion sections",
+  "description": "Array of sections for ui.Accordion. Each section: {id, title, children}.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["id", "title", "children"],
+    "properties": {
+      "id":       {"type": "string"},
+      "title":    {"type": "string"},
+      "children": {}
+    },
+    "additionalProperties": true
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imperal.io/schemas/actions/send.json",
+  "title": "send step args",
+  "description": "Args for the 'send' declarative step verb — emit a chat message or notification.",
+  "type": "object",
+  "required": ["message"],
+  "properties": {
+    "message":  {"type": "string", "description": "Message text to send"},
+    "channel":  {"type": "string", "description": "Delivery channel (chat, notification, etc.)"},
+    "metadata": {"type": "object", "description": "Optional metadata attached to the message"}
+  },
+  "additionalProperties": true
+}

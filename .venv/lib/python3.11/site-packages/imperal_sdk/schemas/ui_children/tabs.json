@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imperal.io/schemas/ui_children/tabs.json",
+  "title": "Tabs children",
+  "description": "Array of tab items for ui.Tabs. Each tab: {label: str, content: UINode}.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["label", "content"],
+    "properties": {
+      "label":   {"type": "string"},
+      "content": {"type": "object"}
+    },
+    "additionalProperties": true
+  }
+}
