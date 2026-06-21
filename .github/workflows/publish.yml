@@ -1,5 +1,8 @@
 name: Publish to PyPI
 
+# Publishes on a version tag (v*) via PyPI Trusted Publishing (OIDC) — no
+# long-lived API token. The trusted publisher is configured on PyPI against
+# this repo + this workflow filename + the "pypi" GitHub Actions environment.
 on:
   push:
     tags:
@@ -8,6 +11,9 @@ on:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # required for OIDC trusted publishing
     steps:
       - uses: actions/checkout@v4
 
@@ -16,14 +22,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install build tools
-        run: pip install build twine
+      - name: Install build tooling
+        run: pip install build
 
       - name: Build sdist and wheel
         run: python -m build
 
-      - name: Upload to PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
-        run: twine upload dist/*
+      - name: Publish to PyPI (OIDC trusted publisher)
+        uses: pypa/gh-action-pypi-publish@release/v1
