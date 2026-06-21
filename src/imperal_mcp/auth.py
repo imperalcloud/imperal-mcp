@@ -33,6 +33,7 @@ def creds_path() -> Path:
 def save_creds(d: dict) -> None:
     p = creds_path()
     p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(p.parent, 0o700)
     # write 0600 atomically
     fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:

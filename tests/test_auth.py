@@ -1,4 +1,4 @@
-import base64, hashlib, json, os, stat, time
+import base64, hashlib, stat
 import httpx, pytest, respx
 from imperal_mcp.config import Config
 from imperal_mcp import auth
@@ -16,6 +16,7 @@ def test_save_creds_is_0600(tmp_path, monkeypatch):
     p = auth.creds_path()
     assert p.exists()
     assert stat.S_IMODE(p.stat().st_mode) == 0o600
+    assert stat.S_IMODE(auth.creds_path().parent.stat().st_mode) == 0o700
     assert auth.load_creds()["refresh_token"] == "r"
 
 def test_load_creds_none_when_absent(tmp_path, monkeypatch):
