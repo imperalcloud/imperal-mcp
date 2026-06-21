@@ -8,17 +8,20 @@ hand-written deployment scripts needed.
 
 ---
 
-## Install
+## Install & sign in
 
 ```bash
-pip install imperal-mcp
+pipx install imperal-mcp   # or: pip install --user imperal-mcp
+imperal-mcp login          # opens your browser to sign in to Imperal
 ```
 
-Or from source:
+`login` stores credentials in `~/.imperal/credentials.json` and auto-refreshes the access
+token — no manual token management needed.
+
+To sign out and remove stored credentials:
 
 ```bash
-cd imperal-mcp
-pip install -e .
+imperal-mcp logout
 ```
 
 ---
@@ -31,17 +34,24 @@ Add to your project's `.mcp.json` (or Claude Code's global MCP config):
 {
   "mcpServers": {
     "imperal": {
-      "command": "imperal-mcp",
-      "env": {
-        "IMPERAL_API_URL": "https://auth.imperal.io",
-        "IMPERAL_TOKEN": "<your-imperal-access-jwt>"
-      }
+      "command": "imperal-mcp"
     }
   }
 }
 ```
 
-Get your token from [panel.imperal.io](https://panel.imperal.io) → Developer → Access tokens.
+No token required — `imperal-mcp login` provides it.
+
+### Environment variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `IMPERAL_API_URL` | `https://auth.imperal.io` | Auth / API base URL |
+| `IMPERAL_PANEL_URL` | `https://panel.imperal.io` | Panel base URL |
+| `IMPERAL_TOKEN` | *(not set)* | Optional override for CI / headless environments — set this to skip browser login |
+
+For CI or headless use, set `IMPERAL_TOKEN` to a service token from
+[panel.imperal.io](https://panel.imperal.io) → Developer → Access tokens.
 
 ---
 
