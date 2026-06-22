@@ -1,96 +1,229 @@
 # imperal-mcp
 
-A stdio MCP server that lets any LLM (Claude Code, Codex, Cursor, etc.) build and deploy
-[Imperal](https://imperal.io) apps using the declarative IR format.
+<!-- mcp-name: io.github.imperalcloud/imperal-mcp -->
 
-The client's own LLM authors the app; this server validates, smokes, and deploys it — no
-hand-written deployment scripts needed.
+**Build, ship, and run real cloud apps on [Imperal](https://imperal.io) — straight from your AI agent.**
+
+`imperal-mcp` puts the app-building power of **Imperal Cloud** — the ICNLI AI Cloud OS that Webbee 🐝 runs on — inside any MCP-capable agent. Connect it to **Claude, Claude Code, Codex, Cursor, Gemini CLI, Cline, Windsurf, or Goose**, sign in with your own Imperal account, and your agent can design, deploy, and operate real cloud apps for you — data, logic, and UI included — without ever leaving the chat.
+
+You describe what you want. Your agent builds it. Imperal runs it.
+
+---
+
+## What you can do
+
+Tell your agent what you want — and it builds it on Imperal, end to end:
+
+- **Design an app from a description** — its data/entities, the functions that act on them, and the UI panels that render them, as one clean declarative spec.
+- **Validate it instantly** against the live Imperal schema, before anything ships.
+- **Smoke-test a function** in an isolated sandbox and see it actually work.
+- **Deploy it live** to your Imperal account — instantly available, fleet-wide.
+- **List & inspect** every app you've built.
+- **Run your apps** — query their data through their own tools, right from the agent.
+
+**Apps your agent can build in a single flow:**
+
+- a habit / workout / reading tracker with list + detail views
+- a personal CRM or contacts book
+- a snippet vault or bookmark manager
+- a lightweight expense or invoice log
+- a notes / tasks / journal app
+- …any data-backed app with screens and actions you can describe in plain words.
+
+---
+
+## How it works
+
+Your client's own LLM authors the app; `imperal-mcp` gives it the rails. It reads the IR spec and worked examples, **validates** the draft against the live schema, **smoke-tests** it, and **deploys** it to the cloud — no hand-written deployment scripts, no YAML wrangling. The heavy lifting — orchestration, hosting, scaling, the kernel — is Imperal's. Your agent just describes the app; the kernel makes it real.
+
+---
+
+## Quick-add to your agent
+
+| Client | One-liner |
+|--------|-----------|
+| **Cursor** | [![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](cursor://anysphere.cursor-deeplink/mcp/install?name=imperal&config=eyJpbXBlcmFsIjp7ImNvbW1hbmQiOiJpbXBlcmFsLW1jcCJ9fQ==) |
+| **Claude Code** | `/plugin marketplace add imperalcloud/imperal-mcp` then `/plugin install imperal-mcp@imperal` |
+| **Everything else** | See [per-client config](#per-client-config) |
+
+> Install `imperal-mcp` and sign in first — see below.
 
 ---
 
 ## Install & sign in
 
 ```bash
-pipx install imperal-mcp   # or: pip install --user imperal-mcp
-imperal-mcp login          # opens your browser to sign in to Imperal
+pipx install imperal-mcp      # or: pip install --user imperal-mcp
+imperal-mcp login             # opens your browser to sign in to Imperal
 ```
 
-`login` stores credentials in `~/.imperal/credentials.json` and auto-refreshes the access
-token — no manual token management needed.
-
-To sign out and remove stored credentials:
+`login` stores credentials in `~/.imperal/credentials.json` and auto-refreshes your access token — no manual token management. Sign out any time:
 
 ```bash
 imperal-mcp logout
 ```
 
+That's it — every supported client uses the same `imperal-mcp` binary and the same stored sign-in.
+
 ---
 
-## Configure (`.mcp.json`)
+## Your first app (60 seconds)
 
-Add to your project's `.mcp.json` (or Claude Code's global MCP config):
+1. Install + `imperal-mcp login` (above), and add it to your agent.
+2. Ask your agent, in plain language:
+
+   > "Build me a habit tracker — I want to add habits, mark them done each day, and see today's summary. Then deploy it."
+
+3. Your agent authors the app, validates it, smoke-tests a function, and deploys it to your Imperal account. It comes back with the live app and its tools — ready to use.
+
+Want to iterate? Just keep talking: *"add a weekly streak view"*, *"now build me an expense tracker too."*
+
+---
+
+## Per-client config
+
+All clients use the same installed binary — `imperal-mcp` — and the same credentials from `imperal-mcp login`.
+
+### Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
 ```json
 {
   "mcpServers": {
-    "imperal": {
-      "command": "imperal-mcp"
-    }
+    "imperal": { "command": "imperal-mcp" }
   }
 }
 ```
 
-No token required — `imperal-mcp login` provides it.
+### Claude Code
 
-### Environment variables
+```bash
+/plugin marketplace add imperalcloud/imperal-mcp
+/plugin install imperal-mcp@imperal
+```
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `IMPERAL_API_URL` | `https://auth.imperal.io` | Auth / API base URL |
-| `IMPERAL_PANEL_URL` | `https://panel.imperal.io` | Panel base URL |
-| `IMPERAL_TOKEN` | *(not set)* | Optional override for CI / headless environments — set this to skip browser login |
+Or add directly to your project `.mcp.json`:
 
-For CI or headless use, set `IMPERAL_TOKEN` to a service token from
-[panel.imperal.io](https://panel.imperal.io) → Developer → Access tokens.
+```json
+{
+  "mcpServers": {
+    "imperal": { "command": "imperal-mcp" }
+  }
+}
+```
+
+### Cursor
+
+Click the **Add to Cursor** button above, or add to `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "imperal": { "command": "imperal-mcp" }
+  }
+}
+```
+
+### Codex (OpenAI)
+
+Add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.imperal]
+command = "imperal-mcp"
+```
+
+### Gemini CLI
+
+```json
+{
+  "mcpServers": {
+    "imperal": { "command": "imperal-mcp" }
+  }
+}
+```
+
+### Cline
+
+In VS Code, add to Cline's MCP server list:
+
+```json
+{
+  "imperal": { "command": "imperal-mcp", "disabled": false }
+}
+```
+
+### Windsurf
+
+Add to `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "imperal": { "command": "imperal-mcp" }
+  }
+}
+```
+
+### Goose (Block)
+
+Add a StandardIO extension in Goose settings:
+
+```json
+{ "type": "stdio", "name": "imperal", "cmd": "imperal-mcp", "args": [] }
+```
 
 ---
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `validate_ir(app_ir)` | Validate an `app.ir.json` locally — envelope structure + every declarative step. No network. Returns `{valid, issues}`. |
+| Tool | What it does |
+|------|--------------|
+| `validate_ir(app_ir)` | Validate an `app.ir.json` — envelope + every declarative step. Returns `{valid, issues}`. |
 | `smoke_ir(app_ir, function, args?)` | Run one function in an isolated store and report `{ok, result, trace}`. |
-| `deploy_ir(app_ir, app_id)` | Deploy an `app.ir.json` into the caller's account (creates the app record if needed). |
-| `list_apps()` | List the caller's developer apps (PII-masked). |
-| `get_app(app_id)` | Get one app's manifest + tools with `action_type` (PII-masked). |
-| `run_read_tool(app_id, function, args?)` | Run a `read`-only tool of a deployed app. Refuses `write`/`destructive` tools. |
-
----
+| `deploy_ir(app_ir, app_id)` | Deploy an app into your account (creates the app record if needed) — live instantly. |
+| `list_apps()` | List your developer apps. |
+| `get_app(app_id)` | Get one app's manifest + tools. |
+| `run_read_tool(app_id, function, args?)` | Run one of a deployed app's read tools to fetch its data. |
 
 ## Resources
 
 | URI | Description |
 |-----|-------------|
-| `imperal://ir-spec` | IR envelope specification — structure, fields, action vocabulary. |
-| `imperal://ui-catalog` | All `ui.*` component names usable in panels and render steps. |
-| `imperal://examples` | Example `app.ir.json` (link-saver) to use as a starting point. |
-
----
+| `imperal://ir-spec` | The IR specification — structure, fields, action vocabulary. |
+| `imperal://ui-catalog` | All `ui.*` components usable in panels and render steps. |
+| `imperal://examples` | A worked `app.ir.json` (link-saver) to start from. |
 
 ## Prompt
 
-`build_imperal_app` — step-by-step guidance for an LLM to go from intent to a deployed app:
-read the spec, author the IR, validate, smoke, deploy.
+`build_imperal_app` — step-by-step guidance for an LLM to go from intent to a deployed app: read the spec, author the IR, validate, smoke-test, deploy.
 
 ---
 
-## Security
+## Configuration
 
-`run_read_tool` is gate-kept: it looks up the tool's `action_type` from `get_app` and refuses
-any tool that is not explicitly `action_type: "read"`. Write and destructive tools are never
-executed. All read responses pass through a client-side PII scrub (email/phone redaction) before
-being returned to the LLM.
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `IMPERAL_API_URL` | `https://auth.imperal.io` | Auth / API base URL |
+| `IMPERAL_PANEL_URL` | `https://panel.imperal.io` | Panel base URL |
+| `IMPERAL_TOKEN` | *(not set)* | Optional token for CI / headless use — set it to skip browser login |
+
+For CI or headless environments, set `IMPERAL_TOKEN` to a token from [panel.imperal.io](https://panel.imperal.io) → Developer → Access tokens.
+
+---
+
+## Privacy & security
+
+You sign in with **your own Imperal account** (browser OAuth). Credentials live locally at `~/.imperal/credentials.json` (`0600`) and refresh automatically — nothing is shared with third parties and there's no telemetry. Read responses are PII-masked before they reach the LLM. Full details: [PRIVACY.md](PRIVACY.md).
+
+---
+
+## Links
+
+- **Imperal Cloud** — https://imperal.io
+- **Panel** (your apps, tokens, billing) — https://panel.imperal.io
+- **ICNLI** (the open protocol behind it, CC BY-SA) — https://icnli.org
 
 ---
 
@@ -102,3 +235,7 @@ cd imperal-mcp
 pip install -e '.[dev]'
 python -m pytest
 ```
+
+---
+
+*Built on Imperal Cloud — the AI Cloud OS. 🐝*

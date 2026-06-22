@@ -11,3 +11,6 @@ build/
 
 # SDD scratch (briefs / review packages)
 .superpowers/
+
+# macOS
+.DS_Store

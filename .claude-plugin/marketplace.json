@@ -1,0 +1,35 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "imperal",
+  "description": "Imperal MCP server — build and deploy Imperal apps from Claude Code",
+  "owner": {
+    "name": "Imperal, Inc.",
+    "email": "support@imperal.io"
+  },
+  "plugins": [
+    {
+      "name": "imperal-mcp",
+      "displayName": "Imperal MCP",
+      "description": "Build, validate, smoke-test, and deploy Imperal IR apps from Claude Code. Includes read-only operate tools. Requires imperal-mcp to be installed (pipx install imperal-mcp) and authenticated (imperal-mcp login).",
+      "version": "0.2.1",
+      "source": {
+        "source": "github",
+        "repo": "imperalcloud/imperal-mcp"
+      },
+      "author": {
+        "name": "Imperal, Inc.",
+        "email": "support@imperal.io"
+      },
+      "homepage": "https://imperal.io",
+      "repository": "https://github.com/imperalcloud/imperal-mcp",
+      "license": "Apache-2.0",
+      "category": "development",
+      "keywords": ["imperal", "mcp", "deploy", "ir", "cloud", "developer-tools"],
+      "mcpServers": {
+        "imperal": {
+          "command": "imperal-mcp"
+        }
+      }
+    }
+  ]
+}

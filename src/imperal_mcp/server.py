@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from .client import ImperalClient
 from .config import Config
@@ -83,34 +84,52 @@ async def run_read_tool_logic(client: ImperalClient, app_id: str, function: str,
 def build_server(client: ImperalClient) -> FastMCP:
     mcp = FastMCP("imperal")
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Validate IR",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
     def validate_ir(app_ir: dict) -> dict:
         """Validate an app.ir.json locally (envelope + every declarative step)."""
         return _validate_ir(app_ir)
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Smoke-test IR",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
     async def smoke_ir(app_ir: dict, function: str, args: dict | None = None) -> dict:
         """Run one function of an app.ir.json in an ISOLATED store and report {ok,result,trace}."""
         return await client.smoke_ir(app_ir, function, args or {})
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Deploy IR",
+        annotations=ToolAnnotations(destructiveHint=True),
+    )
     async def deploy_ir(app_ir: dict, app_id: str) -> dict:
         """Deploy an app.ir.json into the caller's account (creates the app record if needed)."""
         display = (app_ir.get("app", {}) or {}).get("id", app_id)
         await client.ensure_app(app_id, display)
         return await deploy_ir_logic(client, app_ir, app_id)
 
-    @mcp.tool()
+    @mcp.tool(
+        title="List Apps",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
     async def list_apps() -> Any:
         """List the caller's developer apps (PII-masked)."""
         return defensive_scrub(await client.list_apps())
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Get App",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
     async def get_app(app_id: str) -> Any:
         """Get one app's manifest + tools (with action_type) (PII-masked)."""
         return defensive_scrub(await client.get_app(app_id))
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Run Read Tool",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
     async def run_read_tool(app_id: str, function: str, args: dict | None = None) -> Any:
         """Run a READ-only tool of a deployed app (refuses write/destructive)."""
         return await run_read_tool_logic(client, app_id, function, args or {})
