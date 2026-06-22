@@ -3,12 +3,12 @@
   "name": "io.github.imperalcloud/imperal-mcp",
   "title": "Imperal MCP",
   "description": "Build and deploy Imperal apps from any LLM. Validate, smoke-test, and deploy declarative IR apps into your Imperal account — then operate them with read-only tools. Browser OAuth, no token pasting.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "imperal-mcp",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

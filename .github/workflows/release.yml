@@ -1,0 +1,143 @@
+# Auto-publish on version bump.
+#
+# Trigger: every push to main (and workflow_dispatch for manual re-runs).
+# Guard:   if a git tag v<version> already exists on the remote, or the version
+#          is already on PyPI, the workflow exits cleanly (no-op) — so ordinary
+#          pushes that don't change the version in pyproject.toml do nothing.
+# Order:   build → publish PyPI → create+push tag (record) → publish MCP Registry
+#          (registry verifies ownership via the mcp-name marker in the PyPI README,
+#          so PyPI must be live first; a short poll is included after upload).
+#
+# Secrets required:
+#   PYPI_API_TOKEN  — standard Imperal PyPI account API token (already set on repo)
+#
+# Permissions required (no extra secrets for MCP Registry — GitHub OIDC is used):
+#   contents: write   — to push the v<version> tag
+#   id-token: write   — for GitHub OIDC auth to the MCP Registry
+#
+# NOTE: the old tag-triggered publish.yml is now superseded by this workflow.
+# It is retained as publish.yml but will never fire for new versions because
+# this workflow creates tags AFTER PyPI publish (and the MCP Registry job
+# uses continue-on-error: true so a registry hiccup never blocks the release).
+
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write   # push v<version> tag
+  id-token: write   # GitHub OIDC for MCP Registry (tokenless)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so we can check existing tags
+
+      # ── 1. Read version from pyproject.toml ──────────────────────────────
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(python3 -c "
+          import tomllib
+          with open('pyproject.toml','rb') as f:
+              d = tomllib.load(f)
+          print(d['project']['version'])
+          ")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION"    >> "$GITHUB_OUTPUT"
+
+      # ── 2. Guard: skip if tag already exists (version already released) ──
+      - name: Check if already released
+        id: guard
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q "$TAG"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG already exists on remote — skipping release (no version bump in this push)."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG not found — proceeding with release of $TAG."
+          fi
+
+      # ── 3. Python + build tooling ─────────────────────────────────────────
+      - name: Set up Python 3.11
+        if: steps.guard.outputs.skip == 'false'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        if: steps.guard.outputs.skip == 'false'
+        run: pip install build
+
+      # ── 4. Build sdist + wheel ────────────────────────────────────────────
+      - name: Build sdist and wheel
+        if: steps.guard.outputs.skip == 'false'
+        run: python -m build
+
+      # ── 5. Publish to PyPI (API token) ────────────────────────────────────
+      - name: Publish to PyPI
+        if: steps.guard.outputs.skip == 'false'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+      # ── 6. Create + push git tag (record) ────────────────────────────────
+      - name: Create and push version tag
+        if: steps.guard.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      # ── 7. Poll PyPI until the new version is live ────────────────────────
+      #  The MCP Registry verifies ownership by fetching the README from PyPI.
+      #  We wait up to ~3 minutes for the index to update before publishing.
+      - name: Wait for PyPI to index new version
+        if: steps.guard.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "Waiting for PyPI to serve imperal-mcp==$VERSION ..."
+          for i in $(seq 1 18); do
+            LIVE=$(curl -s "https://pypi.org/pypi/imperal-mcp/$VERSION/json" \
+                     | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['info']['version'])" 2>/dev/null || echo "")
+            if [ "$LIVE" = "$VERSION" ]; then
+              echo "PyPI is live with $VERSION."
+              break
+            fi
+            echo "  attempt $i: not yet (got '$LIVE') — waiting 10s ..."
+            sleep 10
+          done
+
+      # ── 8. Publish to MCP Registry (GitHub OIDC, no secret needed) ───────
+      #  continue-on-error: true — the registry is in preview; a transient
+      #  failure here must never block or roll back the PyPI release.
+      - name: Install mcp-publisher
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" \
+            | tar xz mcp-publisher
+
+      - name: Authenticate to MCP Registry (GitHub OIDC)
+        if: steps.guard.outputs.skip == 'false'
+        run: ./mcp-publisher login github-oidc
+        continue-on-error: true
+
+      - name: Publish to MCP Registry
+        if: steps.guard.outputs.skip == 'false'
+        run: ./mcp-publisher publish
+        continue-on-error: true
