@@ -1,6 +1,6 @@
 [project]
 name = "imperal-mcp"
-version = "0.2.2"
+version = "0.2.3"
 readme = "README.md"
 description = "MCP server for building Imperal apps from any LLM/agent"
 requires-python = ">=3.11"
