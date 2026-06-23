@@ -54,23 +54,61 @@ async def test_run_tool_targets_app_call():
     assert body["user_id"] == "imp_u_1"
 
 
+def _mock_registered_ok():
+    """Mock /auth/me + /register so ensure_registered() is a no-op (already a dev)."""
+    respx.get("http://gw/v1/auth/me").mock(return_value=httpx.Response(200, json={"imperal_id": "imp_u_1"}))
+    respx.post("http://gw/v1/developer/register").mock(
+        return_value=httpx.Response(400, json={"detail": "Already registered as developer"}))
+
+
+# ── ONB-2: ensure_app register-then-get-or-create ──────────────────────── #
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_app_skips_create_when_app_exists():
+    _mock_registered_ok()
+    get_route = respx.get("http://gw/v1/developer/apps/demo").mock(
+        return_value=httpx.Response(200, json={"app_id": "demo"}))
+    # deliberately do NOT mock POST /apps — a create attempt would raise (route not found)
+    c = ImperalClient(CFG)
+    await c.ensure_app("demo", "Demo")
+    assert get_route.called
+    assert not any(
+        call.request.method == "POST" and call.request.url.path == "/v1/developer/apps"
+        for call in respx.calls
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_app_creates_when_missing():
+    _mock_registered_ok()
+    respx.get("http://gw/v1/developer/apps/demo").mock(return_value=httpx.Response(404, json={"detail": "not found"}))
+    create_route = respx.post("http://gw/v1/developer/apps").mock(
+        return_value=httpx.Response(200, json={"app_id": "demo"}))
+    c = ImperalClient(CFG)
+    await c.ensure_app("demo", "Demo")
+    assert create_route.called
+    body = json.loads(create_route.calls.last.request.read().decode())
+    assert body["app_id"] == "demo" and body["git_url"] == "https://imperal.io/ir-apps/demo"
+
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_ensure_app_swallows_409():
-    respx.post("http://gw/v1/developer/apps").mock(
-        return_value=httpx.Response(409, text="app already exists")
-    )
+    _mock_registered_ok()
+    respx.get("http://gw/v1/developer/apps/demo").mock(return_value=httpx.Response(404, json={"detail": "not found"}))
+    respx.post("http://gw/v1/developer/apps").mock(return_value=httpx.Response(409, text="app already exists"))
     c = ImperalClient(CFG)
-    # Must not raise
-    await c.ensure_app("demo", "Demo App")
+    await c.ensure_app("demo", "Demo App")  # must not raise
 
 
 @respx.mock
 @pytest.mark.asyncio
 async def test_ensure_app_reraises_500():
-    respx.post("http://gw/v1/developer/apps").mock(
-        return_value=httpx.Response(500, text="internal server error")
-    )
+    _mock_registered_ok()
+    respx.get("http://gw/v1/developer/apps/demo").mock(return_value=httpx.Response(404, json={"detail": "not found"}))
+    respx.post("http://gw/v1/developer/apps").mock(return_value=httpx.Response(500, text="internal server error"))
     c = ImperalClient(CFG)
     with pytest.raises(ImperalError) as exc_info:
         await c.ensure_app("demo", "Demo App")
@@ -82,26 +120,23 @@ async def test_ensure_app_reraises_500():
 @pytest.mark.asyncio
 async def test_ensure_app_swallows_400_already_in_use():
     """Real gateway: re-creating a first-party app returns 400 with 'already in use'."""
+    _mock_registered_ok()
+    respx.get("http://gw/v1/developer/apps/x").mock(return_value=httpx.Response(404, json={"detail": "not found"}))
     respx.post("http://gw/v1/developer/apps").mock(
-        return_value=httpx.Response(
-            400,
-            json={"detail": "App ID 'x' is already in use by a first-party extension"},
-        )
-    )
+        return_value=httpx.Response(400, json={"detail": "App ID 'x' is already in use by a first-party extension"}))
     c = ImperalClient(CFG)
-    # Must NOT raise — treat as idempotent
-    await c.ensure_app("x", "X App")
+    await c.ensure_app("x", "X App")  # must NOT raise — treat as idempotent
 
 
 @respx.mock
 @pytest.mark.asyncio
 async def test_ensure_app_reraises_400_other_reason():
     """A 400 for a different reason (e.g. invalid app_id format) must still raise."""
+    _mock_registered_ok()
+    respx.get(url__regex=r"http://gw/v1/developer/apps/.+").mock(
+        return_value=httpx.Response(404, json={"detail": "not found"}))
     respx.post("http://gw/v1/developer/apps").mock(
-        return_value=httpx.Response(
-            400, json={"detail": "app_id contains invalid characters"}
-        )
-    )
+        return_value=httpx.Response(400, json={"detail": "app_id contains invalid characters"}))
     c = ImperalClient(CFG)
     with pytest.raises(ImperalError) as exc_info:
         await c.ensure_app("bad id!", "Bad")
@@ -149,3 +184,44 @@ async def test_client_uses_token_provider():
     assert await c.whoami() == "imp_x"
     assert calls["n"] >= 1
     assert respx.calls.last.request.headers["authorization"] == "Bearer tok-from-provider"
+
+
+# ── ONB-1: ensure_registered (auto free explorer) ──────────────────────── #
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_registered_registers_explorer_when_not_registered():
+    respx.get("http://gw/v1/auth/me").mock(return_value=httpx.Response(200, json={"imperal_id": "imp_u_AbC123"}))
+    route = respx.post("http://gw/v1/developer/register").mock(
+        return_value=httpx.Response(200, json={"tier": "explorer"}))
+    c = ImperalClient(CFG)
+    await c.ensure_registered()
+    assert route.called
+    body = json.loads(route.calls.last.request.read().decode())
+    assert body["tier"] == "explorer"
+    assert body["nickname"] == "imp_u_abc123"  # handle derived (lowercased) from imperal_id
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_registered_tolerates_already_registered():
+    respx.get("http://gw/v1/auth/me").mock(return_value=httpx.Response(200, json={"imperal_id": "imp_u_1"}))
+    respx.post("http://gw/v1/developer/register").mock(
+        return_value=httpx.Response(400, json={"detail": "Already registered as developer"}))
+    c = ImperalClient(CFG)
+    await c.ensure_registered()  # must NOT raise
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_ensure_registered_retries_handle_on_collision():
+    respx.get("http://gw/v1/auth/me").mock(return_value=httpx.Response(200, json={"imperal_id": "imp_u_dupe"}))
+    route = respx.post("http://gw/v1/developer/register").mock(side_effect=[
+        httpx.Response(400, json={"detail": "Nickname 'imp_u_dupe' is already taken"}),
+        httpx.Response(200, json={"tier": "explorer"}),
+    ])
+    c = ImperalClient(CFG)
+    await c.ensure_registered()  # must NOT raise
+    assert route.call_count == 2
+    body2 = json.loads(route.calls[1].request.read().decode())
+    assert body2["nickname"] != "imp_u_dupe" and body2["tier"] == "explorer"

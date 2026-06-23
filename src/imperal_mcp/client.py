@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -57,7 +58,62 @@ class ImperalClient:
                 raise ImperalError("GET /v1/auth/me did not return imperal_id")
         return self._imperal_id
 
+    def _derive_handle(self, imperal_id: str) -> str:
+        """Derive a valid, unique developer handle from the (unique) imperal_id.
+        Guaranteed to satisfy the gateway handle pattern
+        ^[a-z0-9][a-z0-9_-]{1,28}[a-z0-9]$ (3-30 chars)."""
+        h = re.sub(r"[^a-z0-9_-]", "", imperal_id.lower())
+        h = re.sub(r"^[^a-z0-9]+", "", h)
+        h = re.sub(r"[^a-z0-9]+$", "", h)
+        if len(h) < 3:
+            h = f"dev-{h}" if h else "dev-user"
+        h = h[:30]
+        h = re.sub(r"[^a-z0-9]+$", "", h)  # [:30] must still end alphanumeric
+        return h or "dev-user"
+
+    async def _try_register(self, nickname: str) -> bool:
+        """POST /v1/developer/register at the free explorer tier. Returns True if
+        registered OR already-registered; False on a handle collision/reservation
+        (caller may retry with another handle)."""
+        try:
+            await self._request("POST", "/v1/developer/register",
+                                json={"tier": "explorer", "nickname": nickname})
+            return True
+        except ImperalError as e:
+            msg = str(e).lower()
+            if e.status_code == 400 and "already registered" in msg:
+                return True
+            if e.status_code == 400 and ("taken" in msg or "reserved" in msg or "invalid nickname" in msg):
+                return False
+            raise
+
+    async def ensure_registered(self) -> None:
+        """Idempotently ensure the caller is a registered developer (free
+        `explorer` tier). No-op if already registered. Auto-derives a valid
+        unique handle from imperal_id (the user can rename it later in the panel)."""
+        uid = await self.whoami()
+        handle = self._derive_handle(uid)
+        if await self._try_register(handle):
+            return
+        alt = (handle[:24] + "-" + re.sub(r"[^a-z0-9]", "", uid.lower())[-4:])[:30]
+        if await self._try_register(alt):
+            return
+        raise ImperalError(
+            "could not auto-register you as a developer (free explorer tier); "
+            "register manually in the Imperal panel, then retry")
+
     async def ensure_app(self, app_id: str, display_name: str) -> None:
+        """Ensure the caller's developer app row exists. Idempotent:
+        (1) auto-register the caller as a developer (free explorer),
+        (2) get-or-create the app (GET first; create only if 404)."""
+        await self.ensure_registered()
+        try:
+            await self.get_app(app_id)
+            return  # already exists
+        except ImperalError as e:
+            if e.status_code != 404:
+                raise  # a real error — surface it
+        # 404 → create
         try:
             await self._request("POST", "/v1/developer/apps", json={
                 "app_id": app_id,
@@ -67,7 +123,7 @@ class ImperalClient:
         except ImperalError as e:
             msg = str(e).lower()
             if e.status_code == 409 or "already in use" in msg or "exists" in msg:
-                return  # already created — fine
+                return  # create-race: app appeared between GET and POST — fine
             raise
 
     async def _dev_call(self, function: str, params: dict) -> dict:

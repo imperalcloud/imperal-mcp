@@ -153,11 +153,10 @@ async def test_resolve_action_type_returns_none_when_neither_has_tool():
     assert result is None
 
 
-# F2 — deploy_ir_logic retries once on transient error
+# AZV-3c — deploy_ir_logic retries once ONLY on a transient failure
 @pytest.mark.asyncio
-async def test_deploy_ir_logic_retries_once_on_error(monkeypatch):
-    """First deploy returns status=error; second returns success. Must retry exactly once."""
-    call_count = 0
+async def test_deploy_ir_logic_retries_once_on_transient(monkeypatch):
+    """First deploy returns a transient error; second succeeds. Must retry exactly once."""
     sleep_calls = []
 
     async def fake_sleep(seconds):
@@ -176,17 +175,42 @@ async def test_deploy_ir_logic_retries_once_on_error(monkeypatch):
         async def deploy_ir(self, app_id, ir_dict):
             self.deploy_calls += 1
             if self.deploy_calls == 1:
-                return {"status": "error", "message": "ownership check failed"}
+                return {"status": "error", "error": "deploy timed out, please retry"}
             return {"status": "success", "data": {"app_id": app_id}}
 
     c = RetryClient()
-    ir = {"ir_version": "1.0", "app": {"id": "demo"}}
-    result = await deploy_ir_logic(c, ir, "demo")
-
+    result = await deploy_ir_logic(c, {"ir_version": "1.0", "app": {"id": "demo"}}, "demo")
     assert result["status"] == "success"
-    assert c.deploy_calls == 2  # called exactly twice
-    assert len(sleep_calls) == 1  # slept once
-    assert sleep_calls[0] == 1.0
+    assert c.deploy_calls == 2 and sleep_calls == [1.0]
+
+
+# AZV-3c — a DETERMINISTIC failure is NOT retried (a retry would just re-fail
+# and add a fleet-wide catalog reload)
+@pytest.mark.asyncio
+async def test_deploy_ir_logic_no_retry_on_deterministic_error(monkeypatch):
+    sleep_calls = []
+
+    async def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    class DetClient(ImperalClient):
+        def __init__(self):
+            super().__init__(Config(api_url="http://gw", token="t"))
+            self.deploy_calls = 0
+
+        async def whoami(self):
+            return "imp_u_test"
+
+        async def deploy_ir(self, app_id, ir_dict):
+            self.deploy_calls += 1
+            return {"status": "error", "error": "validation failed: tool 'x' has no description"}
+
+    c = DetClient()
+    result = await deploy_ir_logic(c, {"ir_version": "1.0", "app": {"id": "demo"}}, "demo")
+    assert result["status"] == "error"
+    assert c.deploy_calls == 1 and sleep_calls == []  # NOT retried
 
 
 @pytest.mark.asyncio
@@ -218,3 +242,23 @@ async def test_deploy_ir_logic_no_retry_on_immediate_success(monkeypatch):
     assert result["status"] == "success"
     assert c.deploy_calls == 1  # called once only
     assert sleep_calls == []    # no sleep
+
+
+# DEP-3 — a non-success deploy result is surfaced truthfully with a clear error
+@pytest.mark.asyncio
+async def test_deploy_ir_logic_failure_always_has_error_string():
+    class FailClient(ImperalClient):
+        def __init__(self):
+            super().__init__(Config(api_url="http://gw", token="t"))
+
+        async def whoami(self):
+            return "imp_u_test"
+
+        async def deploy_ir(self, app_id, ir_dict):
+            # gateway sometimes returns a bare non-success with only `message`
+            return {"status": "error", "message": "ownership check failed"}
+
+    out = await deploy_ir_logic(FailClient(), {"ir_version": "1.0", "app": {"id": "demo"}}, "demo")
+    assert out["status"] == "error"
+    assert out.get("error")  # a clear, non-empty error string is present
+    assert "ownership" in out["error"].lower()

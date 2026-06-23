@@ -60,12 +60,29 @@ async def _resolve_action_type(client: ImperalClient, app_id: str, function: str
     return None
 
 
+_TRANSIENT_MARKERS = (
+    "timeout", "timed out", "temporarily", "unavailable",
+    "temporal", "connection", "503", "bad gateway", "try again",
+)
+
+
+def _is_transient(result: dict) -> bool:
+    """A deploy failure that looks like a transient infra hiccup (worth one
+    retry), vs a deterministic failure (validation/ownership/zero-tool) that a
+    retry won't fix and would only add a fleet-wide catalog reload (AZV-3)."""
+    err = str(result.get("error") or result.get("message") or "").lower()
+    return any(m in err for m in _TRANSIENT_MARKERS)
+
+
 async def deploy_ir_logic(client: ImperalClient, app_ir: dict, app_id: str) -> dict:
-    """Deploy app_ir; retry once after 1 s on a transient first-deploy failure."""
+    """Deploy app_ir. Retry ONCE only on a transient-looking failure; a
+    deterministic failure is returned as-is (truthful — DEP-3)."""
     result = await client.deploy_ir(app_id, app_ir)
-    if result.get("status") != "success":
+    if result.get("status") != "success" and _is_transient(result):
         await asyncio.sleep(1.0)
         result = await client.deploy_ir(app_id, app_ir)
+    if result.get("status") != "success" and not result.get("error"):
+        result = {**result, "error": str(result.get("message") or "deploy did not complete")}
     return result
 
 
