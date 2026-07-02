@@ -334,54 +334,55 @@ async def test_blocked_tier_refused_no_dispatch():
     assert c.calls == []
 
 @pytest.mark.asyncio
-async def test_destructive_reject_via_elicit():
+async def test_destructive_reject_never_dispatches():
+    # ELICIT-FIRST: on reject, operate must NEVER be called (nothing executes).
     c = WriteFakeClient({"delete_notes": "destructive"})
-    c.operate_result = {"kind": "confirmation", "confirmation_id": "c1",
-                        "actions": [{"function_name": "delete_notes", "item_count": 3}]}
-    out = await run_write_tool_logic(c, _Ctx(_Accepted("reject")), "notes", "delete_notes", {}, Autopilot())
+    c.operate_result = {"kind": "tool_result", "content": {"deleted": 999}}  # must never surface
+    ctx = _Ctx(_Accepted("reject"))
+    out = await run_write_tool_logic(c, ctx, "notes", "delete_notes", {}, Autopilot())
     assert out["status"] == "refused" and out["reason"] == "human_rejected"
-    assert c.calls == [("delete_notes", False)]  # no bypass execution
+    assert ctx.elicits == 1
+    assert c.calls == []  # operate NEVER called — no execution before consent
 
 @pytest.mark.asyncio
-async def test_destructive_declined_treated_as_reject():
+async def test_destructive_declined_treated_as_reject_never_dispatches():
     c = WriteFakeClient({"delete_notes": "destructive"})
-    c.operate_result = {"kind": "confirmation", "confirmation_id": "c1", "actions": []}
+    c.operate_result = {"kind": "tool_result", "content": {"deleted": 999}}
     out = await run_write_tool_logic(c, _Ctx(_Declined()), "notes", "delete_notes", {}, Autopilot())
     assert out["status"] == "refused" and out["reason"] == "human_rejected"
+    assert c.calls == []  # decline fails safe: nothing executes
 
 @pytest.mark.asyncio
-async def test_destructive_approve_once_runs_bypass_no_autopilot():
+async def test_destructive_approve_once_runs_single_bypass_no_autopilot():
     c = WriteFakeClient({"delete_notes": "destructive"})
-    c.operate_result = {"kind": "confirmation", "confirmation_id": "c1", "actions": []}
-    c.operate_result_bypass = {"kind": "tool_result", "content": {"deleted": 3}}
+    c.operate_result = {"kind": "tool_result", "content": {"deleted": 3}}
     ap = Autopilot(); ctx = _Ctx(_Accepted("approve_once"))
     out = await run_write_tool_logic(c, ctx, "notes", "delete_notes", {}, ap)
     assert out["status"] == "ok" and out["consent"] == "elicited"
     assert ctx.elicits == 1
-    assert c.calls == [("delete_notes", False), ("delete_notes", True)]
+    assert c.calls == [("delete_notes", True)]  # ONE call, bypass=True, only after approval
     assert ap.enabled is False  # approve-once must NOT flip autopilot
 
 @pytest.mark.asyncio
 async def test_destructive_autopilot_choice_enables_and_runs():
     c = WriteFakeClient({"delete_notes": "destructive"})
-    c.operate_result = {"kind": "confirmation", "confirmation_id": "c1", "actions": []}
-    c.operate_result_bypass = {"kind": "tool_result", "content": {"deleted": 1}}
+    c.operate_result = {"kind": "tool_result", "content": {"deleted": 1}}
     ap = Autopilot(); ctx = _Ctx(_Accepted("autopilot"))
     out = await run_write_tool_logic(c, ctx, "notes", "delete_notes", {}, ap)
     assert out["status"] == "ok" and out["consent"] == "autopilot"
     assert ap.enabled is True  # the human's autopilot choice flipped it
+    assert c.calls == [("delete_notes", True)]
 
 @pytest.mark.asyncio
 async def test_destructive_autopilot_on_skips_prompt():
     c = WriteFakeClient({"delete_notes": "destructive"})
-    c.operate_result = {"kind": "confirmation", "confirmation_id": "c1", "actions": []}
-    c.operate_result_bypass = {"kind": "tool_result", "content": {"deleted": 2}}
+    c.operate_result = {"kind": "tool_result", "content": {"deleted": 2}}
     ap = Autopilot(); ap.enabled = True
     ctx = _Ctx(_Accepted("reject"))  # would reject IF asked — must NOT be asked
     out = await run_write_tool_logic(c, ctx, "notes", "delete_notes", {}, ap)
     assert out["status"] == "ok" and out["consent"] == "autopilot"
     assert ctx.elicits == 0
-    assert c.calls == [("delete_notes", False), ("delete_notes", True)]
+    assert c.calls == [("delete_notes", True)]  # single bypass call, no prompt
 
 @pytest.mark.asyncio
 async def test_write_error_content_maps_to_error_status():

@@ -127,16 +127,18 @@ def _consent_from_elicit(result: Any) -> str:
     return "reject"
 
 
-def _destructive_prompt(conf: dict) -> str:
-    """Typed, human-readable summary of the kernel confirmation card's actions."""
-    lines = []
-    for a in (conf.get("actions") or []):
-        fn = a.get("function_name") or a.get("function") or "?"
-        n = a.get("item_count")
-        lines.append(f"- {fn}" + (f" ({n} item(s))" if n is not None else ""))
-    body = "\n".join(lines) or "(a destructive operation)"
-    return ("This is a DESTRUCTIVE operation:\n" + body +
-            "\nApprove once, enable autopilot (stop asking this session), or reject?")
+def _destructive_prompt(app_id: str, function: str, args: dict) -> str:
+    """Human-readable consent prompt for a destructive op. Built from the
+    tool identity + args (NOT a kernel card — the headless operate path does
+    not reliably emit one, so consent is obtained here BEFORE any execution)."""
+    try:
+        argstr = json.dumps(args or {}, ensure_ascii=False)[:400]
+    except Exception:
+        argstr = str(args)[:400]
+    return (f"DESTRUCTIVE operation requested: {app_id}.{function}\n"
+            f"args: {argstr}\n"
+            "This will execute immediately on approval. Approve once, enable "
+            "autopilot (stop asking for the rest of this session), or reject?")
 
 
 def _shape(res: Any) -> dict:
@@ -156,10 +158,14 @@ async def run_write_tool_logic(client, ctx, app_id, function, args, autopilot) -
     - read  -> refused (use run_read_tool)
     - blocked (synthetic/legacy/unknown) -> refused
     - write -> operate(bypass=False) once, return shaped result
-    - destructive -> operate(bypass=False) surfaces the kernel confirmation card;
-      consent via ctx.elicit (or session autopilot); on approval operate(bypass=True).
-    The kernel owns tier/billing/audit/confirmation (CONTROL != BYPASS) — this only
-    drives the local consent UX."""
+    - destructive -> consent FIRST (ctx.elicit, or session autopilot); ONLY on
+      approval operate(bypass=True). NEVER call operate before consent.
+    The kernel bills/audits every op (CONTROL != BYPASS). The terminal consent
+    gate lives HERE: the headless operate path does NOT reliably emit a kernel
+    confirmation card (it auto-executes when the principal's confirmation policy
+    is absent/off), so relying on a card would silently execute destructive ops.
+    Money is graded destructive -> it always prompts here unless autopilot; the
+    unforgeable money wall is the out-of-band panel (Plan 2)."""
     action_type = await _resolve_action_type(client, app_id, function)
     tier = classify_tier(function, action_type)
     if tier == "read":
@@ -169,15 +175,15 @@ async def run_write_tool_logic(client, ctx, app_id, function, args, autopilot) -
     if tier == "write":
         res = await client.operate(app_id, function, args or {}, confirmation_bypassed=False)
         return _shape(res)
-    # tier == "destructive"
-    first = await client.operate(app_id, function, args or {}, confirmation_bypassed=False)
-    if isinstance(first, dict) and first.get("kind") == "tool_result":
-        return _shape(first)  # kernel re-graded as non-destructive / already done
-    if not (isinstance(first, dict) and first.get("kind") == "confirmation"):
-        return {"status": "error", "detail": "unexpected kernel result for destructive op"}
+    # tier == "destructive": consent MUST precede execution. Do NOT call operate
+    # until approved — the kernel would execute a bypass=False destructive
+    # directly when confirmation policy is absent (LIVE 2026-07-02).
     consent = "autopilot"
     if not autopilot.enabled:
-        result = await ctx.elicit(message=_destructive_prompt(first), schema=_DestructiveConsent)
+        result = await ctx.elicit(
+            message=_destructive_prompt(app_id, function, args or {}),
+            schema=_DestructiveConsent,
+        )
         decision = _consent_from_elicit(result)
         if decision == "reject":
             return {"status": "refused", "reason": "human_rejected"}
