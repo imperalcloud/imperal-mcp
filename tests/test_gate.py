@@ -1,4 +1,4 @@
-from imperal_mcp.gate import classify_tier, is_read_only, is_synthetic
+from imperal_mcp.gate import classify_tier, is_money, is_read_only, is_synthetic
 
 
 def test_read_allowed():
@@ -28,3 +28,10 @@ def test_classify_tier():
     assert classify_tier("__panel__x", "write") == "blocked"      # synthetic
     assert classify_tier("tool_mail_chat", "write") == "blocked"  # legacy BYOLLM
     assert classify_tier("x", None) == "blocked"                  # unknown -> fail-closed
+
+
+def test_is_money():
+    assert is_money("billing", "buy_tokens") is True
+    assert is_money("billing", "cancel_subscription") is True
+    assert is_money("billing", "get_balance") is False
+    assert is_money("notes", "delete_note") is False

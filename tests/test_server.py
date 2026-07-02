@@ -303,10 +303,20 @@ class _Declined:          # mirrors mcp DeclinedElicitation
     data = None
 
 class _Ctx:
-    def __init__(self, result): self._r = result; self.elicits = 0
+    def __init__(self, result, elicit_url_raises=False):
+        self._r = result
+        self.elicits = 0
+        self.elicit_url_calls = []          # list of (message, url, elicitation_id)
+        self._elicit_url_raises = elicit_url_raises
+
     async def elicit(self, message, schema=None):
         self.elicits += 1
         return self._r
+
+    async def elicit_url(self, message, url, elicitation_id):
+        self.elicit_url_calls.append((message, url, elicitation_id))
+        if self._elicit_url_raises:
+            raise NotImplementedError("host lacks url-elicitation")
 
 
 @pytest.mark.asyncio
@@ -390,3 +400,110 @@ async def test_write_error_content_maps_to_error_status():
     c.operate_result = {"kind": "tool_result", "content": {"error": "boom"}}
     out = await run_write_tool_logic(c, _Ctx(_Accepted("reject")), "notes", "create_note", {}, Autopilot())
     assert out["status"] == "error"
+
+
+# ── Task 6: run_write_tool money branch (panel approval via elicit_url) ──
+
+@pytest.mark.asyncio
+async def test_money_tool_pending_panel_approval_elicits_url():
+    c = WriteFakeClient({"buy_tokens": "write"})  # action_type irrelevant — money branch is first
+    c.operate_result = {
+        "kind": "panel_approval_required",
+        "confirmation_id": "c1",
+        "panel_url": "https://panel/x?confirmation_id=c1",
+        "summary": "Buy 100 credits",
+    }
+    ctx = _Ctx(_Accepted("reject"))  # terminal consent must NEVER be consulted
+    out = await run_write_tool_logic(c, ctx, "billing", "buy_tokens", {}, Autopilot())
+    assert out == {
+        "status": "pending_panel_approval",
+        "confirmation_id": "c1",
+        "panel_url": "https://panel/x?confirmation_id=c1",
+        "summary": "Buy 100 credits",
+        "note": "Approve in your panel, then re-run this tool to complete.",
+    }
+    assert ctx.elicit_url_calls == [
+        ("Approve this charge in your Imperal panel", "https://panel/x?confirmation_id=c1", "c1")
+    ]
+    assert ctx.elicits == 0  # terminal ctx.elicit NOT called
+    assert c.calls == [("buy_tokens", False)]  # operate called ONCE, bypass=False
+
+
+@pytest.mark.asyncio
+async def test_money_tool_recall_after_release_returns_shaped_ok():
+    c = WriteFakeClient({"buy_tokens": "write"})
+    c.operate_result = {"kind": "tool_result", "content": {"ok": True, "result": 1}}
+    ctx = _Ctx(_Accepted("reject"))
+    out = await run_write_tool_logic(c, ctx, "billing", "buy_tokens", {}, Autopilot())
+    assert out["status"] == "ok"
+    assert ctx.elicit_url_calls == []
+    assert ctx.elicits == 0
+
+
+@pytest.mark.asyncio
+async def test_money_tool_release_denied_returns_distinct_refused_status():
+    c = WriteFakeClient({"buy_tokens": "write"})
+    c.operate_result = {
+        "kind": "tool_result",
+        "content": {"ok": False, "error": "money_release_denied", "status": "pending"},
+    }
+    ctx = _Ctx(_Accepted("reject"))
+    out = await run_write_tool_logic(c, ctx, "billing", "buy_tokens", {}, Autopilot())
+    assert out == {"status": "refused", "reason": "pending"}
+
+
+@pytest.mark.asyncio
+async def test_money_tool_elicit_url_raises_still_returns_pending():
+    c = WriteFakeClient({"buy_tokens": "write"})
+    c.operate_result = {
+        "kind": "panel_approval_required",
+        "confirmation_id": "c2",
+        "panel_url": "https://panel/y?confirmation_id=c2",
+        "summary": "Cancel subscription",
+    }
+    ctx = _Ctx(_Accepted("reject"), elicit_url_raises=True)
+    out = await run_write_tool_logic(c, ctx, "billing", "cancel_subscription", {}, Autopilot())
+    assert out["status"] == "pending_panel_approval"
+    assert out["panel_url"] == "https://panel/y?confirmation_id=c2"
+    assert ctx.elicit_url_calls  # it was attempted
+
+
+@pytest.mark.asyncio
+async def test_money_tool_autopilot_on_still_goes_to_panel():
+    c = WriteFakeClient({"buy_tokens": "write"})
+    c.operate_result = {
+        "kind": "panel_approval_required",
+        "confirmation_id": "c3",
+        "panel_url": "https://panel/z?confirmation_id=c3",
+        "summary": "Buy 500 credits",
+    }
+    ap = Autopilot(); ap.enabled = True
+    ctx = _Ctx(_Accepted("autopilot"))
+    out = await run_write_tool_logic(c, ctx, "billing", "buy_tokens", {}, ap)
+    assert out["status"] == "pending_panel_approval"
+    assert c.calls == [("buy_tokens", False)]  # never bypassed via autopilot
+    assert ctx.elicits == 0  # autopilot's terminal elicit path never touched
+
+
+@pytest.mark.asyncio
+async def test_non_money_write_tool_unchanged():
+    c = WriteFakeClient({"create_note": "write"})
+    c.operate_result = {"kind": "tool_result", "content": {"id": 1}}
+    ctx = _Ctx(_Accepted("reject"))
+    out = await run_write_tool_logic(c, ctx, "notes", "create_note", {"t": 1}, Autopilot())
+    assert out["status"] == "ok"
+    assert c.last_bypass is False
+    assert ctx.elicits == 0
+    assert ctx.elicit_url_calls == []  # money branch did NOT fire
+
+
+@pytest.mark.asyncio
+async def test_non_money_destructive_tool_unchanged():
+    c = WriteFakeClient({"delete_notes": "destructive"})
+    c.operate_result = {"kind": "tool_result", "content": {"deleted": 3}}
+    ap = Autopilot(); ctx = _Ctx(_Accepted("approve_once"))
+    out = await run_write_tool_logic(c, ctx, "notes", "delete_notes", {}, ap)
+    assert out["status"] == "ok" and out["consent"] == "elicited"
+    assert ctx.elicits == 1
+    assert ctx.elicit_url_calls == []  # money branch did NOT fire
+    assert c.calls == [("delete_notes", True)]

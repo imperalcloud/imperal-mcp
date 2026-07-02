@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from .client import ImperalClient
 from .config import Config
-from .gate import is_read_only, is_synthetic, classify_tier
+from .gate import is_money, is_read_only, is_synthetic, classify_tier
 from .irkit import (
     validate_ir as _validate_ir,
     ui_catalog_text,
@@ -153,8 +153,14 @@ def _shape(res: Any) -> dict:
     return {"status": "error", "detail": "unexpected kernel kind"}
 
 
+_MONEY_REFUSED_ERRORS = ("money_release_denied", "money_release_already_consumed_or_expired")
+
+
 async def run_write_tool_logic(client, ctx, app_id, function, args, autopilot) -> dict:
     """Run a write/destructive tool via the guarded /operate seam.
+    - money -> ALWAYS out-of-band panel approval (ctx.elicit_url), checked FIRST,
+      before read/write/destructive classification and before autopilot. Money
+      NEVER goes through terminal consent or session autopilot.
     - read  -> refused (use run_read_tool)
     - blocked (synthetic/legacy/unknown) -> refused
     - write -> operate(bypass=False) once, return shaped result
@@ -164,8 +170,31 @@ async def run_write_tool_logic(client, ctx, app_id, function, args, autopilot) -
     gate lives HERE: the headless operate path does NOT reliably emit a kernel
     confirmation card (it auto-executes when the principal's confirmation policy
     is absent/off), so relying on a card would silently execute destructive ops.
-    Money is graded destructive -> it always prompts here unless autopilot; the
-    unforgeable money wall is the out-of-band panel (Plan 2)."""
+    The unforgeable money wall is the out-of-band panel (Plan 2): the kernel
+    returns panel_approval_required and refuses to execute until a browser-JWT
+    panel release; the re-call after release returns the real tool_result."""
+    if is_money(app_id, function):
+        res = await client.operate(app_id, function, args or {}, confirmation_bypassed=False)
+        if isinstance(res, dict) and res.get("kind") == "panel_approval_required":
+            try:
+                await ctx.elicit_url(
+                    message="Approve this charge in your Imperal panel",
+                    url=res.get("panel_url", ""),
+                    elicitation_id=res.get("confirmation_id", ""),
+                )
+            except Exception:
+                pass  # host lacks url-elicitation -> the panel_url is in the return payload
+            return {"status": "pending_panel_approval",
+                    "confirmation_id": res.get("confirmation_id"),
+                    "panel_url": res.get("panel_url"), "summary": res.get("summary"),
+                    "note": "Approve in your panel, then re-run this tool to complete."}
+        if isinstance(res, dict) and res.get("kind") == "tool_result":
+            content = res.get("content") or {}
+            if isinstance(content, dict) and content.get("error") in _MONEY_REFUSED_ERRORS:
+                return {"status": "refused", "reason": content.get("status") or content.get("error")}
+            return _shape(res)
+        return {"status": "error", "detail": "unexpected money result"}
+    # ── existing read/blocked/write/destructive tiers (Plan 1) unchanged below ──
     action_type = await _resolve_action_type(client, app_id, function)
     tier = classify_tier(function, action_type)
     if tier == "read":
@@ -254,9 +283,11 @@ def build_server(client: ImperalClient) -> FastMCP:
         annotations=ToolAnnotations(destructiveHint=True),
     )
     async def run_write_tool(app_id: str, function: str, args: dict | None = None, ctx: Context = None) -> Any:
-        """Run a WRITE or DESTRUCTIVE tool of a deployed app. Write runs directly;
-        destructive requires human consent (elicitation) or session autopilot; read
-        tools are refused (use run_read_tool). Money tools are not supported here."""
+        """Run a WRITE or DESTRUCTIVE tool of a deployed app. Money tools always go
+        through out-of-band panel approval (never terminal consent or autopilot):
+        re-run this tool after approving in the panel to complete. Write runs
+        directly; destructive requires human consent (elicitation) or session
+        autopilot; read tools are refused (use run_read_tool)."""
         return await run_write_tool_logic(client, ctx, app_id, function, args or {}, _AUTOPILOT)
 
     @mcp.resource("imperal://ir-spec")
