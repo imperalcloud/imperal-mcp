@@ -1,4 +1,4 @@
-from imperal_mcp.gate import is_read_only, is_synthetic
+from imperal_mcp.gate import classify_tier, is_read_only, is_synthetic
 
 
 def test_read_allowed():
@@ -19,3 +19,12 @@ def test_synthetic_detection():
     for n in ("__panel__home", "__widget__x", "__webhook__y", "skeleton_z", "_internal_q"):
         assert is_synthetic(n) is True
     assert is_synthetic("list_links") is False
+
+
+def test_classify_tier():
+    assert classify_tier("create_note", "write") == "write"
+    assert classify_tier("delete_notes", "destructive") == "destructive"
+    assert classify_tier("list_notes", "read") == "read"          # -> run_read_tool
+    assert classify_tier("__panel__x", "write") == "blocked"      # synthetic
+    assert classify_tier("tool_mail_chat", "write") == "blocked"  # legacy BYOLLM
+    assert classify_tier("x", None) == "blocked"                  # unknown -> fail-closed

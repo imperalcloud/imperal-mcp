@@ -156,3 +156,13 @@ class ImperalClient:
         return await self._request("POST", f"/v1/extensions/{app_id}/call", json={
             "user_id": uid, "tenant_id": "default", "function": function, "params": params,
         })
+
+    async def operate(self, app_id: str, function: str, params: dict,
+                      confirmation_bypassed: bool = False) -> dict:
+        """Run a write/destructive tool via the guarded /operate endpoint.
+        Returns the kernel {kind: "tool_result"|"confirmation", ...} dict verbatim."""
+        uid = await self.whoami()
+        return await self._request("POST", f"/v1/extensions/{app_id}/operate", json={
+            "user_id": uid, "tenant_id": "default", "function": function,
+            "params": params or {}, "confirmation_bypassed": confirmation_bypassed,
+        })

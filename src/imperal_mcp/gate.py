@@ -18,3 +18,18 @@ def is_read_only(name: str, action_type: str | None) -> bool:
     if _LEGACY_CHAT.match(name or ""):
         return False
     return action_type == "read"
+
+
+def classify_tier(name: str, action_type: str | None) -> str:
+    """Advisory tier for the MCP write-path UX. The kernel re-grades
+    authoritatively (CONTROL != BYPASS) — this is only for local routing.
+    Fail-closed: synthetic / legacy tool_*_chat / unknown -> 'blocked'."""
+    if is_synthetic(name) or _LEGACY_CHAT.match(name or ""):
+        return "blocked"
+    if action_type == "read":
+        return "read"
+    if action_type == "write":
+        return "write"
+    if action_type == "destructive":
+        return "destructive"
+    return "blocked"

@@ -225,3 +225,31 @@ async def test_ensure_registered_retries_handle_on_collision():
     assert route.call_count == 2
     body2 = json.loads(route.calls[1].request.read().decode())
     assert body2["nickname"] != "imp_u_dupe" and body2["tier"] == "explorer"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_operate_targets_operate_endpoint():
+    respx.get("http://gw/v1/auth/me").mock(return_value=httpx.Response(200, json={"imperal_id": "imp_u_1"}))
+    route = respx.post("http://gw/v1/extensions/notes/operate").mock(
+        return_value=httpx.Response(200, json={"kind": "tool_result", "content": {"ok": True}}))
+    c = ImperalClient(CFG)
+    out = await c.operate("notes", "create_note", {"title": "t"})
+    assert route.called
+    body = json.loads(route.calls.last.request.read().decode())
+    assert body == {"user_id": "imp_u_1", "tenant_id": "default",
+                    "function": "create_note", "params": {"title": "t"},
+                    "confirmation_bypassed": False}
+    assert out == {"kind": "tool_result", "content": {"ok": True}}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_operate_forwards_confirmation_bypassed():
+    respx.get("http://gw/v1/auth/me").mock(return_value=httpx.Response(200, json={"imperal_id": "imp_u_1"}))
+    route = respx.post("http://gw/v1/extensions/notes/operate").mock(
+        return_value=httpx.Response(200, json={"kind": "tool_result", "content": {}}))
+    c = ImperalClient(CFG)
+    await c.operate("notes", "delete_note", {"id": "n1"}, confirmation_bypassed=True)
+    body = json.loads(route.calls.last.request.read().decode())
+    assert body["confirmation_bypassed"] is True
