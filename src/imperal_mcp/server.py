@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Literal
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Context
 from mcp.types import ToolAnnotations
+from pydantic import BaseModel, Field
 
 from .client import ImperalClient
 from .config import Config
-from .gate import is_read_only, is_synthetic
+from .gate import is_read_only, is_synthetic, classify_tier
 from .irkit import (
     validate_ir as _validate_ir,
     ui_catalog_text,
@@ -98,6 +99,97 @@ async def run_read_tool_logic(client: ImperalClient, app_id: str, function: str,
     return defensive_scrub(out)
 
 
+class Autopilot:
+    """Per-process session holder for destructive-op autopilot. HUMAN-ONLY toggle:
+    only a human 'autopilot' elicitation response flips `enabled` on — never the agent,
+    never the kernel. CONTROL != BYPASS: the kernel still re-grades/audits every op."""
+    def __init__(self) -> None:
+        self.enabled = False
+
+
+_AUTOPILOT = Autopilot()  # per-process session state
+
+
+class _DestructiveConsent(BaseModel):
+    decision: Literal["approve_once", "autopilot", "reject"] = Field(
+        description=("approve_once = run this ONE destructive operation; "
+                     "autopilot = run this AND stop asking for the rest of this session; "
+                     "reject = do not run"))
+
+
+def _consent_from_elicit(result: Any) -> str:
+    """Map an mcp ElicitationResult -> approve_once|autopilot|reject.
+    Declined / Cancelled / anything non-accept -> reject (fail-safe)."""
+    if getattr(result, "action", None) == "accept":
+        dec = getattr(getattr(result, "data", None), "decision", None)
+        if dec in ("approve_once", "autopilot", "reject"):
+            return dec
+    return "reject"
+
+
+def _destructive_prompt(conf: dict) -> str:
+    """Typed, human-readable summary of the kernel confirmation card's actions."""
+    lines = []
+    for a in (conf.get("actions") or []):
+        fn = a.get("function_name") or a.get("function") or "?"
+        n = a.get("item_count")
+        lines.append(f"- {fn}" + (f" ({n} item(s))" if n is not None else ""))
+    body = "\n".join(lines) or "(a destructive operation)"
+    return ("This is a DESTRUCTIVE operation:\n" + body +
+            "\nApprove once, enable autopilot (stop asking this session), or reject?")
+
+
+def _shape(res: Any) -> dict:
+    """Kernel {kind,...} -> a compact status envelope, PII-masked."""
+    if not isinstance(res, dict):
+        return {"status": "error", "detail": "non-dict kernel result"}
+    if res.get("kind") == "tool_result":
+        content = res.get("content")
+        if isinstance(content, dict) and "error" in content:
+            return {"status": "error", "detail": defensive_scrub(content)}
+        return {"status": "ok", "result": defensive_scrub(content)}
+    return {"status": "error", "detail": "unexpected kernel kind"}
+
+
+async def run_write_tool_logic(client, ctx, app_id, function, args, autopilot) -> dict:
+    """Run a write/destructive tool via the guarded /operate seam.
+    - read  -> refused (use run_read_tool)
+    - blocked (synthetic/legacy/unknown) -> refused
+    - write -> operate(bypass=False) once, return shaped result
+    - destructive -> operate(bypass=False) surfaces the kernel confirmation card;
+      consent via ctx.elicit (or session autopilot); on approval operate(bypass=True).
+    The kernel owns tier/billing/audit/confirmation (CONTROL != BYPASS) — this only
+    drives the local consent UX."""
+    action_type = await _resolve_action_type(client, app_id, function)
+    tier = classify_tier(function, action_type)
+    if tier == "read":
+        return {"status": "refused", "reason": "use run_read_tool"}
+    if tier == "blocked":
+        return {"status": "refused", "reason": "not a runnable write/destructive tool"}
+    if tier == "write":
+        res = await client.operate(app_id, function, args or {}, confirmation_bypassed=False)
+        return _shape(res)
+    # tier == "destructive"
+    first = await client.operate(app_id, function, args or {}, confirmation_bypassed=False)
+    if isinstance(first, dict) and first.get("kind") == "tool_result":
+        return _shape(first)  # kernel re-graded as non-destructive / already done
+    if not (isinstance(first, dict) and first.get("kind") == "confirmation"):
+        return {"status": "error", "detail": "unexpected kernel result for destructive op"}
+    consent = "autopilot"
+    if not autopilot.enabled:
+        result = await ctx.elicit(message=_destructive_prompt(first), schema=_DestructiveConsent)
+        decision = _consent_from_elicit(result)
+        if decision == "reject":
+            return {"status": "refused", "reason": "human_rejected"}
+        if decision == "autopilot":
+            autopilot.enabled = True
+        consent = "elicited" if decision == "approve_once" else "autopilot"
+    res = await client.operate(app_id, function, args or {}, confirmation_bypassed=True)
+    out = _shape(res)
+    out["consent"] = consent
+    return out
+
+
 def build_server(client: ImperalClient) -> FastMCP:
     mcp = FastMCP("imperal")
 
@@ -150,6 +242,16 @@ def build_server(client: ImperalClient) -> FastMCP:
     async def run_read_tool(app_id: str, function: str, args: dict | None = None) -> Any:
         """Run a READ-only tool of a deployed app (refuses write/destructive)."""
         return await run_read_tool_logic(client, app_id, function, args or {})
+
+    @mcp.tool(
+        title="Run Write Tool",
+        annotations=ToolAnnotations(destructiveHint=True),
+    )
+    async def run_write_tool(app_id: str, function: str, args: dict | None = None, ctx: Context = None) -> Any:
+        """Run a WRITE or DESTRUCTIVE tool of a deployed app. Write runs directly;
+        destructive requires human consent (elicitation) or session autopilot; read
+        tools are refused (use run_read_tool). Money tools are not supported here."""
+        return await run_write_tool_logic(client, ctx, app_id, function, args or {}, _AUTOPILOT)
 
     @mcp.resource("imperal://ir-spec")
     def _r_spec() -> str:

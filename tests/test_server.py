@@ -262,3 +262,130 @@ async def test_deploy_ir_logic_failure_always_has_error_string():
     assert out["status"] == "error"
     assert out.get("error")  # a clear, non-empty error string is present
     assert "ownership" in out["error"].lower()
+
+
+# ── Task 4: run_write_tool (write direct + destructive elicitation + autopilot) ──
+from imperal_mcp.server import run_write_tool_logic, Autopilot
+
+
+class WriteFakeClient(ImperalClient):
+    def __init__(self, action_types):
+        super().__init__(Config(api_url="http://gw", token="t"))
+        self._at = action_types            # {function: action_type}
+        self.operate_result = None         # returned on the non-bypass call
+        self.operate_result_bypass = None  # returned on the bypass call, if set
+        self.calls = []                    # (function, confirmation_bypassed)
+        self.last_bypass = None
+
+    async def get_app(self, app_id):
+        return {"tools_json": [{"name": n, "action_type": at} for n, at in self._at.items()]}
+
+    async def get_marketplace_app(self, app_id):
+        return {}
+
+    async def operate(self, app_id, function, params, confirmation_bypassed=False):
+        self.calls.append((function, confirmation_bypassed))
+        self.last_bypass = confirmation_bypassed
+        if confirmation_bypassed and self.operate_result_bypass is not None:
+            return self.operate_result_bypass
+        return self.operate_result
+
+
+class _Data:
+    def __init__(self, decision): self.decision = decision
+
+class _Accepted:          # mirrors mcp AcceptedElicitation
+    action = "accept"
+    def __init__(self, decision): self.data = _Data(decision)
+
+class _Declined:          # mirrors mcp DeclinedElicitation
+    action = "decline"
+    data = None
+
+class _Ctx:
+    def __init__(self, result): self._r = result; self.elicits = 0
+    async def elicit(self, message, schema=None):
+        self.elicits += 1
+        return self._r
+
+
+@pytest.mark.asyncio
+async def test_write_executes_direct_no_prompt():
+    c = WriteFakeClient({"create_note": "write"})
+    c.operate_result = {"kind": "tool_result", "content": {"id": 1}}
+    ctx = _Ctx(_Accepted("reject"))  # would reject IF asked — must NOT be asked
+    out = await run_write_tool_logic(c, ctx, "notes", "create_note", {"t": 1}, Autopilot())
+    assert out["status"] == "ok"
+    assert c.last_bypass is False
+    assert ctx.elicits == 0
+
+@pytest.mark.asyncio
+async def test_read_tier_refused_no_dispatch():
+    c = WriteFakeClient({"list_notes": "read"})
+    out = await run_write_tool_logic(c, _Ctx(_Accepted("reject")), "notes", "list_notes", {}, Autopilot())
+    assert out["status"] == "refused" and out["reason"] == "use run_read_tool"
+    assert c.calls == []
+
+@pytest.mark.asyncio
+async def test_blocked_tier_refused_no_dispatch():
+    c = WriteFakeClient({"tool_mail_chat": "write"})  # legacy → classify_tier -> blocked
+    out = await run_write_tool_logic(c, _Ctx(_Accepted("reject")), "mail", "tool_mail_chat", {}, Autopilot())
+    assert out["status"] == "refused"
+    assert c.calls == []
+
+@pytest.mark.asyncio
+async def test_destructive_reject_via_elicit():
+    c = WriteFakeClient({"delete_notes": "destructive"})
+    c.operate_result = {"kind": "confirmation", "confirmation_id": "c1",
+                        "actions": [{"function_name": "delete_notes", "item_count": 3}]}
+    out = await run_write_tool_logic(c, _Ctx(_Accepted("reject")), "notes", "delete_notes", {}, Autopilot())
+    assert out["status"] == "refused" and out["reason"] == "human_rejected"
+    assert c.calls == [("delete_notes", False)]  # no bypass execution
+
+@pytest.mark.asyncio
+async def test_destructive_declined_treated_as_reject():
+    c = WriteFakeClient({"delete_notes": "destructive"})
+    c.operate_result = {"kind": "confirmation", "confirmation_id": "c1", "actions": []}
+    out = await run_write_tool_logic(c, _Ctx(_Declined()), "notes", "delete_notes", {}, Autopilot())
+    assert out["status"] == "refused" and out["reason"] == "human_rejected"
+
+@pytest.mark.asyncio
+async def test_destructive_approve_once_runs_bypass_no_autopilot():
+    c = WriteFakeClient({"delete_notes": "destructive"})
+    c.operate_result = {"kind": "confirmation", "confirmation_id": "c1", "actions": []}
+    c.operate_result_bypass = {"kind": "tool_result", "content": {"deleted": 3}}
+    ap = Autopilot(); ctx = _Ctx(_Accepted("approve_once"))
+    out = await run_write_tool_logic(c, ctx, "notes", "delete_notes", {}, ap)
+    assert out["status"] == "ok" and out["consent"] == "elicited"
+    assert ctx.elicits == 1
+    assert c.calls == [("delete_notes", False), ("delete_notes", True)]
+    assert ap.enabled is False  # approve-once must NOT flip autopilot
+
+@pytest.mark.asyncio
+async def test_destructive_autopilot_choice_enables_and_runs():
+    c = WriteFakeClient({"delete_notes": "destructive"})
+    c.operate_result = {"kind": "confirmation", "confirmation_id": "c1", "actions": []}
+    c.operate_result_bypass = {"kind": "tool_result", "content": {"deleted": 1}}
+    ap = Autopilot(); ctx = _Ctx(_Accepted("autopilot"))
+    out = await run_write_tool_logic(c, ctx, "notes", "delete_notes", {}, ap)
+    assert out["status"] == "ok" and out["consent"] == "autopilot"
+    assert ap.enabled is True  # the human's autopilot choice flipped it
+
+@pytest.mark.asyncio
+async def test_destructive_autopilot_on_skips_prompt():
+    c = WriteFakeClient({"delete_notes": "destructive"})
+    c.operate_result = {"kind": "confirmation", "confirmation_id": "c1", "actions": []}
+    c.operate_result_bypass = {"kind": "tool_result", "content": {"deleted": 2}}
+    ap = Autopilot(); ap.enabled = True
+    ctx = _Ctx(_Accepted("reject"))  # would reject IF asked — must NOT be asked
+    out = await run_write_tool_logic(c, ctx, "notes", "delete_notes", {}, ap)
+    assert out["status"] == "ok" and out["consent"] == "autopilot"
+    assert ctx.elicits == 0
+    assert c.calls == [("delete_notes", False), ("delete_notes", True)]
+
+@pytest.mark.asyncio
+async def test_write_error_content_maps_to_error_status():
+    c = WriteFakeClient({"create_note": "write"})
+    c.operate_result = {"kind": "tool_result", "content": {"error": "boom"}}
+    out = await run_write_tool_logic(c, _Ctx(_Accepted("reject")), "notes", "create_note", {}, Autopilot())
+    assert out["status"] == "error"
