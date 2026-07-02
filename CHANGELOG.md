@@ -4,6 +4,35 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.4.0 — 2026-07-02 — Write-path + Money gate: run tools, not just build apps
+
+Minor — adds a guarded **execution** path (write / destructive / money) alongside the existing
+build→deploy door. No breaking changes to existing tool names. All authority stays kernel-side
+(CONTROL ≠ BYPASS): the MCP tiering is advisory; the kernel re-grades, bills, and audits every op.
+Plans: `superpowers/plans/2026-07-02-imperal-mcp-write-path-plan.md` +
+`superpowers/plans/2026-07-02-imperal-mcp-money-gate-plan.md`.
+
+### Added
+- **`run_write_tool(app_id, function, args)`** — runs a `write` or `destructive` tool of a deployed
+  app via the kernel's guarded step-executor (`OperateToolWorkflow` → `execute_tool_step`).
+  - `write` runs directly (billed + audited kernel-side).
+  - `destructive` requires **explicit consent first** via MCP elicitation (approve-once / autopilot /
+    reject); consent always precedes execution — the tool never runs the op before you approve.
+  - **Human-enabled session autopilot** — once you choose "autopilot", further destructive ops in the
+    session run without re-prompting (never agent- or model-enabled).
+- **Money tier (out-of-band panel approval)** — money/billing tools (plan changes, buy-credits,
+  subscription lifecycle) execute **only** after a human releases them in an authenticated browser
+  panel session. The agent's own token cannot self-release (server-side enforced). `run_write_tool`
+  surfaces the panel URL via `elicit_url` and returns `pending_panel_approval`; re-run to complete
+  after you approve.
+- **`client.operate(...)`** → `POST /v1/extensions/{app_id}/operate`; advisory `classify_tier` /
+  `is_money` gates for local UX.
+
+### Security
+- Consent (destructive) and human panel release (money) are the load-bearing guards; the kernel
+  refuses to execute a money op without a verified panel release. Read-only tools remain on
+  `run_read_tool`. PII is masked on every result egress.
+
 ## 0.3.0 — 2026-06-23 — Flawless MCP door (Phase 1): a deterministic build→deploy path
 
 Minor — reliability/UX hardening of the deploy door. No breaking changes to tool names.
