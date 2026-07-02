@@ -209,6 +209,10 @@ async def run_write_tool_logic(client, ctx, app_id, function, args, autopilot) -
     # directly when confirmation policy is absent (LIVE 2026-07-02).
     consent = "autopilot"
     if not autopilot.enabled:
+        if ctx is None:
+            # Fail-safe: no elicitation channel (a non-compliant host that didn't
+            # inject Context) -> refuse rather than AttributeError on None.elicit.
+            return {"status": "refused", "reason": "no elicitation channel to confirm a destructive operation"}
         result = await ctx.elicit(
             message=_destructive_prompt(app_id, function, args or {}),
             schema=_DestructiveConsent,

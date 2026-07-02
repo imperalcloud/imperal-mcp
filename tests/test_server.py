@@ -507,3 +507,13 @@ async def test_non_money_destructive_tool_unchanged():
     assert ctx.elicits == 1
     assert ctx.elicit_url_calls == []  # money branch did NOT fire
     assert c.calls == [("delete_notes", True)]
+
+
+@pytest.mark.asyncio
+async def test_destructive_ctx_none_refused_no_crash():
+    # A non-compliant host that didn't inject Context -> fail-safe refuse (no AttributeError).
+    c = WriteFakeClient({"delete_notes": "destructive"})
+    c.operate_result = {"kind": "tool_result", "content": {"deleted": 999}}  # must never surface
+    out = await run_write_tool_logic(c, None, "notes", "delete_notes", {}, Autopilot())
+    assert out["status"] == "refused" and "elicitation channel" in out["reason"]
+    assert c.calls == []  # never dispatched
