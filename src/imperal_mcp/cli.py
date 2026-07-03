@@ -10,13 +10,13 @@ from . import auth
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(prog="imperal-mcp")
     sub = parser.add_subparsers(dest="cmd")
-    sub.add_parser("login", help="Log in to your Imperal account in the browser")
+    sub.add_parser("login", help="Log in to your Imperal account")
     sub.add_parser("logout", help="Log out and remove local credentials")
     args = parser.parse_args(argv)
     cfg = Config.from_env()
 
     if args.cmd == "login":
-        email = auth.login(cfg)
+        email = asyncio.run(auth.login_device(cfg))
         print(f"Logged in as {email}.")
         return
     if args.cmd == "logout":

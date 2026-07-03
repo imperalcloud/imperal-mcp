@@ -1,0 +1,141 @@
+{
+  "$defs": {
+    "MeteredAttribution": {
+      "additionalProperties": false,
+      "properties": {
+        "app_id": {
+          "title": "App Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Name"
+        },
+        "action_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Action Type"
+        }
+      },
+      "required": [
+        "app_id"
+      ],
+      "title": "MeteredAttribution",
+      "type": "object"
+    },
+    "MeteredIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "imperal_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Imperal Id",
+          "type": "string"
+        },
+        "tenant_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Tenant Id",
+          "type": "string"
+        },
+        "agency_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agency Id"
+        }
+      },
+      "required": [
+        "imperal_id",
+        "tenant_id"
+      ],
+      "title": "MeteredIdentity",
+      "type": "object"
+    },
+    "MeteredMeter": {
+      "additionalProperties": false,
+      "properties": {
+        "unit_type": {
+          "minLength": 1,
+          "title": "Unit Type",
+          "type": "string"
+        },
+        "meter_version": {
+          "default": 1,
+          "title": "Meter Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "unit_type"
+      ],
+      "title": "MeteredMeter",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A single metered unit crossing the open<->closed boundary. Carries dimensions (quantities) only \u2014 price resolution is the platform's (closed) concern.",
+  "properties": {
+    "v": {
+      "const": 1,
+      "default": 1,
+      "title": "V",
+      "type": "integer"
+    },
+    "event_id": {
+      "maxLength": 50,
+      "minLength": 1,
+      "title": "Event Id",
+      "type": "string"
+    },
+    "ts": {
+      "title": "Ts",
+      "type": "integer"
+    },
+    "identity": {
+      "$ref": "#/$defs/MeteredIdentity"
+    },
+    "meter": {
+      "$ref": "#/$defs/MeteredMeter"
+    },
+    "attribution": {
+      "$ref": "#/$defs/MeteredAttribution"
+    },
+    "dimensions": {
+      "additionalProperties": true,
+      "title": "Dimensions",
+      "type": "object"
+    }
+  },
+  "required": [
+    "event_id",
+    "ts",
+    "identity",
+    "meter",
+    "attribution"
+  ],
+  "title": "Imperal MeteredEvent",
+  "type": "object",
+  "$id": "https://imperal.io/schemas/metered_event.schema.json"
+}

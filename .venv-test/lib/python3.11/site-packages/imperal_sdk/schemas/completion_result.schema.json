@@ -1,0 +1,31 @@
+{
+  "additionalProperties": false,
+  "description": "Response from ctx.ai.complete() \u2014 text plus model/usage metadata.",
+  "properties": {
+    "text": {
+      "title": "Text",
+      "type": "string"
+    },
+    "model": {
+      "default": "",
+      "title": "Model",
+      "type": "string"
+    },
+    "usage": {
+      "additionalProperties": true,
+      "title": "Usage",
+      "type": "object"
+    },
+    "stop_reason": {
+      "default": "",
+      "title": "Stop Reason",
+      "type": "string"
+    }
+  },
+  "required": [
+    "text"
+  ],
+  "title": "Imperal CompletionResult",
+  "type": "object",
+  "$id": "https://imperal.io/schemas/completion_result.schema.json"
+}

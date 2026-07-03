@@ -4,6 +4,27 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.5.0 — 2026-07-04 — Device-code login: ONE reliable sign-in for every surface
+
+**Breaking (auth internals).** Replaces the loopback browser-callback login with the
+OAuth 2.0 Device Authorization Grant (RFC 8628), so signing in works identically on a
+local machine, over SSH, in WSL, in a container, or headless — no `127.0.0.1/callback`
+that a remote browser can never reach. Design:
+`superpowers/specs/2026-07-04-webbee-device-code-login-design.md`.
+
+### Changed
+- **`imperal-mcp login`** now uses the device-code flow: the terminal prints a short
+  code and a URL (`https://panel.imperal.io/device`); you open the URL in any browser
+  (even on a phone), enter the code, and the terminal polls until it receives tokens.
+- `auth.login_device(cfg, *, on_prompt=None, open_browser=True)` (async) is the single
+  login entry point. `on_prompt(user_code, verification_uri, verification_uri_complete)`
+  lets a host UI (the Webbee dock) render the prompt into its own feed instead of stdout.
+
+### Removed
+- Loopback login internals: `auth.login` (sync), `auth.exchange_code`, the local
+  `HTTPServer` callback handler, and the `127.0.0.1/callback` redirect. PKCE and CLI
+  token issuance (`token_use="cli"`) are unchanged.
+
 ## 0.4.0 — 2026-07-02 — Write-path + Money gate: run tools, not just build apps
 
 Minor — adds a guarded **execution** path (write / destructive / money) alongside the existing

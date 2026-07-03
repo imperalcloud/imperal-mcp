@@ -1,4 +1,4 @@
-import base64, hashlib, json, stat
+import base64, hashlib, stat
 import httpx, pytest, respx
 from imperal_mcp.config import Config
 from imperal_mcp import auth
@@ -50,18 +50,87 @@ async def test_ensure_access_token_refresh_401_tells_user_to_login(tmp_path, mon
         await auth.ensure_access_token(Config(api_url="http://gw", token=None))
 
 
-# ── Task 2: exchange_code + logout ───────────────────────────────────────────
+# ── device-code login (RFC 8628) ──────────────────────────────────────────────
+
+_AUTHORIZE = {
+    "device_code": "DEV123", "user_code": "WDBK-7Q3M",
+    "verification_uri": "https://panel.imperal.io/device",
+    "verification_uri_complete": "https://panel.imperal.io/device?code=WDBK-7Q3M",
+    "expires_in": 600, "interval": 5,
+}
+
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_exchange_code_posts_pkce(tmp_path, monkeypatch):
+async def test_login_device_polls_until_approved(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    route = respx.post("http://gw/v1/auth/cli/token").mock(return_value=httpx.Response(200, json={
-        "access_token": "a", "refresh_token": "r", "token_type": "bearer", "expires_in": 900}))
-    out = await auth.exchange_code("http://gw", "code123", "verifier123", "http://127.0.0.1:5555/callback")
-    body = json.loads(route.calls.last.request.read().decode())
-    assert body == {"code": "code123", "code_verifier": "verifier123", "redirect_uri": "http://127.0.0.1:5555/callback"}
-    assert out["refresh_token"] == "r"
+
+    async def _no_sleep(_):  # no real waiting between polls
+        return None
+    monkeypatch.setattr(auth.asyncio, "sleep", _no_sleep)
+
+    respx.post("http://gw/v1/auth/cli/device/authorize").mock(
+        return_value=httpx.Response(200, json=_AUTHORIZE))
+    respx.post("http://gw/v1/auth/cli/device/token").mock(side_effect=[
+        httpx.Response(200, json={"error": "authorization_pending"}),
+        httpx.Response(200, json={"error": "authorization_pending"}),
+        httpx.Response(200, json={"access_token": "a", "refresh_token": "r", "expires_in": 900}),
+    ])
+    respx.get("http://gw/v1/auth/me").mock(
+        return_value=httpx.Response(200, json={"email": "dev@imperal.io"}))
+
+    seen = {}
+    def on_prompt(user_code, uri, uri_complete):
+        seen.update(user_code=user_code, uri=uri, uri_complete=uri_complete)
+
+    email = await auth.login_device(
+        Config(api_url="http://gw", token=None), on_prompt=on_prompt, open_browser=False)
+    assert email == "dev@imperal.io"
+    assert seen["user_code"] == "WDBK-7Q3M"
+    assert seen["uri"] == "https://panel.imperal.io/device"
+    assert seen["uri_complete"].endswith("?code=WDBK-7Q3M")
+    assert auth.load_creds()["refresh_token"] == "r"  # tokens persisted
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_login_device_backs_off_on_slow_down(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    slept: list = []
+
+    async def _rec_sleep(n):
+        slept.append(n)
+    monkeypatch.setattr(auth.asyncio, "sleep", _rec_sleep)
+
+    respx.post("http://gw/v1/auth/cli/device/authorize").mock(
+        return_value=httpx.Response(200, json=_AUTHORIZE))
+    respx.post("http://gw/v1/auth/cli/device/token").mock(side_effect=[
+        httpx.Response(200, json={"error": "slow_down"}),
+        httpx.Response(200, json={"access_token": "a", "refresh_token": "r", "expires_in": 900}),
+    ])
+    respx.get("http://gw/v1/auth/me").mock(
+        return_value=httpx.Response(200, json={"email": "dev@imperal.io"}))
+
+    await auth.login_device(Config(api_url="http://gw", token=None), open_browser=False)
+    assert slept == [10]  # 5 (interval) + _SLOW_DOWN_BUMP after slow_down, then approved
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_login_device_access_denied_raises(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    async def _no_sleep(_):
+        return None
+    monkeypatch.setattr(auth.asyncio, "sleep", _no_sleep)
+
+    respx.post("http://gw/v1/auth/cli/device/authorize").mock(
+        return_value=httpx.Response(200, json=_AUTHORIZE))
+    respx.post("http://gw/v1/auth/cli/device/token").mock(
+        return_value=httpx.Response(400, json={"error": "access_denied"}))
+
+    with pytest.raises(RuntimeError, match="declined"):
+        await auth.login_device(Config(api_url="http://gw", token=None), open_browser=False)
 
 
 @respx.mock

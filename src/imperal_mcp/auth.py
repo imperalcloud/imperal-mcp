@@ -3,13 +3,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import http.server
 import json
 import os
 import secrets
-import threading
 import time
-import urllib.parse
 import webbrowser
 from pathlib import Path
 
@@ -17,8 +14,10 @@ import httpx
 
 # refresh this many seconds before the access token's stated expiry
 _REFRESH_SKEW = 60
-# seconds to wait for the user to complete browser login before giving up
-_LOGIN_TIMEOUT = 300
+# poll interval (s) used if the gateway doesn't specify one
+_DEFAULT_POLL_INTERVAL = 5
+# extra seconds added to the poll interval on a slow_down signal
+_SLOW_DOWN_BUMP = 5
 
 
 class NotLoggedInError(RuntimeError):
@@ -83,87 +82,84 @@ async def ensure_access_token(cfg) -> str:
     return creds["access_token"]
 
 
-# ── Loopback login flow ───────────────────────────────────────────────────────
+# ── Device-authorization-grant login (RFC 8628) ───────────────────────────────
+# ONE mechanism for every surface — local, SSH, WSL, container, headless. The
+# terminal shows a short user_code + a URL; the user opens the URL in ANY
+# browser (even on a phone), enters the code, and the terminal polls until it
+# receives tokens. No loopback callback, so it works identically remote & local.
 
-async def exchange_code(api_url: str, code: str, code_verifier: str, redirect_uri: str) -> dict:
-    """POST /v1/auth/cli/token; returns the TokenResponse dict; raises RuntimeError on non-200."""
-    async with httpx.AsyncClient(timeout=30) as cli:
-        resp = await cli.post(f"{api_url}/v1/auth/cli/token", json={
-            "code": code, "code_verifier": code_verifier, "redirect_uri": redirect_uri,
-        })
-    if resp.status_code != 200:
-        raise RuntimeError(f"login failed: {resp.status_code} {resp.text[:200]}")
-    return resp.json()
-
-
-_OK_HTML = b"<html><body><h2>imperal-mcp: received.</h2>You can close this tab and return to your terminal.</body></html>"
-_ERR_HTML = b"<html><body><h2>imperal-mcp: login was cancelled or failed.</h2></body></html>"
+def _default_prompt(user_code: str, verification_uri: str, verification_uri_complete: str) -> None:
+    print()
+    print("  To sign in, open this URL in any browser:")
+    print(f"    {verification_uri}")
+    print(f"  and enter the code:  {user_code}")
+    print()
 
 
-class _LoopbackHandler(http.server.BaseHTTPRequestHandler):
-    captured: dict = {}
+async def login_device(cfg, *, on_prompt=None, open_browser: bool = True) -> str:
+    """Log in via the device-authorization grant; returns the logged-in email.
 
-    def do_GET(self):  # noqa: N802
-        q = urllib.parse.urlparse(self.path)
-        if q.path != "/callback":
-            self.send_response(404)
-            self.end_headers()
-            return
-        params = urllib.parse.parse_qs(q.query)
-        _LoopbackHandler.captured = {k: v[0] for k, v in params.items()}
-        ok = "code" in _LoopbackHandler.captured
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html")
-        self.end_headers()
-        self.wfile.write(_OK_HTML if ok else _ERR_HTML)
-
-    def log_message(self, fmt, *args):  # noqa: ARG002
-        pass  # silence server log output
-
-
-def login(cfg, *, open_browser: bool = True) -> str:
-    """Full PKCE loopback login flow; returns the logged-in email."""
+    ``on_prompt(user_code, verification_uri, verification_uri_complete)`` shows
+    the code + URL to the user. It defaults to printing to stdout; the webbee
+    dock passes its own renderer so the prompt lands in the action feed (in a
+    full-screen UI a bare ``print`` would be invisible).
+    """
+    show = on_prompt or _default_prompt
     verifier, challenge = gen_pkce()
-    state = secrets.token_urlsafe(24)
-    _LoopbackHandler.captured = {}
 
-    server = http.server.HTTPServer(("127.0.0.1", 0), _LoopbackHandler)
-    port = server.server_address[1]
-    redirect_uri = f"http://127.0.0.1:{port}/callback"
+    async with httpx.AsyncClient(timeout=30) as cli:
+        resp = await cli.post(
+            f"{cfg.api_url}/v1/auth/cli/device/authorize",
+            json={"code_challenge": challenge, "code_challenge_method": "S256"},
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"could not start login: {resp.status_code} {resp.text[:200]}")
+        start = resp.json()
 
-    panel = getattr(cfg, "panel_url", None) or "https://panel.imperal.io"
-    qs = urllib.parse.urlencode({
-        "redirect_uri": redirect_uri, "state": state,
-        "code_challenge": challenge, "code_challenge_method": "S256",
-    })
-    url = f"{panel}/cli-authorize?{qs}"
+        device_code = start["device_code"]
+        verification_uri = start["verification_uri"]
+        verification_uri_complete = start.get("verification_uri_complete", verification_uri)
+        interval = int(start.get("interval", _DEFAULT_POLL_INTERVAL))
+        deadline = time.monotonic() + int(start.get("expires_in", 600))
 
-    # Serve exactly one request in a background thread
-    t = threading.Thread(target=server.handle_request, daemon=True)
-    t.start()
-    print(f"Opening {url}")
-    if open_browser:
-        webbrowser.open(url)
-    t.join(timeout=_LOGIN_TIMEOUT)
-    server.server_close()
+        show(start["user_code"], verification_uri, verification_uri_complete)
+        if open_browser:
+            try:
+                webbrowser.open(verification_uri_complete)
+            except Exception:
+                pass  # headless / no browser — the user opens the URL themselves
 
-    if not _LoopbackHandler.captured:
-        print("Login timed out — re-run `imperal-mcp login` to try again.")
+        while True:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("login timed out — re-run the command to try again.")
+            poll = await cli.post(
+                f"{cfg.api_url}/v1/auth/cli/device/token",
+                json={"device_code": device_code, "code_verifier": verifier},
+            )
+            data = poll.json() if poll.content else {}
+            if poll.status_code == 200 and data.get("access_token"):
+                tok = data
+                break
+            if poll.status_code == 200:
+                # Not ready yet: keep polling; back off further on slow_down.
+                if data.get("error") == "slow_down":
+                    interval += _SLOW_DOWN_BUMP
+                await asyncio.sleep(interval)
+                continue
+            # Terminal error (4xx): stop polling.
+            err = data.get("error", f"http {poll.status_code}")
+            if err == "access_denied":
+                raise RuntimeError("login was declined in the browser.")
+            if err == "expired_token":
+                raise RuntimeError("login expired — re-run the command to try again.")
+            raise RuntimeError(f"login failed: {err}")
 
-    cap = _LoopbackHandler.captured
-    if cap.get("state") != state:
-        raise RuntimeError("state mismatch — aborting login")
-    if "code" not in cap:
-        raise RuntimeError(f"login not completed: {cap.get('error', 'no code')}")
-
-    tok = asyncio.run(exchange_code(cfg.api_url, cap["code"], verifier, redirect_uri))
     save_creds({
         "access_token": tok["access_token"],
         "refresh_token": tok["refresh_token"],
         "access_expires_at": time.time() + int(tok.get("expires_in", 900)),
     })
-    # Confirm identity
-    return asyncio.run(_whoami_email(cfg.api_url, tok["access_token"]))
+    return await _whoami_email(cfg.api_url, tok["access_token"])
 
 
 async def _whoami_email(api_url: str, access_token: str) -> str:

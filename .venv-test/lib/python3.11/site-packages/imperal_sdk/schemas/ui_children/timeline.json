@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imperal.io/schemas/ui_children/timeline.json",
+  "title": "Timeline items",
+  "description": "Array of items for ui.Timeline. Each item: {title, description?, time?, icon?, color?}.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["title"],
+    "properties": {
+      "title":       {"type": "string"},
+      "description": {"type": "string"},
+      "time":        {"type": "string"},
+      "icon":        {"type": "string"},
+      "color":       {"type": "string"}
+    },
+    "additionalProperties": true
+  }
+}

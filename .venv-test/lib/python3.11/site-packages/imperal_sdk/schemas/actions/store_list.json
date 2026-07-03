@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imperal.io/schemas/actions/store_list.json",
+  "title": "store.list step args",
+  "description": "Args for the 'store.list' declarative step verb — list records with optional filter.",
+  "type": "object",
+  "required": ["kind"],
+  "properties": {
+    "kind":  {"type": "string",  "description": "Data store entity kind (collection name)"},
+    "where": {"type": "object",  "description": "Optional filter criteria (field: value map)"},
+    "ids":   {"type": "array",   "description": "Optional list of ids to restrict results", "items": {"type": "string"}},
+    "limit": {"type": "integer", "description": "Maximum number of records to return"}
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imperal.io/schemas/actions/store_update.json",
+  "title": "store.update step args",
+  "description": "Args for the 'store.update' declarative step verb — update fields on existing records.",
+  "type": "object",
+  "required": ["kind", "set"],
+  "properties": {
+    "kind":  {"type": "string", "description": "Data store entity kind (collection name)"},
+    "id":    {"type": "string", "description": "Single record id to update (mutually exclusive with 'where'/'ids')"},
+    "ids":   {"type": "array",  "description": "List of ids to update in bulk", "items": {"type": "string"}},
+    "where": {"type": "object", "description": "Filter criteria selecting records to update"},
+    "set":   {"type": "object", "description": "Field values to apply (patch semantics)"}
+  },
+  "additionalProperties": true
+}
