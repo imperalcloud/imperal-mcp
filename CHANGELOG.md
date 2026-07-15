@@ -4,6 +4,35 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.5.1 — 2026-07-15 — Harden token refresh against the multi-process rotation race
+
+Patch — fixes an intermittent "session expired" that could hit even a just-logged-in
+user. The gateway rotates refresh tokens SINGLE-USE (an atomic claim revokes the
+presented token and mints a new pair); `ensure_access_token` had no concurrency guard
+and `save_creds` wrote in place, so (a) two tasks in one process, or (b) two processes
+sharing the on-disk creds file, could race the same refresh_token — the loser 401ed as
+a false logout. Proven live 2026-07-15 against a Webbee client that calls this SDK
+frequently (idle-steer poller vs. a starting turn).
+
+### Fixed
+- **In-process serialization** — a module-level `asyncio.Lock` around the refresh
+  section of `ensure_access_token`; concurrent callers never double-refresh (the
+  losers re-check the now-updated on-disk creds instead of racing the network).
+- **Cross-process retry** — on a refresh failure, re-read creds from disk after a
+  short pause; if the refresh_token there differs from the one just attempted (a
+  sibling process already won the rotation and saved), retry once with the fresh
+  token. If it's unchanged, it's a genuine logout — raise as before, no blind retry.
+- **Atomic save** — `save_creds` now writes to a temp file in the same directory and
+  `os.replace`s it onto the real path (atomic rename on POSIX), instead of truncating
+  the destination in place; a reader (or a crash mid-write) can no longer observe a
+  partial/empty credentials file. 0600 permissions preserved.
+
+### Notes
+- The client-side death-window between the gateway's server-side rotation and this
+  SDK's `save_creds` call cannot be fully eliminated here — save happens immediately
+  after the new pair is fetched, minimizing but not closing the gap. Closing it fully
+  needs a gateway-side grace window (tracked separately, server-side).
+
 ## 0.5.0 — 2026-07-04 — Device-code login: ONE reliable sign-in for every surface
 
 **Breaking (auth internals).** Replaces the loopback browser-callback login with the

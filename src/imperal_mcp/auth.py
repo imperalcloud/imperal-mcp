@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import secrets
+import tempfile
 import time
 import webbrowser
 from pathlib import Path
@@ -18,6 +19,9 @@ _REFRESH_SKEW = 60
 _DEFAULT_POLL_INTERVAL = 5
 # extra seconds added to the poll interval on a slow_down signal
 _SLOW_DOWN_BUMP = 5
+# short pause before re-reading creds after a failed refresh, giving a sibling
+# process time to finish writing the pair it already won the rotation race for
+_SIBLING_RETRY_DELAY_S = 0.3
 
 
 class NotLoggedInError(RuntimeError):
@@ -37,14 +41,32 @@ def creds_path() -> Path:
 
 
 def save_creds(d: dict) -> None:
+    """Write credentials atomically: temp file in the same directory, then
+    ``os.replace`` onto the real path.
+
+    ``os.replace`` is an atomic rename on POSIX (single ``rename(2)`` syscall,
+    same filesystem since the temp file lives in the same directory), so a
+    concurrent reader (another process, or this one) always sees either the
+    old file or the fully-written new one — never a truncated/partial one.
+    The previous implementation opened the destination with ``O_TRUNC`` and
+    wrote in place, which briefly left the file empty if the process died
+    mid-write.
+    """
     p = creds_path()
     p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(p.parent, 0o700)
-    # write 0600 atomically
-    fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump(d, f)
-    os.chmod(p, 0o600)
+    fd, tmp_name = tempfile.mkstemp(dir=str(p.parent), prefix=".credentials.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(d, f)
+        os.chmod(tmp_name, 0o600)
+        os.replace(tmp_name, p)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def load_creds() -> dict | None:
@@ -65,6 +87,25 @@ async def _refresh(api_url: str, refresh_token: str) -> dict:
     return resp.json()
 
 
+# Serializes every in-process refresh attempt. The gateway rotates refresh
+# tokens SINGLE-USE (an atomic claim revokes the presented token and mints a
+# new pair), so two concurrent callers in the SAME process racing the same
+# on-disk refresh_token would have one winner and one loser 401ing as
+# "session expired" (proven live 2026-07-15).
+#
+# A plain module-level ``asyncio.Lock()`` is safe to construct here at import
+# time: since Python 3.10, asyncio's synchronization primitives no longer
+# bind to a running loop in ``__init__`` — they bind lazily on first
+# ``await`` — and this process only ever drives ONE event loop across the
+# lock's whole lifetime (the MCP server owns a single long-lived loop for
+# its process; the CLI's ``login``/``logout`` each call ``asyncio.run()``
+# exactly once and never touch this lock). If that invariant ever changes
+# (multiple concurrently-alive loops sharing this module in one process),
+# switch to a per-loop lock (``{id(loop): asyncio.Lock()}``) instead of a
+# single module-level instance.
+_refresh_lock = asyncio.Lock()
+
+
 async def ensure_access_token(cfg) -> str:
     creds = load_creds()
     if not creds or not creds.get("refresh_token"):
@@ -72,14 +113,50 @@ async def ensure_access_token(cfg) -> str:
     now = time.time()
     if creds.get("access_token") and creds.get("access_expires_at", 0) - _REFRESH_SKEW > now:
         return creds["access_token"]
-    tok = await _refresh(cfg.api_url, creds["refresh_token"])
-    creds = {
-        "access_token": tok["access_token"],
-        "refresh_token": tok.get("refresh_token", creds["refresh_token"]),
-        "access_expires_at": now + int(tok.get("expires_in", 900)),
-    }
-    save_creds(creds)
-    return creds["access_token"]
+
+    async with _refresh_lock:
+        # Re-read: a sibling in-process caller may have already refreshed
+        # (and saved) while we were waiting for the lock — nothing to do.
+        fresh = load_creds() or creds
+        now = time.time()
+        if fresh.get("access_token") and fresh.get("access_expires_at", 0) - _REFRESH_SKEW > now:
+            return fresh["access_token"]
+        if not fresh.get("refresh_token"):
+            raise NotLoggedInError("not logged in — run `imperal-mcp login`")
+
+        attempted = fresh["refresh_token"]
+        presented = attempted
+        try:
+            tok = await _refresh(cfg.api_url, presented)
+        except NotLoggedInError:
+            # Cross-PROCESS race: a sibling process sharing this on-disk
+            # credentials file may have already won the single-use rotation.
+            # Give its save() a moment to land, then check whether the
+            # refresh_token on disk moved out from under us. If it did,
+            # this wasn't a real logout — retry once with the fresh token.
+            # If it's still identical, we really are logged out; re-raise.
+            await asyncio.sleep(_SIBLING_RETRY_DELAY_S)
+            sibling = load_creds()
+            sibling_token = sibling.get("refresh_token") if sibling else None
+            if not sibling_token or sibling_token == attempted:
+                raise
+            presented = sibling_token
+            tok = await _refresh(cfg.api_url, presented)
+
+        # Save FIRST, then return: the death-window between the gateway's
+        # rotation (which already happened server-side, inside _refresh's
+        # HTTP call) and this save is the one place a hard-killed process can
+        # still strand a revoked refresh_token on disk — that residual risk
+        # is closed server-side (grace-window task), not here; minimizing the
+        # gap client-side is all the SDK can do.
+        now = time.time()
+        new_creds = {
+            "access_token": tok["access_token"],
+            "refresh_token": tok.get("refresh_token", presented),
+            "access_expires_at": now + int(tok.get("expires_in", 900)),
+        }
+        save_creds(new_creds)
+        return new_creds["access_token"]
 
 
 # ── Device-authorization-grant login (RFC 8628) ───────────────────────────────
