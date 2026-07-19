@@ -28,6 +28,13 @@ class NotLoggedInError(RuntimeError):
     """No usable credentials — the user must run `imperal-mcp login`."""
 
 
+class TransientAuthError(RuntimeError):
+    """A refresh attempt failed for a NON-verdict reason — gateway 5xx during
+    a deploy, a network timeout. The session may be perfectly valid: callers
+    retry; they must NEVER treat this as logged-out. Only an HTTP 401 from
+    /v1/auth/refresh is the gateway's actual logout verdict."""
+
+
 def gen_pkce() -> tuple[str, str]:
     verifier = base64.urlsafe_b64encode(secrets.token_bytes(48)).rstrip(b"=").decode()
     challenge = base64.urlsafe_b64encode(
@@ -80,10 +87,16 @@ def load_creds() -> dict | None:
 
 
 async def _refresh(api_url: str, refresh_token: str) -> dict:
-    async with httpx.AsyncClient(timeout=30) as cli:
-        resp = await cli.post(f"{api_url}/v1/auth/refresh", json={"refresh_token": refresh_token})
-    if resp.status_code != 200:
+    try:
+        async with httpx.AsyncClient(timeout=30) as cli:
+            resp = await cli.post(f"{api_url}/v1/auth/refresh",
+                                  json={"refresh_token": refresh_token})
+    except httpx.HTTPError as e:
+        raise TransientAuthError(f"refresh transport error: {type(e).__name__}") from e
+    if resp.status_code == 401:
         raise NotLoggedInError("session expired — run `imperal-mcp login`")
+    if resp.status_code != 200:
+        raise TransientAuthError(f"refresh failed: HTTP {resp.status_code}")
     return resp.json()
 
 
@@ -106,12 +119,12 @@ async def _refresh(api_url: str, refresh_token: str) -> dict:
 _refresh_lock = asyncio.Lock()
 
 
-async def ensure_access_token(cfg) -> str:
+async def ensure_access_token(cfg, force: bool = False) -> str:
     creds = load_creds()
     if not creds or not creds.get("refresh_token"):
         raise NotLoggedInError("not logged in — run `imperal-mcp login`")
     now = time.time()
-    if creds.get("access_token") and creds.get("access_expires_at", 0) - _REFRESH_SKEW > now:
+    if not force and creds.get("access_token") and creds.get("access_expires_at", 0) - _REFRESH_SKEW > now:
         return creds["access_token"]
 
     async with _refresh_lock:
@@ -119,7 +132,7 @@ async def ensure_access_token(cfg) -> str:
         # (and saved) while we were waiting for the lock — nothing to do.
         fresh = load_creds() or creds
         now = time.time()
-        if fresh.get("access_token") and fresh.get("access_expires_at", 0) - _REFRESH_SKEW > now:
+        if not force and fresh.get("access_token") and fresh.get("access_expires_at", 0) - _REFRESH_SKEW > now:
             return fresh["access_token"]
         if not fresh.get("refresh_token"):
             raise NotLoggedInError("not logged in — run `imperal-mcp login`")
