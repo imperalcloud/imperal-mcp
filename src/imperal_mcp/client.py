@@ -8,6 +8,16 @@ import httpx
 from .config import Config
 
 
+# Upload ceilings. The gateway's /v1/extensions/ location accepts a 40MB body
+# and base64 inflates bytes by 4/3, so ~28MB of real file is the honest limit.
+# Checked client-side so the user gets a number instead of an opaque 413 after
+# waiting for the entire body to upload.
+_UPLOAD_MAX_BYTES = 28 * 1024 * 1024
+# Tens of megabytes, plus the engine ingest behind the call, do not fit in the
+# 60s that is generous for a JSON request.
+_UPLOAD_TIMEOUT_S = 300.0
+
+
 class ImperalAuthError(RuntimeError):
     pass
 
@@ -41,10 +51,11 @@ class ImperalClient:
             raise ImperalAuthError("no Imperal token — run `imperal-mcp login` or set IMPERAL_TOKEN")
         return {"Authorization": f"Bearer {token}"}
 
-    async def _request(self, method: str, path: str, *, json: Any = None) -> Any:
+    async def _request(self, method: str, path: str, *, json: Any = None,
+                       timeout: float = 60) -> Any:
         url = f"{self._cfg.api_url}{path}"
         headers = await self._headers()
-        async with httpx.AsyncClient(timeout=60) as cli:
+        async with httpx.AsyncClient(timeout=timeout) as cli:
             resp = await cli.request(method, url, json=json, headers=headers)
         if resp.status_code >= 400:
             raise ImperalError(f"{method} {path} -> {resp.status_code}: {resp.text[:300]}", status_code=resp.status_code)
@@ -156,6 +167,70 @@ class ImperalClient:
         return await self._request("POST", f"/v1/extensions/{app_id}/call", json={
             "user_id": uid, "tenant_id": "default", "function": function, "params": params,
         })
+
+    async def upload_file(self, path: str, *, name: str | None = None) -> dict:
+        """Send a LOCAL file into File Reader and return its ids.
+
+        Why this lives in the client and not in the agent: the bytes must never
+        travel through the model. A step that inlines a megabyte of base64 is
+        truncated by the provider before it is ever sent, so the upload fails in
+        a way that looks like the file simply vanished. Here the bytes go
+        disk -> gateway directly, and only ids come back.
+
+        The gateway takes it from there (app/files/offload.py): anything at or
+        above ~1MB is shipped into the document engine and replaced by a tiny
+        {document_id, content_hash} reference, so the file does not ride inside
+        extension call payloads either.
+
+        Returns {file_id, document_id, filename, size_bytes, status}. The
+        document_id is the one that matters for PLACING the file: pass it as
+        {"document_id": N} in any extension's params and the gateway inflates
+        it back into real bytes on the way in (app/files/inflate.py).
+        """
+        import base64 as _b64
+        import mimetypes as _mt
+        import os as _os
+
+        p = _os.path.expanduser(path)
+        if not _os.path.isfile(p):
+            raise ImperalError(f"no such file: {path}")
+        size = _os.path.getsize(p)
+        if size > _UPLOAD_MAX_BYTES:
+            raise ImperalError(
+                f"{_os.path.basename(p)} is {size / 1_048_576:.1f}MB; the per-file "
+                f"upload ceiling is {_UPLOAD_MAX_BYTES / 1_048_576:.0f}MB"
+            )
+        with open(p, "rb") as fh:
+            raw = fh.read()
+        filename = name or _os.path.basename(p)
+        mime = _mt.guess_type(filename)[0] or "application/octet-stream"
+
+        uid = await self.whoami()
+        body = {
+            "user_id": uid, "tenant_id": "default", "function": "receive_files",
+            "params": {"files": [{
+                "data_base64": _b64.b64encode(raw).decode(),
+                "name": filename, "mime_type": mime, "size": size,
+            }]},
+        }
+        out = await self._request("POST", "/v1/extensions/file-reader/call",
+                                  json=body, timeout=_UPLOAD_TIMEOUT_S)
+        data = (out or {}).get("data") or {}
+        items = data.get("items") or []
+        rejected = data.get("rejected") or []
+        if not items:
+            # Fail loud: a silent empty result here becomes an empty attachment
+            # three steps later, with nothing pointing back at the upload.
+            why = ""
+            if rejected:
+                first = rejected[0]
+                why = (f": {first.get('reason') or first}" if isinstance(first, dict)
+                       else f": {first}")
+            raise ImperalError(f"upload of {filename} was not accepted{why}")
+        it = dict(items[0])
+        it.setdefault("filename", filename)
+        it.setdefault("size_bytes", size)
+        return it
 
     async def operate(self, app_id: str, function: str, params: dict,
                       confirmation_bypassed: bool = False) -> dict:

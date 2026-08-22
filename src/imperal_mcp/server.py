@@ -294,6 +294,25 @@ def build_server(client: ImperalClient) -> FastMCP:
         autopilot; read tools are refused (use run_read_tool)."""
         return await run_write_tool_logic(client, ctx, app_id, function, args or {}, _AUTOPILOT)
 
+    @mcp.tool(
+        title="Upload Local File",
+        annotations=ToolAnnotations(destructiveHint=False),
+    )
+    async def upload_file(path: str, name: str | None = None) -> Any:
+        """Send a file from THIS machine into Imperal and get its ids back.
+
+        Read the file straight off disk -- never paste its bytes into a tool
+        call, that is truncated long before it reaches the gateway.
+
+        Returns {file_id, document_id, filename, size_bytes, status}. To then
+        PLACE that file into any extension (a task attachment, an envelope, a
+        post), call run_write_tool with the sink's own file argument set to
+        {"document_id": <document_id>}: the gateway swaps the reference for the
+        real bytes on the way in, so the file never travels through this
+        conversation.
+        """
+        return defensive_scrub(await client.upload_file(path, name=name))
+
     @mcp.resource("imperal://ir-spec")
     def _r_spec() -> str:
         return ir_spec_text()
