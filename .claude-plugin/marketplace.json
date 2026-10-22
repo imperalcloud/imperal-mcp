@@ -11,7 +11,7 @@
       "name": "imperal-mcp",
       "displayName": "Imperal MCP",
       "description": "Build, validate, smoke-test, and deploy Imperal IR apps from Claude Code. Includes operate tools (read and write) and local file upload. Requires imperal-mcp to be installed (pipx install imperal-mcp) and authenticated (imperal-mcp login).",
-      "version": "0.5.5",
+      "version": "0.5.6",
       "source": {
         "source": "github",
         "repo": "imperalcloud/imperal-mcp"
@@ -22,7 +22,7 @@
       },
       "homepage": "https://imperal.io",
       "repository": "https://github.com/imperalcloud/imperal-mcp",
-      "license": "Apache-2.0",
+      "license": "GPL-3.0-only",
       "category": "development",
       "keywords": [
         "imperal",

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2026 Imperal, Inc.
-# Licensed under the AGPL-3.0 License.
+# Licensed under the GNU General Public License v3.0 (GPL-3.0-only).
 """Universal ICNLI MCP Core Runtime — Python 3.6+ compatible, zero-dependency.
 
 Designed for headless edge nodes, legacy OS environments, and cloud targets.

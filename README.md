@@ -238,4 +238,10 @@ python -m pytest
 
 ---
 
+## License
+
+GPL-3.0-only — see [LICENSE](LICENSE). Releases up to 0.5.5 were published under Apache-2.0.
+
+---
+
 *Built on Imperal Cloud — the AI Cloud OS. 🐝*

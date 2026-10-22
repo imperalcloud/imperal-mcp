@@ -1,13 +1,13 @@
 [project]
 name = "imperal-mcp"
-version = "0.5.5"
+version = "0.5.6"
 readme = "README.md"
 description = "MCP server for building Imperal apps from any LLM/agent"
 requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
+license = { text = "GPL-3.0-only" }
 authors = [{ name = "Imperal, Inc." }]
 classifiers = [
-    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]

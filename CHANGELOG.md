@@ -4,6 +4,13 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.5.6 — 2026-10-22 — License: GPL-3.0
+
+### Changed
+- **License is now GPL-3.0-only** (was Apache-2.0): LICENSE, package metadata and classifier,
+  the Claude Code plugin manifests, and `core.py`'s header (which said AGPL-3.0). Releases up to
+  0.5.5 remain available under Apache-2.0.
+
 ## 0.5.5 — 2026-10-22 — PII masking: back to "when unsure, mask"
 
 ### Fixed
