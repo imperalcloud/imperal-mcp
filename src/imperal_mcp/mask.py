@@ -14,24 +14,29 @@ class PIIRedactionLevel(str, Enum):
 
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-# A phone is one of the explicit shapes below, never "digits with dots and dashes": the old
-# r"\+?\d[\d\s\-().]{7,}\d" masked IPv4 addresses (104.224.88.155), versions (3.11.15),
-# ISO dates (2026-10-12) and port ranges (8000-8080) as <PHONE> (tests/test_mask_pii.py).
-# Matches:
-# 1) International format with +: e.g. +1 (555) 123-4567, +49 30 123456, +380 99 123 4567
-# 2) National format with area code in parens: (555) 123-4567
-# 3) US dot-delimited phone: 123.456.7890 (strictly 3.3.4 digits, never 4 octets like IP)
-# 4) Standard 10-11 digit phone with spaces/dashes (min 10 digits total)
-_PHONE_PATTERN = (
-    r"(?:"
-    r"\+\d{1,3}[\s\-()]*(?:\d[\s\-()]*){6,13}\d|"  # +Country ...
-    r"\(\d{2,4}\)[\s\-]*(?:\d[\s\-]*){6,10}\d|"     # (Area) ...
-    r"\b\d{3}\.\d{3}\.\d{4}\b|"                     # 123.456.7890 (strict US 3.3.4 format)
-    r"\b(?:\+?1[- ]?)?[1-9]\d{2}[- ]\d{3}[- ]\d{4}\b|" # 555-123-4567 or 1-555-123-4567
-    r"\b0\d{1,3}[- ]\d{2,3}[- ]\d{2,4}(?:[- ]\d{2,4})?\b" # National formats (e.g. 099-123-45-67, 044-123-4567)
-    r")"
+# A phone is anything number-like (the broad matcher: international, national, dotted, bare digit
+# runs), MINUS the shapes that are certainly not a phone. Those used to be masked too -- IPv4
+# addresses (104.224.88.155, with a port), versions (3.11.15), ISO dates (2026-10-12), port
+# ranges (8000-8080). An explicit list of phone shapes instead would let unformatted and foreign
+# numbers through (380991234567, 030 12345678): when unsure, mask. tests/test_mask_pii.py.
+_PHONE_RE = re.compile(r"\+?\d[\d\s\-().]{7,}\d")
+_NOT_A_PHONE = re.compile(
+    r"(?:\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?"   # IPv4, optionally with a port
+    r"|\d+(?:\.\d+){1,3}"                       # version / dotted number (not 3.3.4 phone below)
+    r"|\d{4}-\d{2}-\d{2}"                        # ISO date
+    r"|\d{2,5}-\d{2,5})"                         # port range
 )
-_PHONE_RE = re.compile(_PHONE_PATTERN)
+_US_DOTTED_PHONE = re.compile(r"\d{3}\.\d{3}\.\d{4}")
+
+
+def _phone_or_keep(m: "re.Match[str]") -> str:
+    """<PHONE> unless every whitespace-separated piece of the match is a certain non-phone."""
+    pieces = m.group(0).split()
+    if pieces and all(_NOT_A_PHONE.fullmatch(p) and not _US_DOTTED_PHONE.fullmatch(p) for p in pieces):
+        return m.group(0)
+    return "<PHONE>"
+
+
 _SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 _CC_RE = re.compile(r"\b(?:\d[ -]?){13,19}\b")
 
@@ -55,7 +60,7 @@ def apply_pii_redaction(text: str | None, level: PIIRedactionLevel) -> str | Non
     masked = _SSN_RE.sub("<SSN>", text)
     masked = _CC_RE.sub("<CARD>", masked)
     masked = _EMAIL_RE.sub("<EMAIL>", masked)
-    masked = _PHONE_RE.sub("<PHONE>", masked)
+    masked = _PHONE_RE.sub(_phone_or_keep, masked)
     return masked
 
 

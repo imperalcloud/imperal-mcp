@@ -48,6 +48,17 @@ class TestPIIRedaction(unittest.TestCase):
             res = apply_pii_redaction(f"Call me at {p}", PIIRedactionLevel.MASK_PII)
             self.assertIn("<PHONE>", res, f"Phone {p} was NOT masked as PHONE")
 
+    def test_unformatted_and_foreign_numbers_masked(self):
+        # the broad matcher stays: bare digit runs and national formats are phones until proven otherwise
+        for p in ["380991234567", "5551234567", "030 12345678", "0049 30 12345678", "+15551234567", "099/123 45 67"]:
+            res = apply_pii_redaction(f"Number {p} here", PIIRedactionLevel.MASK_PII)
+            self.assertTrue("<PHONE>" in res or "<CARD>" in res, f"Number {p} was NOT masked: {res}")
+            self.assertNotIn(p, res)
+
+    def test_several_ips_in_a_row_kept(self):
+        res = apply_pii_redaction("peers 10.0.0.1 10.0.0.2 104.224.88.155", PIIRedactionLevel.MASK_PII)
+        self.assertNotIn("<PHONE>", res)
+
     def test_emails_masked(self):
         res = apply_pii_redaction("Reach me at support@imperal.io", PIIRedactionLevel.MASK_PII)
         self.assertIn("<EMAIL>", res)

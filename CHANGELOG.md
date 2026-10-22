@@ -4,6 +4,14 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.5.5 — 2026-10-22 — PII masking: back to "when unsure, mask"
+
+### Fixed
+- 0.5.4 replaced the broad phone matcher with a list of phone shapes, which let unformatted and
+  foreign numbers through unmasked (380991234567, 030 12345678). The broad matcher is back; only
+  matches made entirely of certain non-phones (IPv4 with or without a port, versions, ISO dates,
+  port ranges) are left as they are. A US dotted 123.456.7890 is still a phone.
+
 ## 0.5.4 — 2026-10-22 — Released `mcp<2` pin, MCP Registry catches up, PII masking stops eating IPs
 
 ### Fixed
