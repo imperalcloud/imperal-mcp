@@ -14,7 +14,24 @@ class PIIRedactionLevel(str, Enum):
 
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-_PHONE_RE = re.compile(r"\+?\d[\d\s\-().]{7,}\d")
+# A phone is one of the explicit shapes below, never "digits with dots and dashes": the old
+# r"\+?\d[\d\s\-().]{7,}\d" masked IPv4 addresses (104.224.88.155), versions (3.11.15),
+# ISO dates (2026-10-12) and port ranges (8000-8080) as <PHONE> (tests/test_mask_pii.py).
+# Matches:
+# 1) International format with +: e.g. +1 (555) 123-4567, +49 30 123456, +380 99 123 4567
+# 2) National format with area code in parens: (555) 123-4567
+# 3) US dot-delimited phone: 123.456.7890 (strictly 3.3.4 digits, never 4 octets like IP)
+# 4) Standard 10-11 digit phone with spaces/dashes (min 10 digits total)
+_PHONE_PATTERN = (
+    r"(?:"
+    r"\+\d{1,3}[\s\-()]*(?:\d[\s\-()]*){6,13}\d|"  # +Country ...
+    r"\(\d{2,4}\)[\s\-]*(?:\d[\s\-]*){6,10}\d|"     # (Area) ...
+    r"\b\d{3}\.\d{3}\.\d{4}\b|"                     # 123.456.7890 (strict US 3.3.4 format)
+    r"\b(?:\+?1[- ]?)?[1-9]\d{2}[- ]\d{3}[- ]\d{4}\b|" # 555-123-4567 or 1-555-123-4567
+    r"\b0\d{1,3}[- ]\d{2,3}[- ]\d{2,4}(?:[- ]\d{2,4})?\b" # National formats (e.g. 099-123-45-67, 044-123-4567)
+    r")"
+)
+_PHONE_RE = re.compile(_PHONE_PATTERN)
 _SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 _CC_RE = re.compile(r"\b(?:\d[ -]?){13,19}\b")
 

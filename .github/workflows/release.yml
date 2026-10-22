@@ -132,12 +132,61 @@ jobs:
           curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" \
             | tar xz mcp-publisher
 
-      - name: Authenticate to MCP Registry (GitHub OIDC)
+      #  server.json carries its own version, and the registry refuses a version it already
+      #  has: until 0.5.4 server.json stayed at 0.2.3, every publish was refused, and
+      #  continue-on-error hid it (the registry listed 0.2.3 while PyPI had 0.5.3). The
+      #  released version is written into it here, so the two can never drift again.
+      - name: Sync server.json to the released version
         if: steps.guard.outputs.skip == 'false'
-        run: ./mcp-publisher login github-oidc
-        continue-on-error: true
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          v = os.environ["VERSION"]
+          with open("server.json") as f:
+              s = json.load(f)
+          s["version"] = v
+          for p in s.get("packages", []):
+              if p.get("identifier") == "imperal-mcp":
+                  p["version"] = v
+          with open("server.json", "w") as f:
+              json.dump(s, f, indent=2, ensure_ascii=False)
+              f.write("\n")
+          print("server.json ->", v)
+          # the Claude Code plugin marketplace in this repo states the version too
+          for path in (".claude-plugin/marketplace.json", ".claude-plugin/plugin.json"):
+              with open(path) as f:
+                  d = json.load(f)
+              for p in d.get("plugins", [d]):
+                  if p.get("name") in ("imperal-mcp", d.get("name")):
+                      p["version"] = v
+              with open(path, "w") as f:
+                  json.dump(d, f, indent=2, ensure_ascii=False)
+                  f.write("\n")
+              print(path, "->", v)
+          PY
+
+      #  A registry failure never blocks the PyPI release, but it is never silent either:
+      #  it shows as a warning on the run instead of a green "success".
+      - name: Authenticate to MCP Registry (GitHub OIDC)
+        id: registry_login
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          if ./mcp-publisher login github-oidc; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning title=MCP Registry not updated::mcp-publisher login failed"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Publish to MCP Registry
-        if: steps.guard.outputs.skip == 'false'
-        run: ./mcp-publisher publish
-        continue-on-error: true
+        if: steps.guard.outputs.skip == 'false' && steps.registry_login.outputs.ok == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if ./mcp-publisher publish; then
+            echo "MCP Registry: published $VERSION"
+          else
+            echo "::warning title=MCP Registry not updated::mcp-publisher publish failed for $VERSION -- the registry still lists the previous version"
+          fi

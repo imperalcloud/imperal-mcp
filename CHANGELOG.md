@@ -4,6 +4,38 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.5.4 — 2026-10-22 — Released `mcp<2` pin, MCP Registry catches up, PII masking stops eating IPs
+
+### Fixed
+- **`mcp<2` now actually ships.** The pin was committed after 0.5.3 without a version bump, so
+  the release workflow skipped it and PyPI 0.5.3 still allowed `mcp>=2` (FastMCP API break).
+- **MCP Registry listed 0.2.3 since July.** `server.json` kept its own version (0.2.3); the
+  registry refuses a version it already has, and `continue-on-error` hid every refusal. The
+  release workflow now writes the released version into `server.json` and the Claude Code
+  plugin files before publishing, and a registry failure shows as a warning on the run.
+  `server.json` gains `repository`.
+- **PII masking no longer turns non-phones into `<PHONE>`:** IPv4 addresses (with ports),
+  versions (3.11.15), ISO dates and port ranges are left intact; real phone shapes
+  (+country, (area), 123.456.7890, 555-123-4567, national 0XX-…) are still masked.
+- **One version source.** `imperal_mcp.__version__` reads the installed package metadata
+  (pyproject.toml) instead of a hand-kept string; a test keeps `server.json` and
+  `.claude-plugin/*.json` equal to pyproject.toml. Plugin descriptions list all 8 tools.
+
+## 0.5.3 — 2026-09-25 — ICNLI core primitives
+
+### Added
+- `imperal_mcp.core`: zero-dependency ICNLI core primitives -- cancellation tokens, a stream
+  emitter, a schema validator and the component base (`CancellationToken`, `StreamEmitter`,
+  `SchemaValidator`, `ICNLIComponent`, re-exported from `imperal_mcp`).
+- `upload_file`: upload a local file from the terminal and place it anywhere on the platform,
+  streamed from disk (never as a base64 tool argument).
+
+## 0.5.2 — 2026-07-20 — Auth taxonomy: only a 401 logs you out
+
+### Fixed
+- Only an HTTP 401 from the refresh endpoint is a logout; 5xx and network errors raise
+  `TransientAuthError` and keep the session. `ensure_access_token(force=True)` forces a refresh.
+
 ## 0.5.1 — 2026-07-15 — Harden token refresh against the multi-process rotation race
 
 Patch — fixes an intermittent "session expired" that could hit even a just-logged-in

@@ -3,12 +3,16 @@
   "name": "io.github.imperalcloud/imperal-mcp",
   "title": "Imperal MCP",
   "description": "Build, validate, smoke-test & deploy Imperal declarative IR apps from any LLM or agent.",
-  "version": "0.2.3",
+  "version": "0.5.4",
+  "repository": {
+    "url": "https://github.com/imperalcloud/imperal-mcp",
+    "source": "github"
+  },
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "imperal-mcp",
-      "version": "0.2.3",
+      "version": "0.5.4",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
