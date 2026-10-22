@@ -103,6 +103,29 @@ jobs:
           git tag "$TAG" -m "Release $TAG"
           git push origin "$TAG"
 
+      # ── 6b. GitHub Release for the tag (notes = this version's CHANGELOG section) ──
+      #  Until 0.5.5 only the tag was pushed, so the repo's Releases page stayed empty
+      #  while PyPI had every version.
+      - name: Create GitHub Release
+        if: steps.guard.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          v = os.environ["VERSION"]
+          text = open("CHANGELOG.md").read()
+          m = re.search(rf"^## {re.escape(v)} — (.*?)$(.*?)(?=^## |\Z)", text, re.M | re.S)
+          title = f"{v} — {m.group(1).split(' — ', 1)[-1]}" if m else v
+          body = (m.group(2).strip() if m else "See CHANGELOG.md.") + \
+                 f"\n\n**PyPI:** https://pypi.org/project/imperal-mcp/{v}/"
+          open("release-title.txt", "w").write(title)
+          open("release-notes.md", "w").write(body)
+          PY
+          gh release create "$TAG" dist/* --title "$(cat release-title.txt)" --notes-file release-notes.md --verify-tag --latest
+
       # ── 7. Poll PyPI until the new version is live ────────────────────────
       #  The MCP Registry verifies ownership by fetching the README from PyPI.
       #  We wait up to ~3 minutes for the index to update before publishing.
