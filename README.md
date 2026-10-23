@@ -53,9 +53,26 @@ Your client's own LLM authors the app; `imperal-mcp` gives it the rails. It read
 ## Install & sign in
 
 ```bash
-pipx install imperal-mcp      # or: pip install --user imperal-mcp
+uv tool install imperal-mcp   # or: pipx install imperal-mcp
 imperal-mcp login             # opens your browser to sign in to Imperal
 ```
+
+`imperal-mcp` needs **Python 3.10 or newer**. [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
+fetches a suitable Python by itself, so `uv tool install` works even where the system Python is
+older (macOS ships 3.9). No uv? `brew install uv` on macOS, or
+`curl -LsSf https://astral.sh/uv/install.sh | sh` on macOS/Linux.
+
+<details>
+<summary>Install problems</summary>
+
+| You see | Why | Do |
+|---------|-----|----|
+| `No matching distribution found for imperal-mcp` | pip runs on a Python older than 3.10 (macOS `/usr/bin/python3` is 3.9, Ubuntu 20.04 has 3.8) | `uv tool install imperal-mcp`, or `pipx install --python python3.12 imperal-mcp` |
+| `error: externally-managed-environment` | `pip install` into the system Python is blocked on Homebrew, Debian 12+, Ubuntu 23.04+ | `uv tool install imperal-mcp` or `pipx install imperal-mcp` — never `pip install --user` there |
+| `imperal-mcp: command not found` after install | the tool folder is not on `PATH` | `uv tool update-shell` (or `pipx ensurepath`), then open a new terminal |
+| your agent says the `imperal` server failed to start | the agent starts `imperal-mcp` from its own `PATH`, which may lack the tool folder | put the full path from `which imperal-mcp` in the agent's MCP config as `command` |
+
+</details>
 
 `login` stores credentials in `~/.imperal/credentials.json` and auto-refreshes your access token — no manual token management. Sign out any time:
 

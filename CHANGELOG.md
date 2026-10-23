@@ -4,6 +4,17 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.5.7 — 2026-10-23 — Installs on Python 3.10, install guide that works
+
+### Fixed
+- **`pip install imperal-mcp` failed with "No matching distribution found"** on every Python
+  below 3.11 — Ubuntu 22.04 (3.10) among them — though the code runs on 3.10 (whole suite green
+  on 3.10.22). `requires-python` is now `>=3.10`, the floor of the `mcp` package itself.
+- **The README sent people to `pip install --user`,** which Homebrew Python and Debian 12+ refuse
+  (`externally-managed-environment`), and said nothing about the Python version (macOS ships 3.9).
+  The install line is now `uv tool install imperal-mcp` (uv brings its own Python) or `pipx`,
+  with a table for the four errors people actually hit.
+
 ## 0.5.6 — 2026-10-22 — License: GPL-3.0
 
 ### Changed

@@ -5,13 +5,14 @@ server.json once stayed at 0.2.3 and the Claude Code plugin files at 0.2.1 while
 """
 import json
 import pathlib
-import tomllib
+import re
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 def _pyproject_version() -> str:
-    return tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    # read without tomllib: the package supports Python 3.10, which has none
+    return re.search(r'^version = "([^"]+)"', (ROOT / "pyproject.toml").read_text(), re.M).group(1)
 
 
 def test_server_json_matches_pyproject():
