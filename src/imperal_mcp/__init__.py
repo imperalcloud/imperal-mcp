@@ -7,8 +7,8 @@ from imperal_mcp.core import (
 
 # One source of truth: the version in pyproject.toml (the installed package's metadata).
 try:
-    from importlib.metadata import PackageNotFoundError, version as _pkg_version
+    from importlib.metadata import version as _pkg_version
 
     __version__ = _pkg_version("imperal-mcp")
-except PackageNotFoundError:  # a source checkout that is not installed
+except Exception:  # Python 3.7 has no importlib.metadata; a source checkout is not installed
     __version__ = "0.0.0+unknown"

@@ -53,24 +53,30 @@ Your client's own LLM authors the app; `imperal-mcp` gives it the rails. It read
 ## Install & sign in
 
 ```bash
-uv tool install imperal-mcp   # or: pipx install imperal-mcp
+pipx install imperal-mcp      # or: uv tool install imperal-mcp   or: pip install imperal-mcp
 imperal-mcp login             # opens your browser to sign in to Imperal
 ```
 
-`imperal-mcp` needs **Python 3.10 or newer**. [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
-fetches a suitable Python by itself, so `uv tool install` works even where the system Python is
-older (macOS ships 3.9). No uv? `brew install uv` on macOS, or
-`curl -LsSf https://astral.sh/uv/install.sh | sh` on macOS/Linux.
+Works with **any Python from 3.7**:
+
+- **Python 3.10 or newer** — `imperal-mcp` runs directly on it.
+- **Python 3.7 – 3.9** (macOS ships 3.9, Ubuntu 20.04 has 3.8) — the install is light, and the first
+  `imperal-mcp` command sets up the same release on its own Python 3.12, once (about 30–45 s, needs
+  internet; it fetches [uv](https://docs.astral.sh/uv/) to do it). Every start after that is immediate.
+  It lives in `~/.local/share/imperal-mcp/runtime` (`%LOCALAPPDATA%\imperal-mcp\runtime` on Windows)
+  and changes nothing else on your system. Run `imperal-mcp login` once before adding it to your
+  agent, so that setup is done before the agent first starts the server.
 
 <details>
 <summary>Install problems</summary>
 
 | You see | Why | Do |
 |---------|-----|----|
-| `No matching distribution found for imperal-mcp` | pip runs on a Python older than 3.10 (macOS `/usr/bin/python3` is 3.9, Ubuntu 20.04 has 3.8) | `uv tool install imperal-mcp`, or `pipx install --python python3.12 imperal-mcp` |
-| `error: externally-managed-environment` | `pip install` into the system Python is blocked on Homebrew, Debian 12+, Ubuntu 23.04+ | `uv tool install imperal-mcp` or `pipx install imperal-mcp` — never `pip install --user` there |
-| `imperal-mcp: command not found` after install | the tool folder is not on `PATH` | `uv tool update-shell` (or `pipx ensurepath`), then open a new terminal |
-| your agent says the `imperal` server failed to start | the agent starts `imperal-mcp` from its own `PATH`, which may lack the tool folder | put the full path from `which imperal-mcp` in the agent's MCP config as `command` |
+| `error: externally-managed-environment` | `pip install` into the system Python is blocked on Homebrew, Debian 12+, Ubuntu 23.04+ | `pipx install imperal-mcp` or `uv tool install imperal-mcp` |
+| `imperal-mcp: command not found` after install | the tool folder is not on `PATH` | `pipx ensurepath` (or `uv tool update-shell`), then open a new terminal |
+| `Could not set up imperal-mcp on Python 3.12` on the first start | Python 3.7–3.9 and no internet (or a proxy blocks github.com / pypi.org) | allow those hosts and run `imperal-mcp login` again, or install [uv](https://docs.astral.sh/uv/getting-started/installation/) and `uv tool install imperal-mcp` |
+| `No matching distribution found for imperal-mcp` | Python 3.6 or older | install with uv — it brings its own Python: `curl -LsSf https://astral.sh/uv/install.sh \| sh`, then `uv tool install imperal-mcp` |
+| your agent says the `imperal` server failed to start | the agent starts `imperal-mcp` from its own `PATH`, which may lack the tool folder — or its first start timed out during the one-time setup | run `imperal-mcp login` once in a terminal; put the full path from `which imperal-mcp` in the agent's MCP config as `command` |
 
 </details>
 

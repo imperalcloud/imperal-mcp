@@ -1,26 +1,37 @@
 [project]
 name = "imperal-mcp"
-version = "0.5.7"
+version = "0.5.8"
 readme = "README.md"
 description = "MCP server for building Imperal apps from any LLM/agent"
-requires-python = ">=3.10"
+requires-python = ">=3.7"
 license = { text = "GPL-3.0-only" }
 authors = [{ name = "Imperal, Inc." }]
 classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
-dependencies = ["mcp>=1.2.0,<2", "imperal-sdk>=5.7.3", "httpx>=0.27"]
+# Every dependency needs Python 3.10+ (the MCP SDK, pydantic 2). On 3.7-3.9 pip installs none of
+# them, and the `imperal-mcp` command (imperal_mcp/_launch.py) runs this same release on a Python
+# 3.12 it sets up once with uv -- `uv` comes as a wheel on 3.8+, 3.7 downloads uv's release build.
+dependencies = [
+    'mcp>=1.2.0,<2; python_version >= "3.10"',
+    'imperal-sdk>=5.7.3; python_version >= "3.10"',
+    'httpx>=0.27; python_version >= "3.10"',
+    'uv>=0.4; python_version >= "3.8" and python_version < "3.10"',
+]
 
 [project.urls]
 Homepage = "https://imperal.io"
 Repository = "https://github.com/imperalcloud/imperal-mcp"
 
 [project.scripts]
-imperal-mcp = "imperal_mcp.server:main"
+imperal-mcp = "imperal_mcp._launch:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "respx>=0.21"]

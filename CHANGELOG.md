@@ -4,6 +4,21 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.5.8 — 2026-10-23 — Any Python from 3.7
+
+### Changed
+- **`pip install imperal-mcp` works on Python 3.7, 3.8 and 3.9.** The MCP SDK and pydantic 2 need
+  3.10+, so on an older Python the install is light: the `imperal-mcp` command
+  (`imperal_mcp/_launch.py`, standard library only, 3.7 syntax) sets up the same release on its own
+  Python 3.12 once with uv, then hands over to it. uv comes as a wheel on 3.8+; on 3.7 the launcher
+  downloads uv's release build from GitHub and checks its published SHA-256. Setup output goes to
+  stderr only (stdout is the MCP channel). On 3.10+ nothing changes.
+- Checked before release on clean Python 3.7 (arm64 and x86_64), 3.9 and 3.12: install, sign-in CLI,
+  and 15/15 full MCP sessions (initialize + tools/list) through the launcher.
+
+### Fixed
+- `import imperal_mcp` no longer fails where `importlib.metadata` is missing (Python 3.7).
+
 ## 0.5.7 — 2026-10-23 — Installs on Python 3.10, install guide that works
 
 ### Fixed
