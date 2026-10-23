@@ -4,6 +4,11 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.5.10 — 2026-10-23 — Python versions at the top of the README
+
+### Changed
+- README: the supported Python versions (3.7 – 3.14) at the top of the page.
+
 ## 0.5.9 — 2026-10-23 — The one-time setup ignores the folder it starts in
 
 ### Fixed

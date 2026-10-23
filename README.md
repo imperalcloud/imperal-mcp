@@ -2,6 +2,11 @@
 
 <!-- mcp-name: io.github.imperalcloud/imperal-mcp -->
 
+[![PyPI](https://img.shields.io/pypi/v/imperal-mcp)](https://pypi.org/project/imperal-mcp/)
+[![Python](https://img.shields.io/badge/python-3.7%20%7C%203.8%20%7C%203.9%20%7C%203.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-3776ab?logo=python&logoColor=white)](https://pypi.org/project/imperal-mcp/)
+
+**Python 3.7 – 3.14** · `pip install imperal-mcp` works on every one of them.
+
 **Build, ship, and run real cloud apps on [Imperal](https://imperal.io) — straight from your AI agent.**
 
 `imperal-mcp` puts the app-building power of **Imperal Cloud** — the ICNLI AI Cloud OS that Webbee 🐝 runs on — inside any MCP-capable agent. Connect it to **Claude, Claude Code, Codex, Cursor, Gemini CLI, Cline, Windsurf, or Goose**, sign in with your own Imperal account, and your agent can design, deploy, and operate real cloud apps for you — data, logic, and UI included — without ever leaving the chat.
@@ -63,8 +68,7 @@ Works with **any Python from 3.7**:
 - **Python 3.7 – 3.9** (macOS ships 3.9, Ubuntu 20.04 has 3.8) — the install is light, and the first
   `imperal-mcp` command sets up the same release on its own Python 3.12, once (about 30–45 s, needs
   internet; it fetches [uv](https://docs.astral.sh/uv/) to do it). Every start after that is immediate.
-  It lives in `~/.local/share/imperal-mcp/runtime` (`%LOCALAPPDATA%\imperal-mcp\runtime` on Windows)
-  and changes nothing else on your system. Run `imperal-mcp login` once before adding it to your
+  It lives in `~/.local/share/imperal-mcp/runtime` and changes nothing else on your system. Run `imperal-mcp login` once before adding it to your
   agent, so that setup is done before the agent first starts the server.
 
 <details>
