@@ -185,7 +185,7 @@ def runtime(version):
         # or .python-version there must not pick the index or the interpreter for the runtime.
         subprocess.check_call([uv, "venv", "--quiet", "--no-config", "--python", RUNTIME_PYTHON, prefix],
                               stdout=sys.stderr, cwd=home)
-        spec = os.environ.get(SPEC_ENV) or "%s==%s" % (DIST, version)
+        spec = os.environ.get(SPEC_ENV) or "%s[code]==%s" % (DIST, version)
         subprocess.check_call([uv, "pip", "install", "--quiet", "--no-config", "--python",
                                _bin(prefix, "python"), spec], stdout=sys.stderr, cwd=home)
         if not os.path.exists(exe):

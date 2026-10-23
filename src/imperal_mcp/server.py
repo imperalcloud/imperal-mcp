@@ -4,7 +4,10 @@ import asyncio
 import json
 from typing import Any, Literal
 
-from mcp.server.fastmcp import FastMCP, Context
+try:
+    from mcp.server.fastmcp import FastMCP, Context
+except ImportError:  # mcp >= 2.0 renamed FastMCP -> MCPServer
+    from mcp.server.mcpserver import MCPServer as FastMCP, Context
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
@@ -18,6 +21,7 @@ from .irkit import (
     examples_text,
     build_prompt_text,
 )
+from .exoskeleton import EXOSKELETON_INSTRUCTIONS, ExoskeletonRuntime
 from .mask import defensive_scrub
 
 
@@ -229,8 +233,9 @@ async def run_write_tool_logic(client, ctx, app_id, function, args, autopilot) -
     return out
 
 
-def build_server(client: ImperalClient) -> FastMCP:
-    mcp = FastMCP("imperal")
+def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP:
+    mcp = FastMCP("imperal", instructions=EXOSKELETON_INSTRUCTIONS)
+    exo = ExoskeletonRuntime(workspace=workspace)
 
     @mcp.tool(
         title="Validate IR",
@@ -312,6 +317,205 @@ def build_server(client: ImperalClient) -> FastMCP:
         conversation.
         """
         return defensive_scrub(await client.upload_file(path, name=name))
+
+    # ── Exoskeleton: Local Code Intelligence & AST Surgery ──────────────────
+
+    @mcp.tool(
+        title="Orient on Task",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    def orient(query: str, k: int = 8, root: str | None = None) -> dict:
+        """One-call orientation for a task: repo profile + top ranked symbols/snippets from the live code graph. Call FIRST instead of scanning files blind."""
+        return exo.orient(query=query, k=k, root=root)
+
+    @mcp.tool(
+        title="Repository Profile",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    def repo_profile(root: str | None = None) -> dict:
+        """Structured profile of the repository (languages, file count, key architectural hubs, test command hints) from the live code index."""
+        return exo.repo_profile(root=root)
+
+    @mcp.tool(
+        title="Search Code Graph",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    def search_code(
+        query: str,
+        k: int = 10,
+        kind: str | None = None,
+        path_glob: str | None = None,
+        root: str | None = None,
+    ) -> dict:
+        """Hybrid AST symbol + lexical code search across the indexed repository. Prefer over grep/find."""
+        return exo.search_code(query=query, k=k, kind=kind, path_glob=path_glob, root=root)
+
+    @mcp.tool(
+        title="Code File Outline",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    def outline(path: str, root: str | None = None) -> dict:
+        """Tree-sitter structural map of a source file (classes, functions, methods, major blocks with exact line ranges). Call before reading large files."""
+        return exo.outline(path=path, root=root)
+
+    @mcp.tool(
+        title="Read Symbol or Span",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    def read_symbol(path: str, name: str, root: str | None = None) -> dict:
+        """Read ONE symbol (function, class, Class.method, block name) or line range ('L120-180') from a file without loading the whole file."""
+        return exo.read_symbol(path=path, name=name, root=root)
+
+    @mcp.tool(
+        title="Call Graph Slice",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    def graph_slice(symbols: list[str], depth: int = 1, root: str | None = None) -> dict:
+        """Return definition locations, signatures, direct callers, and callees for a batch of symbols from the code graph."""
+        return exo.graph_slice(symbols=symbols, depth=depth, root=root)
+
+    @mcp.tool(
+        title="Contract Slice",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    def contract_slice(symbols: list[str], root: str | None = None) -> dict:
+        """Return exact call-site contracts (signatures, return types, raises, and caller argument shapes) for the given symbols."""
+        return exo.contract_slice(symbols=symbols, root=root)
+
+    @mcp.tool(
+        title="Impact of Change",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    def impact_of_change(symbols: list[str], root: str | None = None) -> dict:
+        """Given symbols you plan to modify, return all downstream dependent files and caller symbols that could break."""
+        return exo.impact_of_change(symbols=symbols, root=root)
+
+    @mcp.tool(
+        title="Check Syntax (Tree-sitter)",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    def check_syntax(path: str, root: str | None = None) -> dict:
+        """Fast local tree-sitter syntax validation of a source file after editing."""
+        return exo.check_syntax(path=path, root=root)
+
+    @mcp.tool(
+        title="Workspace Coding Context",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    def coding_context(root: str | None = None) -> dict:
+        """Project file tree and git status snapshot (respecting .gitignore and pruning heavy build/vendor directories)."""
+        return exo.coding_context(root=root)
+
+    @mcp.tool(
+        title="ShadowGit Checkpoint",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
+    )
+    def checkpoint(label: str = "checkpoint", root: str | None = None) -> dict:
+        """Capture an instant, invisible ShadowGit snapshot of the workspace without touching the user's real .git history."""
+        return exo.checkpoint(label=label, root=root)
+
+    @mcp.tool(
+        title="ShadowGit Checkpoint Diff",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    def checkpoint_diff(
+        target: str | int | None = None,
+        paths: list[str] | None = None,
+        root: str | None = None,
+    ) -> dict:
+        """Show a unified diff between the current workspace state and a ShadowGit checkpoint."""
+        return exo.checkpoint_diff(target=target, paths=paths, root=root)
+
+    @mcp.tool(
+        title="ShadowGit Checkpoint Rollback",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True),
+    )
+    def checkpoint_rollback(target: str | int | None = None, root: str | None = None) -> dict:
+        """Restore the workspace to a previous ShadowGit checkpoint (an auto-safety snapshot is taken first)."""
+        return exo.checkpoint_rollback(target=target, root=root)
+
+    @mcp.tool(
+        title="Context Compression Telemetry",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    def token_savings() -> dict:
+        """Return measured characters and lines returned vs. full-file baseline in this session."""
+        return exo.token_savings()
+
+    @mcp.tool(
+        title="Recall Cross-Surface Cloud Memory",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    async def recall_context(
+        query: str,
+        limit: int = 5,
+        include_user_facts: bool = True,
+        include_repo_memory: bool = True,
+        include_resolved: bool = False,
+    ) -> dict:
+        """Retrieve relevant user directives, preferences, and repository notes from Imperal Cloud Memory across Webbee, Telegram, and the Panel."""
+        return defensive_scrub(
+            await client.run_tool(
+                "memory-index",
+                "recall_context",
+                {
+                    "query": query,
+                    "limit": limit,
+                    "include_user_facts": include_user_facts,
+                    "include_repo_memory": include_repo_memory,
+                    "include_resolved": include_resolved,
+                },
+            )
+        )
+
+    @mcp.tool(
+        title="Remember Durable User Fact / Directive",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
+    )
+    async def remember_fact(
+        fact: str,
+        category: str = "preference",
+        tags: list[str] | None = None,
+        scope: str | None = None,
+    ) -> dict:
+        """Persist a durable user fact, architectural decision, or standing directive to Imperal Cloud Memory (shared across all surfaces)."""
+        payload: dict[str, Any] = {
+            "fact": fact,
+            "category": category,
+            "tags": tags or [],
+        }
+        if scope:
+            payload["scope"] = scope
+        return defensive_scrub(await client.run_tool("memory-index", "add_user_fact", payload))
+
+    @mcp.tool(
+        title="Save Durable Repository Note",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
+    )
+    async def save_repo_note(
+        note: str,
+        repo: str | None = None,
+        citations: list[str] | None = None,
+        root: str | None = None,
+    ) -> dict:
+        """Save a durable repository convention or architectural note to Imperal Cloud Memory."""
+        import os as _os
+        repo_name = repo or _os.path.basename(exo.resolve_workspace(root))
+        return defensive_scrub(
+            await client.run_tool(
+                "memory-index",
+                "add_note",
+                {
+                    "note": note,
+                    "repo": repo_name,
+                    "citations": citations or [],
+                },
+            )
+        )
+
+    @mcp.resource("imperal://exoskeleton-protocol")
+    def _r_exo_protocol() -> str:
+        return EXOSKELETON_INSTRUCTIONS
 
     @mcp.resource("imperal://ir-spec")
     def _r_spec() -> str:

@@ -4,6 +4,20 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.6.0 — 2026-10-23 — Exoskeleton SuperSuite: local code intelligence, checkpoints & agent hooks
+
+### Added
+- **12 local Exoskeleton MCP tools (`imperal_mcp.exoskeleton`):**
+  - **Code graph & surgical navigation:** `orient`, `repo_profile`, `search_code`, `outline`, `read_symbol`, `graph_slice`, `impact_of_change`, and `contract_slice` powered by `webbee` and `imperal-sdk` (`imperal-mcp[code]`).
+  - **Reversible shadow-git checkpoints:** `checkpoint_create`, `checkpoint_diff`, and `checkpoint_rollback` for safe workspace snapshots without polluting project git history.
+  - **Persistent repo memory & live telemetry:** `coding_context` (durable architectural decisions, gotchas, and convention rules in `.webbee/memory/`) and `token_savings` (session token savings measured against exact matched files on disk).
+- **Agent hooks CLI (`imperal-mcp install-hooks` & `imperal-mcp hook`):**
+  - Installs non-destructive `UserPromptSubmit` and `PreToolUse` hooks into `.claude/settings.local.json` and `.cursor/hooks.json` (preserving existing user settings and hook entries) to guide agents toward code-graph navigation and automatic checkpoints before file edits.
+- **`imperal-mcp[code]` optional extra** in `pyproject.toml` (with automatic `imperal-mcp[code]==<version>` installation in the Python 3.7–3.9 managed runtime launcher).
+
+### Fixed
+- **`imperal-mcp login`** now invokes `auth.login_device(cfg)` directly via `asyncio.run(...)` with no external workspace dependencies.
+
 ## 0.5.10 — 2026-10-23 — Python versions at the top of the README
 
 ### Changed

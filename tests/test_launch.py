@@ -78,7 +78,7 @@ def test_setup_installs_this_release_marks_it_ready_and_drops_older_ones(monkeyp
     prefix = tmp_path / "py3.12-1.2.3"
     assert exe == str(prefix / "bin" / "imperal-mcp")
     assert calls[0][:2] == ["/x/uv", "venv"] and L.RUNTIME_PYTHON in calls[0]
-    assert calls[1][-1] == "imperal-mcp==1.2.3"                   # the SAME release, never "latest"
+    assert calls[1][-1] == "imperal-mcp[code]==1.2.3"             # the SAME release with [code], never "latest"
     assert (prefix / ".ready").exists()
     assert not (tmp_path / "py3.12-0.0.1").exists()
 
