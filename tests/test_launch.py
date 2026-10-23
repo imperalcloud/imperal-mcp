@@ -199,3 +199,24 @@ def test_the_package_imports_without_importlib_metadata(monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(imperal_mcp)
+
+
+def test_a_repository_config_cannot_steer_the_runtime_install(monkeypatch, tmp_path):
+    """Started inside someone's repository: its uv.toml / pyproject.toml / .python-version must not
+    choose the index or the interpreter -- uv runs with --no-config from the launcher's own folder."""
+    monkeypatch.setenv(L.HOME_ENV, str(tmp_path))
+    monkeypatch.setattr(L, "_WINDOWS", False)
+    monkeypatch.setattr(L, "_find_uv", lambda home: "/x/uv")
+    seen = []
+
+    def fake_call(cmd, **kw):
+        seen.append((cmd, kw.get("cwd")))
+        if cmd[1] == "venv":
+            os.makedirs(os.path.join(cmd[-1], "bin"))
+        else:
+            open(os.path.join(os.path.dirname(cmd[cmd.index("--python") + 1]), "imperal-mcp"), "w").close()
+        return 0
+    monkeypatch.setattr(L.subprocess, "check_call", fake_call)
+    L.runtime("1.2.3")
+    assert len(seen) == 2
+    assert all("--no-config" in cmd and cwd == str(tmp_path) for cmd, cwd in seen)

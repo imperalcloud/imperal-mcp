@@ -181,11 +181,13 @@ def runtime(version):
                                   DIST, version, RUNTIME_PYTHON, prefix))
         uv = _find_uv(home) or _install_uv(home)
         shutil.rmtree(prefix, ignore_errors=True)   # a half-made one from an interrupted setup
-        subprocess.check_call([uv, "venv", "--quiet", "--python", RUNTIME_PYTHON, prefix],
-                              stdout=sys.stderr)
+        # --no-config and cwd=home: started inside someone's repository, a uv.toml, pyproject.toml
+        # or .python-version there must not pick the index or the interpreter for the runtime.
+        subprocess.check_call([uv, "venv", "--quiet", "--no-config", "--python", RUNTIME_PYTHON, prefix],
+                              stdout=sys.stderr, cwd=home)
         spec = os.environ.get(SPEC_ENV) or "%s==%s" % (DIST, version)
-        subprocess.check_call([uv, "pip", "install", "--quiet", "--python", _bin(prefix, "python"), spec],
-                              stdout=sys.stderr)
+        subprocess.check_call([uv, "pip", "install", "--quiet", "--no-config", "--python",
+                               _bin(prefix, "python"), spec], stdout=sys.stderr, cwd=home)
         if not os.path.exists(exe):
             raise RuntimeError("%s is missing after the install" % exe)
         open(ready, "w").close()

@@ -4,6 +4,13 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.5.9 — 2026-10-23 — The one-time setup ignores the folder it starts in
+
+### Fixed
+- uv runs with `--no-config` from the launcher's own folder: a `uv.toml`, `pyproject.toml` or
+  `.python-version` in the folder an agent starts `imperal-mcp` from can no longer pick the package
+  index or the interpreter for the Python 3.12 runtime (Python 3.7-3.9 only).
+
 ## 0.5.8 — 2026-10-23 — Any Python from 3.7
 
 ### Changed
