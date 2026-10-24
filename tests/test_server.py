@@ -529,3 +529,30 @@ async def test_frame_and_task_tools_and_a_code_call_lands_in_the_exchange(tmp_pa
     await srv.call_tool("outline", {"path": "a.py"})
     ex = srv._exoskeleton._exchange
     assert ex and ex[-1]["tool"] == "outline" and ex[-1]["args"]["path"] == "a.py" and ex[-1]["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_server_file_read_after_a_cloud_call_never_deadlocks_the_server(tmp_path, monkeypatch):
+    """Live 0.6.3: outline/read_symbol were sync tools run on the server's loop; once an async tool had set the loop,
+    their cloud call waited for that very loop -- the whole MCP server hung."""
+    import asyncio
+    import webbee.tools as wt
+
+    async def fake_remote_sync(client, host, root, paths):
+        return {"repo_key": "rk_remote"}
+    monkeypatch.setattr(wt, "remote_sync", fake_remote_sync)
+
+    class _Cloud:
+        async def _request(self, method, path, *, json=None, params=None, timeout=60):
+            if path.endswith("/code/slice"):
+                return {"ok": True, "data": {"items": [{"path": "a.py", "qualname": "run", "start_line": 1,
+                                                        "end_line": 2, "text": "def run():\n    pass\n"}]}}
+            if path.endswith("/code/outline"):
+                return {"ok": True, "data": {"items": [{"name": "run", "kind": "function", "start": 1, "end": 2}]}}
+            return {"ok": True, "data": {"items": []}}
+    srv = build_server(_Cloud(), workspace=str(tmp_path))
+    srv._exoskeleton._client = __import__("imperal_mcp.exoskeleton", fromlist=["_OnLoop"])._OnLoop(_Cloud(), srv._exoskeleton)
+    await srv.call_tool("graph_slice", {"symbols": ["run"], "root": "/r", "target": "host:h"})    # sets the loop
+    await asyncio.wait_for(srv.call_tool("read_symbol", {"path": "a.py", "name": "run", "root": "/r",
+                                                         "target": "host:h"}), 10)
+    await asyncio.wait_for(srv.call_tool("outline", {"path": "a.py", "root": "/r", "target": "host:h"}), 10)

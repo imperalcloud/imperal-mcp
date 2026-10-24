@@ -371,18 +371,18 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         title="Code File Outline",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def outline(path: str, root: str | None = None, target: str | None = None) -> dict:
+    async def outline(path: str, root: str | None = None, target: str | None = None) -> dict:
         """Tree-sitter structural map of a source file (classes, functions, methods, major blocks with exact line ranges). Call before reading large files."""
-        return _recorded("outline", exo.outline(path=path, root=root, target=target), path=path, root=root, target=target)
+        # a worker thread like every code tool: its cloud call must never wait for the loop it would block
+        return await _exo_call(exo.outline, path=path, root=root, target=target)
 
     @mcp.tool(
         title="Read Symbol or Span",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def read_symbol(path: str, name: str, root: str | None = None, target: str | None = None) -> dict:
+    async def read_symbol(path: str, name: str, root: str | None = None, target: str | None = None) -> dict:
         """Read ONE symbol (function, class, Class.method, block name) or line range ('L120-180') from a file without loading the whole file."""
-        return _recorded("read_symbol", exo.read_symbol(path=path, name=name, root=root, target=target), path=path, name=name,
-                         root=root, target=target)
+        return await _exo_call(exo.read_symbol, path=path, name=name, root=root, target=target)
 
     @mcp.tool(
         title="Call Graph Slice",
