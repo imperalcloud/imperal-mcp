@@ -621,3 +621,11 @@ def test_the_exchange_never_carries_a_secret_file_or_raw_pii(tmp_path: Path):
     exo.record_call("search_code", {"query": "mail"}, ok=True, text="owner: someone@example.com")
     assert exo._exchange[0]["text"] == "(withheld: a secret file)" and "hunter2" not in str(exo._exchange[0])
     assert "someone@example.com" not in exo._exchange[1]["text"]
+
+
+def test_a_secret_directory_or_a_windows_path_is_withheld_too(tmp_path: Path):
+    exo = ExoskeletonRuntime(workspace=str(tmp_path))
+    exo.record_call("read_symbol", {"path": "deploy/secrets/db.yaml", "name": "L1-3"}, ok=True, text="pw: x1")
+    exo.record_call("read_symbol", {"path": "C:\\Users\\me\\.ssh\\config", "name": "L1-3"}, ok=True, text="Host x")
+    exo.record_call("read_symbol", {"path": "keys\\ID_RSA", "name": "L1-3"}, ok=True, text="-----BEGIN")
+    assert [e["text"] for e in exo._exchange] == ["(withheld: a secret file)"] * 3

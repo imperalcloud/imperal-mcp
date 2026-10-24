@@ -284,6 +284,17 @@ Follow these operating rules to navigate repositories accurately, minimize unnec
 _EXCHANGE_MAX = 60     # the gateway's bound on one frame's exchange
 
 
+def _secret_path(value: str, patterns: tuple, fnmatch: Any) -> bool:
+    """A path (either slash) whose file name matches a secret file pattern of the code index (``.env*``,
+    ``id_*`` ...) or one of whose folders is a secret folder (``secrets/``, ``.ssh/`` ...)."""
+    parts = [x for x in str(value or "").replace("\\", "/").lower().split("/") if x]
+    if not parts:
+        return False
+    files = [p for p in patterns if not p.endswith("/")]
+    dirs = {p.rstrip("/") for p in patterns if p.endswith("/")}
+    return any(fnmatch.fnmatchcase(parts[-1], pat) for pat in files) or any(d in dirs for d in parts[:-1])
+
+
 class ExoskeletonRuntime:
     """Stateful local + cloud bridge for Imperal MCP Exoskeleton tools."""
 
@@ -316,8 +327,7 @@ class ExoskeletonRuntime:
         from imperal_sdk.code_index import SECRET_PATTERNS
         from .mask import defensive_scrub
         a = {str(k): str(v)[:2000] for k, v in (args or {}).items() if v is not None}
-        names = [os.path.basename(v).lower() for v in a.values() if "/" in v or "." in v]
-        if any(fnmatch.fnmatchcase(n, pat) for n in names for pat in SECRET_PATTERNS if not pat.endswith("/")):
+        if any(_secret_path(v, SECRET_PATTERNS, fnmatch) for v in a.values()):
             body = "(withheld: a secret file)"          # never what a secret file holds
         else:
             body = str(defensive_scrub(str(text or "")[:2000]))
