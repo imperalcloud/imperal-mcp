@@ -798,3 +798,10 @@ def test_an_unavailable_answer_names_its_real_cause(tmp_path: Path, monkeypatch)
     out = exo.search_code("x", root="/home/ipw-repo", target="host:whm-jump")
     assert out["status"] == "unavailable" and "the gateway timed out" in out["content"]
     assert "no synced copy" not in out["content"]
+
+
+def test_impact_shows_users_by_name(sample_workspace: Path):
+    ans = {**_impact_answer(), "by_name_count": 1, "by_name": [{"path": "pkg/other.py", "line": 7, "user": "go", "name": "x"}]}
+    exo = ExoskeletonRuntime(workspace=str(sample_workspace), client=_Cloud({"/code/impact": ans}))
+    out = exo.impact_of_change(["compute_total"])
+    assert out["by_name"] == [{"path": "pkg/other.py", "line": 7, "user": "go", "name": "x"}] and out["by_name_count"] == 1

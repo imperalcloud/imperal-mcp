@@ -845,6 +845,7 @@ class ExoskeletonRuntime:
             out = {"status": "ok", "workspace": root if target else self.resolve_workspace(root),
                    "queried_symbols": sym_list, "dependent_files": files, "items": items,
                    "same_file": ans.get("same_file") or [], "by_name_count": ans.get("by_name_count"),
+                   "by_name": ans.get("by_name") or [],      # found only by name (an instance's method), marked
                    **self._vault_meta(ans)}
             if "resolved" in ans and not ans.get("resolved"):
                 out["note"] = f"{', '.join(sym_list)}: not a definition in the graph"     # not "0 dependents"
