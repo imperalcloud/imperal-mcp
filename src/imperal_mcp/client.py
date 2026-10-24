@@ -51,12 +51,12 @@ class ImperalClient:
             raise ImperalAuthError("no Imperal token — run `imperal-mcp login` or set IMPERAL_TOKEN")
         return {"Authorization": f"Bearer {token}"}
 
-    async def _request(self, method: str, path: str, *, json: Any = None,
+    async def _request(self, method: str, path: str, *, json: Any = None, params: dict | None = None,
                        timeout: float = 60) -> Any:
         url = f"{self._cfg.api_url}{path}"
         headers = await self._headers()
         async with httpx.AsyncClient(timeout=timeout) as cli:
-            resp = await cli.request(method, url, json=json, headers=headers)
+            resp = await cli.request(method, url, json=json, params=params, headers=headers)
         if resp.status_code >= 400:
             raise ImperalError(f"{method} {path} -> {resp.status_code}: {resp.text[:300]}", status_code=resp.status_code)
         return resp.json()

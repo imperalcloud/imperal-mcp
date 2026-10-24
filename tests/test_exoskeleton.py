@@ -79,35 +79,15 @@ def sample_workspace(tmp_path: Path) -> Path:
     return ws
 
 
-def test_token_savings_tracker_records_and_summarizes():
+def test_token_savings_has_no_baseline_claim():
+    """frame phase A (spec A6): a useless list must never pass for savings -- calls and returned size only."""
     tracker = TokenSavingsTracker()
-    rec = tracker.record(
-        "outline",
-        returned_chars=400,
-        baseline_chars=4000,
-        returned_lines=15,
-        baseline_lines=150,
-        baseline_files=1,
-    )
-    assert rec["tool"] == "outline"
-    assert rec["baseline_basis"] == "matched_files_on_disk"
-    assert rec["baseline_files"] == 1
-    assert rec["returned_chars"] == 400
-    assert rec["baseline_chars"] == 4000
-    assert rec["saved_chars"] == 3600
-    assert "saved_tokens_est" not in rec
-    assert "estimated_cost_saved_usd" not in rec
-
+    rec = tracker.record("outline", returned_chars=400, baseline_chars=4000, returned_lines=15,
+                         baseline_lines=150, baseline_files=1)
+    assert rec == {"tool": "outline", "returned_chars": 400, "returned_lines": 15}
     summary = tracker.summary()
-    assert summary["baseline_basis"] == "matched_files_on_disk"
-    assert summary["calls"] == 1
-    assert summary["baseline_files"] == 1
-    assert summary["saved_chars"] == 3600
-    assert summary["saved_lines"] == 135
-    assert "saved_tokens_est" not in summary
-    assert "estimated_cost_saved_usd" not in summary
-    assert summary["by_tool"]["outline"]["calls"] == 1
-    assert summary["by_tool"]["outline"]["baseline_files"] == 1
+    assert summary == {"calls": 1, "returned_chars": 400, "returned_lines": 15,
+                       "by_tool": {"outline": {"calls": 1, "returned_chars": 400, "returned_lines": 15}}}
 
 
 def test_exoskeleton_code_graph_and_ast_tools(sample_workspace: Path):
@@ -184,14 +164,9 @@ def test_exoskeleton_code_graph_and_ast_tools(sample_workspace: Path):
 
     savings = exo.token_savings()
     assert savings["status"] == "ok"
-    assert savings["baseline_basis"] == "matched_files_on_disk"
     assert savings["calls"] >= 7
-    assert "saved_tokens_est" not in savings
-    assert "estimated_cost_saved_usd" not in savings
-    math_ops_size = len((sample_workspace / "pkg" / "math_ops.py").read_text(encoding="utf-8"))
-    caller_size = len((sample_workspace / "pkg" / "caller.py").read_text(encoding="utf-8"))
-    assert savings["by_tool"]["outline"]["baseline_chars"] == math_ops_size
-    assert savings["by_tool"]["graph_slice"]["baseline_chars"] == math_ops_size + caller_size
+    assert "baseline_basis" not in savings and "saved_chars" not in savings      # spec A6: no savings claim
+    assert savings["by_tool"]["outline"]["calls"] >= 1 and savings["by_tool"]["outline"]["returned_chars"] > 0
 
 
 def test_exoskeleton_rejects_outside_workspace_path(sample_workspace: Path):
@@ -464,3 +439,107 @@ def test_root_parameter_cannot_escape_workspace(sample_workspace: Path):
 
 
 
+
+
+# ── frame phase A, Task 7: the code tools ask the vault graph ──
+
+class _Cloud:
+    """The gateway as a fake: records every call; answers by path."""
+    def __init__(self, answers=None, fail=False):
+        self.calls, self.answers, self.fail = [], dict(answers or {}), fail
+
+    async def _request(self, method, path, *, json=None, params=None, timeout=60):
+        self.calls.append((method, path, params, json))
+        if self.fail and "/code/sync/" not in path:
+            raise RuntimeError("gateway down")
+        if path.endswith("/sync/plan"):
+            return {"repo_key": "rk1", "changed": [i["path"] for i in json["listing"]], "removed": [], "have_blobs": []}
+        if path.endswith("/sync/apply"):
+            return {"files": len(json["files"]), "links": 0}
+        for key, ans in self.answers.items():
+            if path.endswith(key):
+                return ans
+        return {"ok": True, "data": {"items": []}}
+
+
+def _impact_answer():
+    return {"ok": True, "repo_key": "rk1", "synced_at": 9.0,
+            "data": {"items": [{"id": "pkg/caller.py", "title": "pkg/caller.py", "kind": "file", "via": "scope",
+                                "group": "code", "callers": [{"user": "checkout_order", "line": 4}]}]}}
+
+
+def test_impact_asks_vault_and_returns_its_items(sample_workspace: Path):
+    cloud = _Cloud({"/code/impact": _impact_answer()})
+    exo = ExoskeletonRuntime(workspace=str(sample_workspace), client=cloud)
+    out = exo.impact_of_change(["compute_total"])
+    assert out["dependent_files"] == ["pkg/caller.py"] and out["source"] == "vault graph" and "coarse" not in out
+    impact = [c for c in cloud.calls if c[1].endswith("/code/impact")][0]
+    assert impact[3]["repo_key"] == "rk1" and impact[3]["symbols"] == ["compute_total"]
+
+
+def test_search_code_sends_vector_when_embedder_present(sample_workspace: Path, monkeypatch):
+    import imperal_sdk.code_index as ci
+    monkeypatch.setattr(ci, "embed_query", lambda text: b"\x00\x00\x80?")
+    cloud = _Cloud({"/code/search": {"ok": True, "semantic": "on", "data": {"items": [
+        {"id": "pkg/math_ops.py::compute_total", "title": "compute_total", "kind": "function",
+         "path": "pkg/math_ops.py", "start_line": 1, "end_line": 3, "match": "exact"}]}}})
+    exo = ExoskeletonRuntime(workspace=str(sample_workspace), client=cloud)
+    out = exo.search_code("compute_total")
+    search = [c for c in cloud.calls if c[1].endswith("/code/search")][0]
+    assert search[2]["vector"] and search[2]["q"] == "compute_total"
+    assert out["matches"][0]["title"] == "compute_total" and out["semantic"] == "on"
+
+
+def test_vault_error_falls_back_marked_coarse(sample_workspace: Path):
+    exo = ExoskeletonRuntime(workspace=str(sample_workspace), client=_Cloud(fail=True))
+    out = exo.impact_of_change(["compute_total"])
+    assert out["coarse"] == "vault graph unavailable: links by name" and out["status"] == "ok"
+
+
+def test_no_cloud_is_coarse(sample_workspace: Path):
+    out = ExoskeletonRuntime(workspace=str(sample_workspace)).impact_of_change(["compute_total"])
+    assert out["coarse"] == "vault graph unavailable: links by name"
+
+
+def test_orient_profile_once_top_symbols_by_use(sample_workspace: Path):
+    cloud = _Cloud({"/code/search": {"ok": True, "semantic": "off", "data": {"items": [
+        {"id": "pkg/math_ops.py::compute_total", "title": "compute_total", "path": "pkg/math_ops.py",
+         "kind": "function", "start_line": 1, "end_line": 3}]}},
+        "/code/profile": {"ok": True, "data": {"items": [{"repo_key": "rk1", "file_count": 3, "def_count": 4,
+                                                           "languages": {"python": 3},
+                                                           "top_symbols": ["compute_total @ pkg/math_ops.py (used by 1 files)"]}]}}})
+    exo = ExoskeletonRuntime(workspace=str(sample_workspace), client=cloud)
+    out = exo.orient("compute total")
+    assert out["profile"] == {"repo_key": "rk1", "file_count": 3, "def_count": 4, "languages": {"python": 3},
+                              "top_symbols": ["compute_total @ pkg/math_ops.py (used by 1 files)"]}
+    assert out["matches"][0]["title"] == "compute_total"
+
+
+def test_remote_target_resolves_repo_from_catalog(sample_workspace: Path):
+    cloud = _Cloud({"/code/repos": {"repos": [{"repo_key": "1a1a308590ae", "root_path": "/home/ipw-repo",
+                                               "machine_label": "whm-jump"},
+                                              {"repo_key": "other", "root_path": "/home/x"}]},
+                    "/code/impact": _impact_answer()})
+    exo = ExoskeletonRuntime(workspace=str(sample_workspace), client=cloud)
+    exo.impact_of_change(["f"], target="host:whm-jump", root="/home/ipw-repo")
+    impact = [c for c in cloud.calls if c[1].endswith("/code/impact")][0]
+    assert impact[3]["repo_key"] == "1a1a308590ae"
+    assert not [c for c in cloud.calls if "/code/sync/" in c[1]]          # a remote repo is never synced from here
+
+
+def test_recall_drops_other_repo_notes_and_duplicates():
+    from imperal_mcp.exoskeleton import scope_recall
+    res = {"data": {"snippets": [
+        {"category": "repo_knowledge", "source_id": "rk1", "content": "a"},
+        {"category": "repo_knowledge", "source_id": "rk1", "content": "a"},
+        {"category": "repo_knowledge", "source_id": "other", "content": "b"},
+        {"category": "preference", "source_id": "u", "content": "c"}]}}
+    out = scope_recall(res, "rk1")
+    assert [s["content"] for s in out["data"]["snippets"]] == ["a", "c"]
+
+
+def test_recall_outside_a_known_repo_keeps_every_note():
+    from imperal_mcp.exoskeleton import scope_recall
+    res = {"data": {"snippets": [{"category": "repo_knowledge", "source_id": "x", "content": "a"},
+                                 {"category": "repo_knowledge", "source_id": "y", "content": "b"}]}}
+    assert [s["content"] for s in scope_recall(res, {"not-a-repo"})["data"]["snippets"]] == ["a", "b"]

@@ -235,7 +235,7 @@ async def run_write_tool_logic(client, ctx, app_id, function, args, autopilot) -
 
 def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP:
     mcp = FastMCP("imperal", instructions=EXOSKELETON_INSTRUCTIONS)
-    exo = ExoskeletonRuntime(workspace=workspace)
+    exo = ExoskeletonRuntime(workspace=workspace, client=client)
 
     @mcp.tool(
         title="Validate IR",
@@ -324,17 +324,17 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         title="Orient on Task",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def orient(query: str, k: int = 8, root: str | None = None) -> dict:
-        """One-call orientation for a task: repo profile + top ranked symbols/snippets from the live code graph. Call FIRST instead of scanning files blind."""
-        return exo.orient(query=query, k=k, root=root)
+    def orient(query: str, k: int = 8, root: str | None = None, target: str | None = None) -> dict:
+        """One-call orientation for a task: repo profile + top ranked symbols/snippets from the code graph in Imperal's vault. Call FIRST instead of scanning files blind. `target`: local (default), ssh:<connection_id> or host:<alias> with `root` = the repo path there."""
+        return exo.orient(query=query, k=k, root=root, target=target)
 
     @mcp.tool(
         title="Repository Profile",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def repo_profile(root: str | None = None) -> dict:
-        """Structured profile of the repository (languages, file count, key architectural hubs, test command hints) from the live code index."""
-        return exo.repo_profile(root=root)
+    def repo_profile(root: str | None = None, target: str | None = None) -> dict:
+        """Structured profile of the repository (languages, file count, the most-used definitions) from the code graph."""
+        return exo.repo_profile(root=root, target=target)
 
     @mcp.tool(
         title="Search Code Graph",
@@ -346,9 +346,10 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         kind: str | None = None,
         path_glob: str | None = None,
         root: str | None = None,
+        target: str | None = None,
     ) -> dict:
-        """Hybrid AST symbol + lexical code search across the indexed repository. Prefer over grep/find."""
-        return exo.search_code(query=query, k=k, kind=kind, path_glob=path_glob, root=root)
+        """Search the code graph: exact names, words and meaning (each hit says how sure it is). Prefer over grep/find."""
+        return exo.search_code(query=query, k=k, kind=kind, path_glob=path_glob, root=root, target=target)
 
     @mcp.tool(
         title="Code File Outline",
@@ -370,25 +371,25 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         title="Call Graph Slice",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def graph_slice(symbols: list[str], depth: int = 1, root: str | None = None) -> dict:
+    def graph_slice(symbols: list[str], depth: int = 1, root: str | None = None, target: str | None = None) -> dict:
         """Return definition locations, signatures, direct callers, and callees for a batch of symbols from the code graph."""
-        return exo.graph_slice(symbols=symbols, depth=depth, root=root)
+        return exo.graph_slice(symbols=symbols, depth=depth, root=root, target=target)
 
     @mcp.tool(
         title="Contract Slice",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def contract_slice(symbols: list[str], root: str | None = None) -> dict:
-        """Return exact call-site contracts (signatures, return types, raises, and caller argument shapes) for the given symbols."""
-        return exo.contract_slice(symbols=symbols, root=root)
+    def contract_slice(symbols: list[str], root: str | None = None, target: str | None = None) -> dict:
+        """Return the endpoints and route links across the user's repos, plus the given symbols with their callers."""
+        return exo.contract_slice(symbols=symbols, root=root, target=target)
 
     @mcp.tool(
         title="Impact of Change",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def impact_of_change(symbols: list[str], root: str | None = None) -> dict:
-        """Given symbols you plan to modify, return all downstream dependent files and caller symbols that could break."""
-        return exo.impact_of_change(symbols=symbols, root=root)
+    def impact_of_change(symbols: list[str], root: str | None = None, target: str | None = None) -> dict:
+        """Given symbols you plan to modify, return the files and call sites that depend on them (code first, tests after, uses inside the same file listed apart)."""
+        return exo.impact_of_change(symbols=symbols, root=root, target=target)
 
     @mcp.tool(
         title="Check Syntax (Tree-sitter)",
@@ -454,7 +455,8 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         include_resolved: bool = False,
     ) -> dict:
         """Retrieve relevant user directives, preferences, and repository notes from Imperal Cloud Memory across Webbee, Telegram, and the Panel."""
-        return defensive_scrub(
+        from .exoskeleton import scope_recall
+        return defensive_scrub(scope_recall(
             await client.run_tool(
                 "memory-index",
                 "recall_context",
@@ -465,8 +467,7 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
                     "include_repo_memory": include_repo_memory,
                     "include_resolved": include_resolved,
                 },
-            )
-        )
+            ), exo.current_repo_keys()))
 
     @mcp.tool(
         title="Remember Durable User Fact / Directive",

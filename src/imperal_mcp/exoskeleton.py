@@ -32,98 +32,74 @@ def _ensure_webbee_importable() -> None:
 
 
 class TokenSavingsTracker:
-    """Per-session telemetry tracker comparing surgical tool output against the actual matched files on disk."""
+    """Per-session telemetry: how many calls each tool answered and how much it returned. No "saved vs. whole
+    files" figure -- a useless answer must never pass for savings (frame phase A, spec A6)."""
 
     def __init__(self) -> None:
         self.calls: int = 0
-        self.files_measured: int = 0
         self.lines_returned: int = 0
-        self.lines_baseline: int = 0
         self.chars_returned: int = 0
-        self.chars_baseline: int = 0
         self.by_tool: dict[str, dict[str, int]] = {}
 
-    def record(
-        self,
-        tool: str,
-        *,
-        returned_chars: int,
-        baseline_chars: int,
-        returned_lines: int = 0,
-        baseline_lines: int = 0,
-        baseline_files: int = 1,
-    ) -> dict[str, Any]:
-        ret_c = max(0, int(returned_chars))
-        base_c = max(0, int(baseline_chars))
-        ret_l = max(0, int(returned_lines))
-        base_l = max(0, int(baseline_lines))
-        base_f = max(0, int(baseline_files))
-        saved_c = max(0, base_c - ret_c)
-        saved_l = max(0, base_l - ret_l)
-
+    def record(self, tool: str, *, returned_chars: int, returned_lines: int = 0, **_baseline: Any) -> dict[str, Any]:
+        ret_c, ret_l = max(0, int(returned_chars)), max(0, int(returned_lines))
         self.calls += 1
-        self.files_measured += base_f
         self.chars_returned += ret_c
-        self.chars_baseline += base_c
         self.lines_returned += ret_l
-        self.lines_baseline += base_l
-
-        slot = self.by_tool.setdefault(
-            tool,
-            {
-                "calls": 0,
-                "baseline_files": 0,
-                "returned_chars": 0,
-                "baseline_chars": 0,
-                "saved_chars": 0,
-                "returned_lines": 0,
-                "baseline_lines": 0,
-                "saved_lines": 0,
-            },
-        )
-        call_pct = round((saved_c / base_c) * 100.0, 1) if base_c > 0 else 0.0
-
+        slot = self.by_tool.setdefault(tool, {"calls": 0, "returned_chars": 0, "returned_lines": 0})
         slot["calls"] += 1
-        slot["baseline_files"] += base_f
         slot["returned_chars"] += ret_c
-        slot["baseline_chars"] += base_c
-        slot["saved_chars"] += saved_c
         slot["returned_lines"] += ret_l
-        slot["baseline_lines"] += base_l
-        slot["saved_lines"] += saved_l
-
-        return {
-            "tool": tool,
-            "baseline_basis": "matched_files_on_disk",
-            "baseline_files": base_f,
-            "returned_chars": ret_c,
-            "baseline_chars": base_c,
-            "saved_chars": saved_c,
-            "returned_lines": ret_l,
-            "baseline_lines": base_l,
-            "saved_lines": saved_l,
-            "compression_pct": call_pct,
-            "session_calls": self.calls,
-        }
+        return {"tool": tool, "returned_chars": ret_c, "returned_lines": ret_l}
 
     def summary(self) -> dict[str, Any]:
-        saved_c = max(0, self.chars_baseline - self.chars_returned)
-        saved_l = max(0, self.lines_baseline - self.lines_returned)
-        pct = round((saved_c / self.chars_baseline) * 100.0, 1) if self.chars_baseline > 0 else 0.0
-        return {
-            "status": "ok",
-            "baseline_basis": "matched_files_on_disk",
-            "calls": self.calls,
-            "baseline_files": self.files_measured,
-            "returned_chars": self.chars_returned,
-            "baseline_chars": self.chars_baseline,
-            "saved_chars": saved_c,
-            "returned_lines": self.lines_returned,
-            "baseline_lines": self.lines_baseline,
-            "saved_lines": saved_l,
-            "compression_pct": pct,
-            "by_tool": dict(self.by_tool),
-        }
+        return {"calls": self.calls, "returned_chars": self.chars_returned, "returned_lines": self.lines_returned,
+                "by_tool": {k: dict(v) for k, v in self.by_tool.items()}}
+
+
+COARSE = "vault graph unavailable: links by name"
+_PROFILE_KEYS = ("repo_key", "file_count", "def_count", "languages", "top_symbols")
+
+
+def _off_thread(fn):
+    """Run ``fn`` on a worker thread and return its result (an async client is driven there with its own loop:
+    a sync MCP tool may be called on the server's loop thread, where ``asyncio.run`` cannot start)."""
+    box: dict = {}
+
+    def run() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as exc:          # re-raised on the caller's thread
+            box["error"] = exc
+    t = threading.Thread(target=run, name="imperal-mcp-vault", daemon=True)
+    t.start()
+    t.join()
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+def scope_recall(res: Any, repo_keys: Any) -> Any:
+    """Cloud memory for this repo: a repo note of another repo is dropped, identical contents are kept once;
+    user facts and directives always stay."""
+    keys = {repo_keys} if isinstance(repo_keys, str) else set(repo_keys or ())
+    data = (res or {}).get("data") if isinstance(res, dict) else None
+    if not isinstance(data, dict) or not isinstance(data.get("snippets"), list):
+        return res
+    # outside any repo the recall knows (no note of it), every repo note stays
+    mine = any(isinstance(x, dict) and str(x.get("source_id") or "") in keys for x in data["snippets"])
+    out, seen = [], set()
+    for snip in data["snippets"]:
+        if not isinstance(snip, dict):
+            continue
+        if snip.get("category") == "repo_knowledge" and mine and str(snip.get("source_id") or "") not in keys:
+            continue
+        content = str(snip.get("content") or "")
+        if content in seen:
+            continue
+        seen.add(content)
+        out.append(snip)
+    return {**res, "data": {**data, "snippets": out}}
 
 
 def _normalize_search_matches(
@@ -285,8 +261,10 @@ Follow these operating rules to navigate repositories accurately, minimize unnec
 class ExoskeletonRuntime:
     """Stateful local + cloud bridge for Imperal MCP Exoskeleton tools."""
 
-    def __init__(self, workspace_root: str | None = None, workspace: str | None = None) -> None:
+    def __init__(self, workspace_root: str | None = None, workspace: str | None = None, client: Any = None) -> None:
         self._default_root = _resolve_root(workspace or workspace_root)
+        self._client = client               # the Imperal client: code questions go to the vault graph through it
+        self._repo_keys: dict[str, str] = {}
         self.tracker = TokenSavingsTracker()
         self._indexers: dict[str, Any] = {}
         self._index_locks: dict[str, threading.Lock] = {}
@@ -371,6 +349,8 @@ class ExoskeletonRuntime:
                 self._indexers[ws] = svc
             elif not getattr(svc, "ready", False):
                 self._build_fast_index(svc)
+            if self._client is not None and getattr(svc, "vault_client_factory", None) is None:
+                svc.vault_client_factory = lambda: self._client     # synced on demand (sync_now), not in the background
         return ws, svc, svc.index
 
     def _get_shadow(self, root: str | None = None) -> tuple[str, Any]:
@@ -392,8 +372,8 @@ class ExoskeletonRuntime:
         tool: str,
         *,
         returned_text: str,
-        baseline_chars: int,
-        baseline_lines: int,
+        baseline_chars: int = 0,
+        baseline_lines: int = 0,
         baseline_files: int = 1,
     ) -> None:
         ret_c = len(returned_text or "")
@@ -407,12 +387,121 @@ class ExoskeletonRuntime:
             baseline_files=baseline_files,
         )
 
-    def repo_profile(self, root: str | None = None) -> dict[str, Any]:
+    # ── the vault graph: one truth about code (frame phase A) ──
+
+    def _vault(self, method: str, path: str, *, params: dict | None = None, body: dict | None = None) -> Any:
+        import asyncio
+        client = self._client
+        return _off_thread(lambda: asyncio.run(client._request(method, path, json=body, params=params)))
+
+    def current_repo_keys(self, root: str | None = None) -> set[str]:
+        ws = self.resolve_workspace(root)
+        keys = {self._repo_keys[ws]} if ws in self._repo_keys else set()
+        try:
+            from webbee.repo import compute_repo_key
+            keys.add(compute_repo_key(ws))
+        except Exception:
+            pass
+        return keys
+
+    def _repo_key(self, root: str | None, target: str | None) -> str:
+        """The vault's key of the repo asked about: a remote target's repo from the catalog (root path, machine);
+        the local workspace synced first (its edits reach the vault before the question)."""
+        if target and target != "local":
+            alias = target.split(":", 1)[-1]
+            want = str(root or "").rstrip("/")
+            repos = (self._vault("GET", "/v1/memory/code/repos") or {}).get("repos") or []
+            hits = [r for r in repos if str(r.get("root_path") or "").rstrip("/") == want]
+            hits.sort(key=lambda r: alias not in (str(r.get("machine_label") or ""), str(r.get("ref") or "")))
+            return str(hits[0].get("repo_key") or "") if hits else ""
+        ws, svc, _ = self._get_indexer(root)
+        out = _off_thread(svc.sync_now) if hasattr(svc, "sync_now") else {}
+        key = str((out or {}).get("repo_key") or "")
+        if key:
+            self._repo_keys[ws] = key
+        return key
+
+    def _ask(self, method: str, path: str, root: str | None, target: str | None, *,
+             params: dict | None = None, body: dict | None = None) -> dict | None:
+        """The vault's answer, or None (no client, not synced, unreachable) -- the caller falls back, marked."""
+        if self._client is None:
+            return None
+        try:
+            key = self._repo_key(root, target)
+            if not key:
+                return None
+            if body is not None:
+                ans = self._vault(method, path, body={**body, "repo_key": key})
+            else:
+                ans = self._vault(method, path, params={**(params or {}), "repo_key": key})
+        except Exception:
+            return None
+        if not isinstance(ans, dict) or ans.get("ok") is False:
+            return None
+        return ans
+
+    @staticmethod
+    def _vault_meta(ans: dict) -> dict[str, Any]:
+        return {"source": "vault graph", "repo_key": ans.get("repo_key"), "synced_at": ans.get("synced_at")}
+
+    @staticmethod
+    def _remote_unavailable(target: str | None, root: str | None) -> dict[str, Any] | None:
+        if target and target != "local":
+            return {"status": "unavailable", "content": f"the vault graph holds no synced copy of {root} on {target}"}
+        return None
+
+    @staticmethod
+    def _query_vector(query: str) -> str | None:
+        try:
+            import base64
+            from imperal_sdk import code_index as ci
+            vec = ci.embed_query(query)
+            return base64.b64encode(vec).decode() if vec else None
+        except Exception:
+            return None
+
+    def _vault_profile(self, root: str | None, target: str | None) -> dict | None:
+        ans = self._ask("GET", "/v1/memory/code/profile", root, target)
+        items = ((ans or {}).get("data") or {}).get("items") or []
+        return items[0] if items else None
+
+    def repo_profile(self, root: str | None = None, target: str | None = None) -> dict[str, Any]:
+        prof = self._vault_profile(root, target)
+        if prof is not None:
+            return {"status": "ok", "workspace": self.resolve_workspace(root) if not target else root,
+                    "profile": prof, "source": "vault graph"}
+        return self._remote_unavailable(target, root) or {**self._local_repo_profile(root), "coarse": COARSE}
+
+    def _local_repo_profile(self, root: str | None = None) -> dict[str, Any]:
         ws, svc, _ = self._get_indexer(root)
         prof = svc.repo_profile()
         return {"status": "ok", "workspace": ws, "profile": prof}
 
-    def orient(self, query: str, k: int = 8, root: str | None = None) -> dict[str, Any]:
+    def _vault_search(self, query: str, k: int, kind: str | None, path_glob: str | None, root: str | None,
+                      target: str | None) -> dict | None:
+        params: dict[str, Any] = {"q": query, "k": k}
+        if kind:
+            params["kind"] = kind
+        if path_glob:
+            params["path_glob"] = path_glob
+        vec = self._query_vector(query)
+        if vec:
+            params["vector"] = vec
+        return self._ask("GET", "/v1/memory/code/search", root, target, params=params)
+
+    def orient(self, query: str, k: int = 8, root: str | None = None, target: str | None = None) -> dict[str, Any]:
+        prof = self._vault_profile(root, target)
+        ans = self._vault_search(query, k, None, None, root, target) if prof is not None else None
+        if prof is not None and ans is not None:
+            matches = list((ans.get("data") or {}).get("items") or [])[:k]
+            out = {"status": "ok", "workspace": root if target else self.resolve_workspace(root), "query": query,
+                   "profile": {key: prof.get(key) for key in _PROFILE_KEYS if key in prof}, "matches": matches,
+                   "semantic": ans.get("semantic"), "best_match": ans.get("best_match"), **self._vault_meta(ans)}
+            self._record_read("orient", returned_text=json.dumps(out, ensure_ascii=False))
+            return out
+        return self._remote_unavailable(target, root) or {**self._local_orient(query, k, root), "coarse": COARSE}
+
+    def _local_orient(self, query: str, k: int = 8, root: str | None = None) -> dict[str, Any]:
         ws, svc, _ = self._get_indexer(root)
         from webbee.intel.query import search_code as _search_code
 
@@ -445,7 +534,20 @@ class ExoskeletonRuntime:
         kind: str | None = None,
         path_glob: str | None = None,
         root: str | None = None,
+        target: str | None = None,
     ) -> dict[str, Any]:
+        ans = self._vault_search(query, k, kind, path_glob, root, target)
+        if ans is not None:
+            matches = list((ans.get("data") or {}).get("items") or [])[:k]
+            self._record_read("search_code", returned_text=json.dumps(matches, ensure_ascii=False))
+            return {"status": "ok", "workspace": root if target else self.resolve_workspace(root), "query": query,
+                    "matches": matches, "total": len(matches), "semantic": ans.get("semantic"),
+                    "best_match": ans.get("best_match"), **self._vault_meta(ans)}
+        return self._remote_unavailable(target, root) or {
+            **self._local_search_code(query, k=k, kind=kind, path_glob=path_glob, root=root), "coarse": COARSE}
+
+    def _local_search_code(self, query: str, k: int = 10, kind: str | None = None, path_glob: str | None = None,
+                           root: str | None = None) -> dict[str, Any]:
         ws, svc, _ = self._get_indexer(root)
         from webbee.intel.query import search_code as _search_code
 
@@ -470,7 +572,18 @@ class ExoskeletonRuntime:
             "total": len(matches),
         }
 
-    def graph_slice(self, symbols: list[str] | str, depth: int = 1, root: str | None = None) -> dict[str, Any]:
+    def graph_slice(self, symbols: list[str] | str, depth: int = 1, root: str | None = None,
+                    target: str | None = None) -> dict[str, Any]:
+        sym_list = [symbols] if isinstance(symbols, str) else list(symbols or [])
+        ans = self._ask("POST", "/v1/memory/code/slice", root, target, body={"symbols": sym_list, "depth": depth})
+        if ans is not None:
+            items = list((ans.get("data") or {}).get("items") or [])
+            self._record_read("graph_slice", returned_text=json.dumps(items, ensure_ascii=False))
+            return {"status": "ok", "workspace": root if target else self.resolve_workspace(root), "symbols": items,
+                    **self._vault_meta(ans)}
+        return self._remote_unavailable(target, root) or {**self._local_graph_slice(symbols, depth, root), "coarse": COARSE}
+
+    def _local_graph_slice(self, symbols: list[str] | str, depth: int = 1, root: str | None = None) -> dict[str, Any]:
         ws, svc, _ = self._get_indexer(root)
         from webbee.intel.query import graph_slice as _graph_slice
 
@@ -494,7 +607,21 @@ class ExoskeletonRuntime:
         )
         return {"status": "ok", "workspace": ws, "symbols": items}
 
-    def impact_of_change(self, symbols: list[str] | str, root: str | None = None) -> dict[str, Any]:
+    def impact_of_change(self, symbols: list[str] | str, root: str | None = None,
+                         target: str | None = None) -> dict[str, Any]:
+        sym_list = [symbols] if isinstance(symbols, str) else list(symbols or [])
+        ans = self._ask("POST", "/v1/memory/code/impact", root, target, body={"symbols": sym_list})
+        if ans is not None:
+            items = list((ans.get("data") or {}).get("items") or [])
+            files = [it.get("title") or it.get("id") for it in items]
+            self._record_read("impact_of_change", returned_text=json.dumps(items, ensure_ascii=False))
+            return {"status": "ok", "workspace": root if target else self.resolve_workspace(root),
+                    "queried_symbols": sym_list, "dependent_files": files, "items": items,
+                    "same_file": ans.get("same_file") or [], "by_name_count": ans.get("by_name_count"),
+                    **self._vault_meta(ans)}
+        return self._remote_unavailable(target, root) or {**self._local_impact_of_change(symbols, root), "coarse": COARSE}
+
+    def _local_impact_of_change(self, symbols: list[str] | str, root: str | None = None) -> dict[str, Any]:
         ws, svc, _ = self._get_indexer(root)
         from webbee.intel.query import impact_of_change as _impact_of_change
 
@@ -532,7 +659,25 @@ class ExoskeletonRuntime:
         kind: str = "all",
         k: int = 50,
         root: str | None = None,
+        target: str | None = None,
     ) -> dict[str, Any]:
+        sym_list = [symbols] if isinstance(symbols, str) else list(symbols or [])
+        if self._client is not None:
+            try:
+                cat = self._vault("GET", "/v1/memory/code/contracts") or {}
+                q = (query or (sym_list[0] if len(sym_list) == 1 else "")).lower()
+                eps = [e for e in cat.get("endpoints") or [] if not q or q in json.dumps(e).lower()][:k]
+                sl = self.graph_slice(sym_list, root=root, target=target) if sym_list else {"symbols": []}
+                return {"status": "ok", "workspace": root if target else self.resolve_workspace(root),
+                        "contracts": eps, "links": cat.get("links") or [], "symbols": sl.get("symbols") or [],
+                        "source": "vault graph"}
+            except Exception:
+                pass
+        return self._remote_unavailable(target, root) or {
+            **self._local_contract_slice(symbols, query=query, kind=kind, k=k, root=root), "coarse": COARSE}
+
+    def _local_contract_slice(self, symbols: list[str] | str | None = None, query: str = "", kind: str = "all",
+                              k: int = 50, root: str | None = None) -> dict[str, Any]:
         ws, svc, _ = self._get_indexer(root)
         from webbee.intel.query import contract_slice as _contract_slice, graph_slice as _graph_slice
         sym_list = [symbols] if isinstance(symbols, str) else list(symbols or [])
