@@ -4,6 +4,23 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.6.1 — 2026-10-24 — the code tools ask the exact graph; the kernel's frame for your agent
+
+### Changed
+- **Code tools answer from the exact code graph in your Imperal vault** (`orient`, `repo_profile`, `search_code`, `graph_slice`, `impact_of_change`, `contract_slice`): the workspace is synced first, callers come by scope rules with their lines, uses inside the same file and tests are told apart, search by meaning works through the gateway. Every tool takes an optional `target` (`local`, `ssh:<connection>`, `host:<alias>`). Without the vault the local index answers and says `coarse`. `outline` / `read_symbol` still read the file on disk.
+- **`recall_context`** keeps the notes of the repo you are in (other repos' notes and duplicates dropped).
+- **`token_savings`** reports calls and what they returned -- no "saved" estimate.
+
+### Added
+- **`task(goal, items)`** and **`frame()`**: the Imperal kernel's step frame for your work -- the same frame a Webbee step gets: your task and plan with what is proven, the code around your focus, what your change reaches, the world, your path. Edits are measured by a workspace snapshot, never claimed.
+- **`state_lens`**, **`recall`**, **`vault_log_read`**: what the frame's pointers name, for your session.
+
+### Security
+- The frame's exchange never carries a secret file's text (`.env*`, keys, `secrets/`, `.ssh/` ...) and masks personal data.
+
+### Requires
+- `imperal-sdk >= 6.2.0`, `webbee >= 0.5.9`.
+
 ## 0.6.0 — 2026-10-23 — Exoskeleton SuperSuite: local code intelligence, checkpoints & agent hooks
 
 ### Added
