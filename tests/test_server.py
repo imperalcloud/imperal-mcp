@@ -517,3 +517,15 @@ async def test_destructive_ctx_none_refused_no_crash():
     out = await run_write_tool_logic(c, None, "notes", "delete_notes", {}, Autopilot())
     assert out["status"] == "refused" and "elicitation channel" in out["reason"]
     assert c.calls == []  # never dispatched
+
+
+@pytest.mark.asyncio
+async def test_frame_and_task_tools_and_a_code_call_lands_in_the_exchange(tmp_path):
+    """Frame phase B, Task 10: the agent's frame and task tools; its code tools' calls feed the next frame."""
+    (tmp_path / "a.py").write_text("def make_alpha():\n    return 1\n")
+    srv = build_server(FakeClient(), workspace=str(tmp_path))
+    names = {t.name for t in await srv.list_tools()}
+    assert {"frame", "task"} <= names
+    await srv.call_tool("outline", {"path": "a.py"})
+    ex = srv._exoskeleton._exchange
+    assert ex and ex[-1]["tool"] == "outline" and ex[-1]["args"]["path"] == "a.py" and ex[-1]["ok"] is True

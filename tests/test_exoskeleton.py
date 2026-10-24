@@ -575,3 +575,41 @@ def test_an_unknown_symbol_says_it_is_not_in_the_graph(sample_workspace: Path):
     cloud = _Cloud({"/code/impact": {"ok": True, "repo_key": "rk1", "resolved": [], "data": {"items": []}}})
     out = ExoskeletonRuntime(workspace=str(sample_workspace), client=cloud).impact_of_change(["no_such_fn"])
     assert out["dependent_files"] == [] and out["note"] == "no_such_fn: not a definition in the graph"
+
+
+# ── frame phase B, Task 10: the kernel's frame and the task tool for an external agent ──
+
+def _frame_cloud():
+    return _Cloud({"/v1/auth/me": {"imperal_id": "imp_u_ME"},
+                   "/v1/memory/frame": {"frame": "=== DECISION ===\nTASK (fix alpha)", "tool_groups": ["code"]}})
+
+
+def _frame_body(cloud):
+    return [c[3] for c in cloud.calls if c[1] == "/v1/memory/frame"][-1]
+
+
+def test_frame_sends_own_calls_and_measured_changes(tmp_path: Path):
+    (tmp_path / "a.py").write_text("x=1\n")
+    cloud = _frame_cloud()
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+    exo.task("fix alpha", [{"content": "edit alpha", "status": "in_progress"}])
+    exo.record_call("search_code", {"query": "alpha"}, ok=True, text="alpha in a.py")
+    (tmp_path / "a.py").write_text("x=2\n")
+    out = exo.frame()
+    assert out["frame"].startswith("=== DECISION ===")
+    body = _frame_body(cloud)
+    assert body["session_id"].startswith("mcp-imp_u_ME-") and body["goal"] == "fix alpha" and body["step"] == 1
+    assert [e["tool"] for e in body["exchange"]] == ["search_code", "edit_file"]
+    assert body["exchange"][1]["args"]["path"] == "a.py" and "measured" in body["exchange"][1]["text"]
+    exo.frame()
+    again = _frame_body(cloud)
+    assert again["exchange"] == [] and again["step"] == 2 and again["session_id"] == body["session_id"]
+
+
+def test_a_failed_frame_keeps_the_exchange_for_the_next(tmp_path: Path):
+    cloud = _Cloud(fail=True)
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+    exo.record_call("search_code", {"query": "alpha"}, ok=True, text="")
+    out = exo.frame()
+    assert out["ok"] is False and out["content"].startswith("frame unavailable:")
+    assert [e["tool"] for e in exo._exchange] == ["search_code"]

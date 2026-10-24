@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -280,6 +281,9 @@ Follow these operating rules to navigate repositories accurately, minimize unnec
 """
 
 
+_EXCHANGE_MAX = 60     # the gateway's bound on one frame's exchange
+
+
 class ExoskeletonRuntime:
     """Stateful local + cloud bridge for Imperal MCP Exoskeleton tools."""
 
@@ -295,6 +299,77 @@ class ExoskeletonRuntime:
         self._embed_threads: dict[str, threading.Thread] = {}
         self._shadows: dict[str, Any] = {}
         self._guard_lock = threading.Lock()
+        # the kernel's frame for this agent (phase B): its task, its plan and what it did since the last frame
+        self._exchange: list[dict[str, Any]] = []
+        self._task_goal = ""
+        self._task_items: list[dict[str, Any]] = []
+        self._frame_step = 0
+        self._me = ""
+        self._started = time.time()
+        self._baselined: set[str] = set()
+
+    # -- the kernel's frame (phase B, spec 2026-10-24 §4.2) -------------------------------------------
+
+    def record_call(self, tool: str, args: dict | None, ok: bool = True, text: str = "") -> None:
+        """One call of this agent's imperal-mcp tools, in the kernel's exchange shape -- the next frame carries it."""
+        a = {str(k): str(v)[:2000] for k, v in (args or {}).items() if v is not None}
+        self._exchange.append({"app_id": "", "tool": str(tool), "args": a, "ok": bool(ok), "text": str(text or "")[:2000]})
+        del self._exchange[:-_EXCHANGE_MAX]
+
+    def task(self, goal: str, items: list | None = None, root: str | None = None) -> dict[str, Any]:
+        """The agent declares what it was asked and its plan (as Webbee's todo_write); the workspace's state now is
+        the baseline its changes are measured from."""
+        self._task_goal = str(goal or "")
+        self._task_items = [dict(i) for i in items or [] if isinstance(i, dict)][:50]
+        self._baseline(root)
+        return {"ok": True, "goal": self._task_goal, "items": len(self._task_items)}
+
+    def _baseline(self, root: str | None) -> None:
+        ws, sg = self._get_shadow(root)
+        if ws not in self._baselined and sg.available:
+            sg.checkpoint(label="frame baseline", force=True)
+            self._baselined.add(ws)
+
+    def _changed_since_last_frame(self, root: str | None) -> list[dict[str, Any]]:
+        """The files changed since the last frame, measured by a snapshot of the workspace (never claimed)."""
+        ws, sg = self._get_shadow(root)
+        if not sg.available:
+            return []
+        if ws not in self._baselined:          # no baseline yet: everything would look changed -- start one
+            self._baseline(root)
+            return []
+        cp = sg.checkpoint(label="frame") or {}
+        return [{"app_id": "", "tool": "edit_file", "args": {"path": str(p)}, "ok": True,
+                 "text": "changed (measured: git status of the workspace)"} for p in cp.get("paths") or []]
+
+    def frame(self, root: str | None = None) -> dict[str, Any]:
+        """The kernel's step frame for this agent's session -- built by the same prepare a Webbee step uses."""
+        import hashlib
+        ws = self.resolve_workspace(root)
+        pending = (self._exchange + self._changed_since_last_frame(root))[-_EXCHANGE_MAX:]
+        self._exchange = []
+        try:
+            if self._client is None:
+                raise RuntimeError("no Imperal client")
+            if not self._me:
+                self._me = str((self._vault("GET", "/v1/auth/me") or {}).get("imperal_id") or "")
+            if not self._me:
+                raise RuntimeError("the gateway did not say who you are")
+            try:
+                repo_key = self._repo_key(root, None)
+            except Exception:
+                repo_key = ""                   # the frame still comes; its code map says it is not synced
+            session = "mcp-" + self._me + "-" + hashlib.sha1(f"{ws}|{self._started}".encode()).hexdigest()[:12]
+            body = {"session_id": session, "step": self._frame_step + 1, "goal": self._task_goal,
+                    "items": self._task_items, "exchange": pending, "cwd": ws, "repo_root": ws,
+                    "repo_key": repo_key or ""}
+            ans = self._vault("POST", "/v1/memory/frame", body=body) or {}
+        except Exception as exc:
+            self._exchange = (pending + self._exchange)[-_EXCHANGE_MAX:]     # nothing is lost: the next frame sends it
+            return {"ok": False, "content": f"frame unavailable: {type(exc).__name__}: {str(exc)[:200]}"}
+        self._frame_step += 1
+        return {"ok": True, "frame": str(ans.get("frame") or ""), "tool_groups": list(ans.get("tool_groups") or []),
+                "session_id": session, "step": self._frame_step}
 
     def resolve_workspace(self, root: str | None = None) -> str:
         ws_real = self._default_root

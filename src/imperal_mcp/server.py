@@ -237,11 +237,21 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
     mcp = FastMCP("imperal", instructions=EXOSKELETON_INSTRUCTIONS)
     exo = ExoskeletonRuntime(workspace=workspace, client=client)
 
+    mcp._exoskeleton = exo      # the runtime behind the tools (tests read its exchange)
+
+    def _recorded(tool: str, result: Any, **kwargs: Any) -> Any:
+        """A code tool's call joins the exchange the agent's next frame carries (phase B)."""
+        import json as _json
+        ok = not (isinstance(result, dict) and (result.get("ok") is False or result.get("status") == "error"))
+        exo.record_call(tool, kwargs, ok=ok, text=_json.dumps(result, ensure_ascii=False, default=str)[:2000])
+        return result
+
     async def _exo_call(fn, **kwargs):
         """A code tool runs on a worker thread; its cloud calls run on this (the server's) loop."""
         import asyncio
         exo.loop = asyncio.get_running_loop()
-        return await asyncio.to_thread(fn, **kwargs)
+        out = await asyncio.to_thread(fn, **kwargs)
+        return _recorded(fn.__name__, out, **kwargs) if fn.__name__ not in ("frame", "task") else out
 
     @mcp.tool(
         title="Validate IR",
@@ -363,7 +373,7 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
     )
     def outline(path: str, root: str | None = None) -> dict:
         """Tree-sitter structural map of a source file (classes, functions, methods, major blocks with exact line ranges). Call before reading large files."""
-        return exo.outline(path=path, root=root)
+        return _recorded("outline", exo.outline(path=path, root=root), path=path, root=root)
 
     @mcp.tool(
         title="Read Symbol or Span",
@@ -371,7 +381,7 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
     )
     def read_symbol(path: str, name: str, root: str | None = None) -> dict:
         """Read ONE symbol (function, class, Class.method, block name) or line range ('L120-180') from a file without loading the whole file."""
-        return exo.read_symbol(path=path, name=name, root=root)
+        return _recorded("read_symbol", exo.read_symbol(path=path, name=name, root=root), path=path, name=name, root=root)
 
     @mcp.tool(
         title="Call Graph Slice",
@@ -396,6 +406,25 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
     async def impact_of_change(symbols: list[str], root: str | None = None, target: str | None = None) -> dict:
         """Given symbols you plan to modify, return the files and call sites that depend on them (code first, tests after, uses inside the same file listed apart)."""
         return await _exo_call(exo.impact_of_change, symbols=symbols, root=root, target=target)
+
+    @mcp.tool(
+        title="Task and Plan",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
+    )
+    async def task(goal: str, items: list[dict] | None = None, root: str | None = None) -> dict:
+        """Declare what you were asked and your plan (items: {content, status: pending|in_progress|completed}) -- the
+        kernel's frame holds you to it: an item is proven only by what the kernel measured."""
+        return await _exo_call(exo.task, goal=goal, items=items or [], root=root)
+
+    @mcp.tool(
+        title="Frame",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    async def frame(root: str | None = None) -> dict:
+        """The kernel's step frame for your work (the same frame a Webbee step gets): your task and plan with what is
+        proven, the code around your focus from the exact graph, what your change reaches, the world, your path.
+        Call it at the start and after each change."""
+        return await _exo_call(exo.frame, root=root)
 
     @mcp.tool(
         title="Check Syntax (Tree-sitter)",
