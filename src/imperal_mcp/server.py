@@ -251,7 +251,7 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         import asyncio
         exo.loop = asyncio.get_running_loop()
         out = await asyncio.to_thread(fn, **kwargs)
-        return _recorded(fn.__name__, out, **kwargs) if fn.__name__ not in ("frame", "task") else out
+        return _recorded(fn.__name__, out, **kwargs) if fn.__name__ not in ("frame", "task", "lens") else out
 
     @mcp.tool(
         title="Validate IR",
@@ -418,13 +418,30 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
 
     @mcp.tool(
         title="Frame",
-        annotations=ToolAnnotations(readOnlyHint=True),
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
     )
     async def frame(root: str | None = None) -> dict:
         """The kernel's step frame for your work (the same frame a Webbee step gets): your task and plan with what is
         proven, the code around your focus from the exact graph, what your change reaches, the world, your path.
         Call it at the start and after each change."""
         return await _exo_call(exo.frame, root=root)
+
+    @mcp.tool(title="State Lens", annotations=ToolAnnotations(readOnlyHint=True))
+    async def state_lens(section: str = "all", focus: str = "", offset: int = 0) -> dict:
+        """What the kernel holds for your session, by section (law, plan, reality, memory, conversation, path) -- where
+        the frame's counted lines point."""
+        return await _exo_call(exo.lens, tool="state_lens", args={"section": section, "focus": focus, "offset": offset})
+
+    @mcp.tool(title="Recall", annotations=ToolAnnotations(readOnlyHint=True))
+    async def recall(ref: str, offset: int = 0, n: int = 1) -> dict:
+        """A past request or answer of your session whole (ref = A<seq> / U<seq> / last_answers / all)."""
+        return await _exo_call(exo.lens, tool="recall", args={"ref": ref, "offset": offset, "n": n})
+
+    @mcp.tool(title="Vault Log Read", annotations=ToolAnnotations(readOnlyHint=True))
+    async def vault_log_read(ref: str, offset: int = 0, limit: int = 0, grep: str = "") -> dict:
+        """An output the kernel kept in the vault (ref = vault://logs/...), paged or grepped."""
+        return await _exo_call(exo.lens, tool="vault_log_read", args={"ref": ref, "offset": offset, "limit": limit,
+                                                                      "grep": grep})
 
     @mcp.tool(
         title="Check Syntax (Tree-sitter)",

@@ -636,3 +636,23 @@ def test_a_secret_folder_named_by_the_root_is_withheld(tmp_path: Path):
     exo.record_call("outline", {"path": "config", "root": "/home/me/.ssh"}, ok=True, text="Host x")
     exo.record_call("outline", {"root": "deploy/secrets"}, ok=True, text="pw")
     assert [e["text"] for e in exo._exchange] == ["(withheld: a secret file)"] * 2
+
+
+def test_recording_never_breaks_a_tool_and_withholds_when_it_cannot_check(tmp_path: Path, monkeypatch):
+    """Final review I6: an older imperal-sdk without SECRET_PATTERNS must not fail the code tools."""
+    import sys
+    monkeypatch.setitem(sys.modules, "imperal_sdk.code_index", None)      # import fails like an old sdk
+    exo = ExoskeletonRuntime(workspace=str(tmp_path))
+    exo.record_call("outline", {"path": "a.py"}, ok=True, text="def x(): pass")
+    assert exo._exchange[-1]["tool"] == "outline" and exo._exchange[-1]["text"] == "(withheld: secrets not checked)"
+
+
+def test_the_frame_pointers_reach_the_kernel_for_this_session(tmp_path: Path):
+    cloud = _Cloud({"/v1/auth/me": {"imperal_id": "imp_u_ME"},
+                    "/v1/memory/frame/lens": {"ok": True, "content": "reality rows"}})
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+    out = exo.lens("state_lens", {"section": "reality"})
+    assert out == {"ok": True, "content": "reality rows"}
+    body = [c[3] for c in cloud.calls if c[1] == "/v1/memory/frame/lens"][-1]
+    assert body["session_id"].startswith("mcp-imp_u_ME-") and body["tool"] == "state_lens"
+    assert body["args"] == {"section": "reality"}

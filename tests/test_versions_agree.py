@@ -29,3 +29,10 @@ def test_claude_plugin_files_match_pyproject():
     plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
     assert [p["version"] for p in market["plugins"] if p["name"] == "imperal-mcp"] == [v]
     assert plugin["version"] == v
+
+
+def test_the_pins_carry_what_the_frame_needs():
+    """Final review I6: SECRET_PATTERNS is in imperal-sdk 6.2.0+, the snapshot's changed paths in webbee 0.5.9+."""
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+    assert "imperal-sdk>=6.2.0" in text and "webbee>=0.5.9" in text

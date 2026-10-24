@@ -323,15 +323,18 @@ class ExoskeletonRuntime:
 
     def record_call(self, tool: str, args: dict | None, ok: bool = True, text: str = "") -> None:
         """One call of this agent's imperal-mcp tools, in the kernel's exchange shape -- the next frame carries it."""
-        import fnmatch
-        from imperal_sdk.code_index import SECRET_PATTERNS
-        from .mask import defensive_scrub
         a = {str(k): str(v)[:2000] for k, v in (args or {}).items() if v is not None}
-        joined = "/".join(x for x in (a.get("root", ""), a.get("path", "")) if x)    # a root may name the secret folder
-        if any(_secret_path(v, SECRET_PATTERNS, fnmatch) for v in list(a.values()) + [joined]):
-            body = "(withheld: a secret file)"          # never what a secret file holds
-        else:
-            body = str(defensive_scrub(str(text or "")[:2000]))
+        try:
+            import fnmatch
+            from imperal_sdk.code_index import SECRET_PATTERNS
+            from .mask import defensive_scrub
+            joined = "/".join(x for x in (a.get("root", ""), a.get("path", "")) if x)   # a root may name the folder
+            if any(_secret_path(v, SECRET_PATTERNS, fnmatch) for v in list(a.values()) + [joined]):
+                body = "(withheld: a secret file)"          # never what a secret file holds
+            else:
+                body = str(defensive_scrub(str(text or "")[:2000]))
+        except Exception:      # recording never breaks a tool; what cannot be checked is not sent
+            body = "(withheld: secrets not checked)"
         self._exchange.append({"app_id": "", "tool": str(tool), "args": a, "ok": bool(ok), "text": body})
         del self._exchange[:-_EXCHANGE_MAX]
 
@@ -361,6 +364,24 @@ class ExoskeletonRuntime:
         return [{"app_id": "", "tool": "edit_file", "args": {"path": str(p)}, "ok": True,
                  "text": "changed (measured: git status of the workspace)"} for p in cp.get("paths") or []]
 
+    def _session(self, ws: str) -> str:
+        import hashlib
+        if not self._me:
+            self._me = str((self._vault("GET", "/v1/auth/me") or {}).get("imperal_id") or "")
+        if not self._me:
+            raise RuntimeError("the gateway did not say who you are")
+        return "mcp-" + self._me + "-" + hashlib.sha1(f"{ws}|{self._started}".encode()).hexdigest()[:12]
+
+    def lens(self, tool: str, args: dict | None = None, root: str | None = None) -> dict[str, Any]:
+        """A pointer the frame gave (state_lens / recall / vault_log_read), answered by the kernel for this session."""
+        try:
+            if self._client is None:
+                raise RuntimeError("no Imperal client")
+            body = {"session_id": self._session(self.resolve_workspace(root)), "tool": str(tool), "args": dict(args or {})}
+            return self._vault("POST", "/v1/memory/frame/lens", body=body) or {}
+        except Exception as exc:
+            return {"ok": False, "content": f"{tool} unavailable: {type(exc).__name__}: {str(exc)[:200]}"}
+
     def frame(self, root: str | None = None) -> dict[str, Any]:
         """The kernel's step frame for this agent's session -- built by the same prepare a Webbee step uses."""
         import hashlib
@@ -370,15 +391,11 @@ class ExoskeletonRuntime:
         try:
             if self._client is None:
                 raise RuntimeError("no Imperal client")
-            if not self._me:
-                self._me = str((self._vault("GET", "/v1/auth/me") or {}).get("imperal_id") or "")
-            if not self._me:
-                raise RuntimeError("the gateway did not say who you are")
+            session = self._session(ws)
             try:
                 repo_key = self._repo_key(root, None)
             except Exception:
                 repo_key = ""                   # the frame still comes; its code map says it is not synced
-            session = "mcp-" + self._me + "-" + hashlib.sha1(f"{ws}|{self._started}".encode()).hexdigest()[:12]
             body = {"session_id": session, "step": self._frame_step + 1, "goal": self._task_goal,
                     "items": self._task_items, "exchange": pending, "cwd": ws, "repo_root": ws,
                     "repo_key": repo_key or ""}
