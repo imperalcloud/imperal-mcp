@@ -842,3 +842,21 @@ def test_a_server_line_range_is_read_from_the_file_text(tmp_path: Path, monkeypa
     out = exo.read_symbol("a.py", "L5-7", root="/home/ipw-repo", target="host:whm-jump")
     assert out["status"] == "ok" and out["start_line"] == 5 and out["end_line"] == 7
     assert "line 5\nline 6\nline 7" in out["rendered"] and "line 8" not in out["rendered"]
+
+
+def test_local_grep_never_follows_a_link_out_of_the_repo(tmp_path: Path):
+    import os
+    outside = tmp_path / "outside.py"
+    outside.write_text("SECRET_TOKEN = 'leak'\n")
+    repo = tmp_path / "r"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "a.py").write_text("x = 1\n")
+    os.symlink(outside, repo / "leak.py")
+    out = ExoskeletonRuntime(workspace=str(tmp_path)).grep_code("SECRET_TOKEN", root="r")
+    assert out["matches"] == []
+
+
+def test_a_server_grep_is_literal_only(tmp_path: Path):
+    out = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud()).grep_code("a.*b", root="/r", target="host:h",
+                                                                                 regex=True)
+    assert out["status"] == "error" and "exact text" in out["error"]

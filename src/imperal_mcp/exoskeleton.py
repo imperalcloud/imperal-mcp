@@ -946,7 +946,10 @@ class ExoskeletonRuntime:
             return {"status": "error", "error": "a nested quantifier (a repeated group around a repeated piece) can "
                                                 "run without end -- use a literal or a simpler pattern"}
         if target and target != "local":
-            params = {"q": pattern, "k": k, "regex": str(bool(regex)).lower()}
+            if regex:          # the vault is shared: literal only (a backtracking pattern cannot be told by its text)
+                return {"status": "error", "error": "a server's repo is searched by an exact text only -- pass the "
+                                                    "literal text"}
+            params = {"q": pattern, "k": k}
             if path_glob:
                 params["path_glob"] = path_glob
             ans = self._ask("GET", "/v1/memory/code/grep", root, target, params=params)
@@ -968,8 +971,12 @@ class ExoskeletonRuntime:
             rel = item["path"]
             if path_glob and not fnmatch.fnmatch(rel, path_glob):
                 continue
+            full = os.path.join(ws, rel)
+            real = os.path.realpath(full)
+            if os.path.islink(full) or not (real == ws or real.startswith(ws + os.sep)):
+                continue                       # never a link, never a path that resolves outside the repo
             try:
-                with open(os.path.join(ws, rel), encoding="utf-8", errors="replace") as f:
+                with open(full, encoding="utf-8", errors="replace") as f:
                     for n, line in enumerate(f, start=1):
                         part = line[:2000]
                         if (rx.search(part) if rx else pattern in part):
