@@ -543,3 +543,35 @@ def test_recall_outside_a_known_repo_keeps_every_note():
     res = {"data": {"snippets": [{"category": "repo_knowledge", "source_id": "x", "content": "a"},
                                  {"category": "repo_knowledge", "source_id": "y", "content": "b"}]}}
     assert [s["content"] for s in scope_recall(res, {"not-a-repo"})["data"]["snippets"]] == ["a", "b"]
+
+
+def test_vault_calls_run_on_the_server_loop(sample_workspace: Path):
+    """review I5: one event loop for the Imperal client (its token refresh lock assumes it) -- a code tool run on a
+    worker thread drives its cloud calls on the server's loop."""
+    import asyncio
+    import threading
+    loop = asyncio.new_event_loop()
+    threading.Thread(target=loop.run_forever, daemon=True).start()
+    seen = []
+
+    class _LoopCloud(_Cloud):
+        async def _request(self, method, path, **kw):
+            seen.append(asyncio.get_running_loop())
+            return await super()._request(method, path, **kw)
+    exo = ExoskeletonRuntime(workspace=str(sample_workspace), client=_LoopCloud({"/code/impact": _impact_answer()}))
+    exo.loop = loop
+    exo.impact_of_change(["compute_total"])
+    loop.call_soon_threadsafe(loop.stop)
+    assert seen and all(s is loop for s in seen)
+
+
+def test_orient_syncs_the_workspace_once(sample_workspace: Path):
+    cloud = _Cloud({"/code/profile": {"ok": True, "data": {"items": [{"repo_key": "rk1"}]}}})
+    ExoskeletonRuntime(workspace=str(sample_workspace), client=cloud).orient("compute total")
+    assert len([c for c in cloud.calls if c[1].endswith("/sync/plan")]) == 1
+
+
+def test_an_unknown_symbol_says_it_is_not_in_the_graph(sample_workspace: Path):
+    cloud = _Cloud({"/code/impact": {"ok": True, "repo_key": "rk1", "resolved": [], "data": {"items": []}}})
+    out = ExoskeletonRuntime(workspace=str(sample_workspace), client=cloud).impact_of_change(["no_such_fn"])
+    assert out["dependent_files"] == [] and out["note"] == "no_such_fn: not a definition in the graph"

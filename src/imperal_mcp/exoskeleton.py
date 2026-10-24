@@ -58,6 +58,7 @@ class TokenSavingsTracker:
 
 
 COARSE = "vault graph unavailable: links by name"
+_SYNC_REUSE_S = 3.0      # one tool call's questions share one sync of the workspace
 _PROFILE_KEYS = ("repo_key", "file_count", "def_count", "languages", "top_symbols")
 
 
@@ -77,6 +78,27 @@ def _off_thread(fn):
     if "error" in box:
         raise box["error"]
     return box.get("value")
+
+
+class _OnLoop:
+    """The Imperal client driven on one event loop -- the server's (its token-refresh lock assumes one loop): a
+    call from a worker thread's own loop is handed to that loop and awaited from here."""
+
+    def __init__(self, client: Any, runtime: Any) -> None:
+        self._client, self._runtime = client, runtime
+
+    async def _request(self, *args: Any, **kwargs: Any) -> Any:
+        import asyncio
+        loop = getattr(self._runtime, "loop", None)
+        if loop is None or not loop.is_running():
+            return await self._client._request(*args, **kwargs)
+        try:
+            if asyncio.get_running_loop() is loop:
+                return await self._client._request(*args, **kwargs)
+        except RuntimeError:
+            pass
+        fut = asyncio.run_coroutine_threadsafe(self._client._request(*args, **kwargs), loop)
+        return await asyncio.wrap_future(fut)
 
 
 def scope_recall(res: Any, repo_keys: Any) -> Any:
@@ -263,8 +285,10 @@ class ExoskeletonRuntime:
 
     def __init__(self, workspace_root: str | None = None, workspace: str | None = None, client: Any = None) -> None:
         self._default_root = _resolve_root(workspace or workspace_root)
-        self._client = client               # the Imperal client: code questions go to the vault graph through it
+        self._client = _OnLoop(client, self) if client is not None else None   # code questions go to the vault
+        self.loop = None                    # the server's event loop (set by the server): the client's one loop
         self._repo_keys: dict[str, str] = {}
+        self._synced_at: dict[str, float] = {}
         self.tracker = TokenSavingsTracker()
         self._indexers: dict[str, Any] = {}
         self._index_locks: dict[str, threading.Lock] = {}
@@ -415,10 +439,14 @@ class ExoskeletonRuntime:
             hits.sort(key=lambda r: alias not in (str(r.get("machine_label") or ""), str(r.get("ref") or "")))
             return str(hits[0].get("repo_key") or "") if hits else ""
         ws, svc, _ = self._get_indexer(root)
+        import time
+        if ws in self._repo_keys and time.monotonic() - self._synced_at.get(ws, 0.0) < _SYNC_REUSE_S:
+            return self._repo_keys[ws]          # one sync per tool call (orient asks the profile and the search)
         out = _off_thread(svc.sync_now) if hasattr(svc, "sync_now") else {}
         key = str((out or {}).get("repo_key") or "")
         if key:
             self._repo_keys[ws] = key
+            self._synced_at[ws] = time.monotonic()
         return key
 
     def _ask(self, method: str, path: str, root: str | None, target: str | None, *,
@@ -615,10 +643,13 @@ class ExoskeletonRuntime:
             items = list((ans.get("data") or {}).get("items") or [])
             files = [it.get("title") or it.get("id") for it in items]
             self._record_read("impact_of_change", returned_text=json.dumps(items, ensure_ascii=False))
-            return {"status": "ok", "workspace": root if target else self.resolve_workspace(root),
-                    "queried_symbols": sym_list, "dependent_files": files, "items": items,
-                    "same_file": ans.get("same_file") or [], "by_name_count": ans.get("by_name_count"),
-                    **self._vault_meta(ans)}
+            out = {"status": "ok", "workspace": root if target else self.resolve_workspace(root),
+                   "queried_symbols": sym_list, "dependent_files": files, "items": items,
+                   "same_file": ans.get("same_file") or [], "by_name_count": ans.get("by_name_count"),
+                   **self._vault_meta(ans)}
+            if "resolved" in ans and not ans.get("resolved"):
+                out["note"] = f"{', '.join(sym_list)}: not a definition in the graph"     # not "0 dependents"
+            return out
         return self._remote_unavailable(target, root) or {**self._local_impact_of_change(symbols, root), "coarse": COARSE}
 
     def _local_impact_of_change(self, symbols: list[str] | str, root: str | None = None) -> dict[str, Any]:

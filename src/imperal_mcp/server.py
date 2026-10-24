@@ -237,6 +237,12 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
     mcp = FastMCP("imperal", instructions=EXOSKELETON_INSTRUCTIONS)
     exo = ExoskeletonRuntime(workspace=workspace, client=client)
 
+    async def _exo_call(fn, **kwargs):
+        """A code tool runs on a worker thread; its cloud calls run on this (the server's) loop."""
+        import asyncio
+        exo.loop = asyncio.get_running_loop()
+        return await asyncio.to_thread(fn, **kwargs)
+
     @mcp.tool(
         title="Validate IR",
         annotations=ToolAnnotations(readOnlyHint=True),
@@ -324,23 +330,23 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         title="Orient on Task",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def orient(query: str, k: int = 8, root: str | None = None, target: str | None = None) -> dict:
+    async def orient(query: str, k: int = 8, root: str | None = None, target: str | None = None) -> dict:
         """One-call orientation for a task: repo profile + top ranked symbols/snippets from the code graph in Imperal's vault. Call FIRST instead of scanning files blind. `target`: local (default), ssh:<connection_id> or host:<alias> with `root` = the repo path there."""
-        return exo.orient(query=query, k=k, root=root, target=target)
+        return await _exo_call(exo.orient, query=query, k=k, root=root, target=target)
 
     @mcp.tool(
         title="Repository Profile",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def repo_profile(root: str | None = None, target: str | None = None) -> dict:
+    async def repo_profile(root: str | None = None, target: str | None = None) -> dict:
         """Structured profile of the repository (languages, file count, the most-used definitions) from the code graph."""
-        return exo.repo_profile(root=root, target=target)
+        return await _exo_call(exo.repo_profile, root=root, target=target)
 
     @mcp.tool(
         title="Search Code Graph",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def search_code(
+    async def search_code(
         query: str,
         k: int = 10,
         kind: str | None = None,
@@ -349,7 +355,7 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         target: str | None = None,
     ) -> dict:
         """Search the code graph: exact names, words and meaning (each hit says how sure it is). Prefer over grep/find."""
-        return exo.search_code(query=query, k=k, kind=kind, path_glob=path_glob, root=root, target=target)
+        return await _exo_call(exo.search_code, query=query, k=k, kind=kind, path_glob=path_glob, root=root, target=target)
 
     @mcp.tool(
         title="Code File Outline",
@@ -371,25 +377,25 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         title="Call Graph Slice",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def graph_slice(symbols: list[str], depth: int = 1, root: str | None = None, target: str | None = None) -> dict:
+    async def graph_slice(symbols: list[str], depth: int = 1, root: str | None = None, target: str | None = None) -> dict:
         """Return definition locations, signatures, direct callers, and callees for a batch of symbols from the code graph."""
-        return exo.graph_slice(symbols=symbols, depth=depth, root=root, target=target)
+        return await _exo_call(exo.graph_slice, symbols=symbols, depth=depth, root=root, target=target)
 
     @mcp.tool(
         title="Contract Slice",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def contract_slice(symbols: list[str], root: str | None = None, target: str | None = None) -> dict:
+    async def contract_slice(symbols: list[str], root: str | None = None, target: str | None = None) -> dict:
         """Return the endpoints and route links across the user's repos, plus the given symbols with their callers."""
-        return exo.contract_slice(symbols=symbols, root=root, target=target)
+        return await _exo_call(exo.contract_slice, symbols=symbols, root=root, target=target)
 
     @mcp.tool(
         title="Impact of Change",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def impact_of_change(symbols: list[str], root: str | None = None, target: str | None = None) -> dict:
+    async def impact_of_change(symbols: list[str], root: str | None = None, target: str | None = None) -> dict:
         """Given symbols you plan to modify, return the files and call sites that depend on them (code first, tests after, uses inside the same file listed apart)."""
-        return exo.impact_of_change(symbols=symbols, root=root, target=target)
+        return await _exo_call(exo.impact_of_change, symbols=symbols, root=root, target=target)
 
     @mcp.tool(
         title="Check Syntax (Tree-sitter)",
