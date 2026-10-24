@@ -726,3 +726,49 @@ def test_a_host_repo_in_the_catalog_never_waits_for_its_first_sync_here(tmp_path
     assert exo._repo_key("/home/ipw-repo", "host:whm-jump") == "rk_cat"
     assert time.monotonic() - t < 1.0
     gate.set()
+
+
+# ── owner 2026-10-25: a folder that is no repository is never indexed whole; frame and file reads follow the target ──
+
+def test_a_folder_that_is_no_repository_is_never_indexed(tmp_path: Path):
+    import pytest
+    from imperal_mcp.exoskeleton import NotARepositoryError
+    (tmp_path / "Photos").mkdir()
+    (tmp_path / "Photos" / "gallery.js").write_text("function show() {}\n")
+    exo = ExoskeletonRuntime(workspace=str(tmp_path))
+    with pytest.raises(NotARepositoryError) as e:
+        exo.search_code("show")
+    assert "not a repository" in str(e.value) and "root=" in str(e.value) and exo._indexers == {}
+
+
+def test_frame_takes_the_repo_of_its_target(tmp_path: Path, monkeypatch):
+    import webbee.tools as wt
+
+    async def fake_remote_sync(client, host, root, paths):
+        return {"repo_key": "rk_remote"}
+    monkeypatch.setattr(wt, "remote_sync", fake_remote_sync)
+    cloud = _frame_cloud()
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+    out = exo.frame(root="/home/ipw-repo", target="host:whm-jump")
+    body = _frame_body(cloud)
+    assert out["ok"] and body["repo_key"] == "rk_remote" and body["repo_root"] == "/home/ipw-repo"
+
+
+def test_outline_and_read_symbol_of_a_host_target_read_the_graph(tmp_path: Path, monkeypatch):
+    import webbee.tools as wt
+
+    async def fake_remote_sync(client, host, root, paths):
+        return {"repo_key": "rk_remote"}
+    monkeypatch.setattr(wt, "remote_sync", fake_remote_sync)
+    cloud = _Cloud({"/v1/memory/code/outline": {"ok": True, "data": {"items": [
+                        {"name": "run", "kind": "function", "start": 3, "end": 9, "depth": 0}]}, "synced_at": 1.0},
+                    "/v1/memory/code/slice": {"ok": True, "data": {"items": [
+                        {"path": "a.py", "qualname": "run", "start_line": 3, "end_line": 9,
+                         "text": "def run():\n    return 1\n"}]}, "synced_at": 1.0}})
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+    ol = exo.outline("a.py", root="/home/ipw-repo", target="host:whm-jump")
+    assert ol["symbols"][0]["name"] == "run" and ol["source"] == "vault graph"
+    rs = exo.read_symbol("a.py", "run", root="/home/ipw-repo", target="host:whm-jump")
+    assert "def run()" in rs["rendered"] and rs["start_line"] == 3 and rs["source"] == "vault graph"
+    slice_call = [c for c in cloud.calls if c[1] == "/v1/memory/code/slice"][-1]
+    assert slice_call[3]["symbols"] == ["a.py::run"]

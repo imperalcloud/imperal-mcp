@@ -219,6 +219,23 @@ def _normalize_search_matches(
     return normalized[:k]
 
 
+class NotARepositoryError(ValueError):
+    """The folder asked about is no repository (no .git, no project manifest): never indexed or synced whole."""
+
+
+def _is_repository(path: str) -> bool:
+    try:
+        from webbee.intel.service import is_repository
+        return is_repository(path)
+    except ImportError:          # webbee < 0.5.11: the same rule
+        try:
+            names = set(os.listdir(path))
+        except OSError:
+            return False
+        return ".git" in names or bool(names & {"pyproject.toml", "setup.cfg", "jsconfig.json", "package.json",
+                                                  "setup.py", "requirements.txt", "tsconfig.json"})
+
+
 class OutsideWorkspaceError(ValueError):
     """Raised when a relative path escapes the configured workspace root."""
 
@@ -384,22 +401,25 @@ class ExoskeletonRuntime:
         except Exception as exc:
             return {"ok": False, "content": f"{tool} unavailable: {type(exc).__name__}: {str(exc)[:200]}"}
 
-    def frame(self, root: str | None = None) -> dict[str, Any]:
-        """The kernel's step frame for this agent's session -- built by the same prepare a Webbee step uses."""
-        import hashlib
-        ws = self.resolve_workspace(root)
-        pending = (self._exchange + self._changed_since_last_frame(root))[-_EXCHANGE_MAX:]
+    def frame(self, root: str | None = None, target: str | None = None) -> dict[str, Any]:
+        """The kernel's step frame for this agent's session -- built by the same prepare a Webbee step uses. ``root`` /
+        ``target`` name the repo the work is in (a server's repo by ``target="host:<alias>"``), as the code tools do."""
+        remote = bool(target and target != "local")
+        ws = self.resolve_workspace(None)               # the session is this agent's workspace
+        where = str(root or "") if remote else self.resolve_workspace(root)
+        changed = [] if remote else self._changed_since_last_frame(root)   # a snapshot measures only local edits
+        pending = (self._exchange + changed)[-_EXCHANGE_MAX:]
         self._exchange = []
         try:
             if self._client is None:
                 raise RuntimeError("no Imperal client")
             session = self._session(ws)
             try:
-                repo_key = self._repo_key(root, None)
+                repo_key = self._repo_key(root, target)
             except Exception:
                 repo_key = ""                   # the frame still comes; its code map says it is not synced
             body = {"session_id": session, "step": self._frame_step + 1, "goal": self._task_goal,
-                    "items": self._task_items, "exchange": pending, "cwd": ws, "repo_root": ws,
+                    "items": self._task_items, "exchange": pending, "cwd": where, "repo_root": where,
                     "repo_key": repo_key or ""}
             ans = self._vault("POST", "/v1/memory/frame", body=body) or {}
         except Exception as exc:
@@ -472,6 +492,10 @@ class ExoskeletonRuntime:
         from webbee.repo import compute_repo_key
 
         ws = self.resolve_workspace(root)
+        if not _is_repository(ws):
+            # owner 2026-10-25: a home folder or a folder of projects is never indexed or synced whole
+            raise NotARepositoryError(f"{ws} is not a repository (no .git, no project manifest) -- pass root=<a "
+                                      "repository inside it>")
         with self._guard_lock:
             lock = self._index_locks.get(ws)
             if lock is None:
@@ -900,7 +924,35 @@ class ExoskeletonRuntime:
         )
         return {"status": "ok", "workspace": ws, **combined}
 
-    def outline(self, path: str, root: str | None = None) -> dict[str, Any]:
+    def _remote_outline(self, path: str, root: str | None, target: str) -> dict[str, Any]:
+        ans = self._ask("GET", "/v1/memory/code/outline", root, target, params={"path": path})
+        if ans is None:
+            return self._remote_unavailable(target, root)
+        nodes = list((ans.get("data") or {}).get("items") or ans.get("nodes") or [])
+        rendered = f"OUTLINE of {path} (from the code graph):\n" + "\n".join(
+            f"{n.get('start')}-{n.get('end')} {n.get('kind')} {n.get('name')}" for n in nodes if isinstance(n, dict))
+        return {"status": "ok", "workspace": root, "path": path, "symbol_count": len(nodes), "symbols": nodes,
+                "rendered": rendered, **self._vault_meta(ans)}
+
+    def _remote_read_symbol(self, path: str, name: str, root: str | None, target: str) -> dict[str, Any]:
+        if re.fullmatch(r"L?\d+-\d+", str(name or "")):
+            return {"status": "unavailable", "content": "a line range of a server's file is not in the code graph -- "
+                                                        "read a definition by its name"}
+        ans = self._ask("POST", "/v1/memory/code/slice", root, target, body={"symbols": [f"{path}::{name}"], "depth": 1})
+        items = [i for i in ((ans or {}).get("data") or {}).get("items") or [] if isinstance(i, dict) and i.get("text")]
+        if not items:
+            return self._remote_unavailable(target, root) if ans is None else {
+                "status": "error", "path": path, "symbol": name, "error": f"{name} is not in the code graph of {path}"}
+        it = items[0]
+        rendered = (f"[{it.get('path')} lines {it.get('start_line')}-{it.get('end_line')}, from the code graph]\n"
+                    f"{it.get('text')}")
+        return {"status": "ok", "workspace": root, "path": it.get("path"), "symbol": it.get("qualname") or name,
+                "start_line": it.get("start_line"), "end_line": it.get("end_line"), "rendered": rendered,
+                **self._vault_meta(ans)}
+
+    def outline(self, path: str, root: str | None = None, target: str | None = None) -> dict[str, Any]:
+        if target and target != "local":
+            return self._remote_outline(path, root, target)
         _ensure_webbee_importable()
         from webbee.intel.outline import outline as _outline, render_outline
 
@@ -935,7 +987,9 @@ class ExoskeletonRuntime:
             "rendered": rendered,
         }
 
-    def read_symbol(self, path: str, name: str, root: str | None = None) -> dict[str, Any]:
+    def read_symbol(self, path: str, name: str, root: str | None = None, target: str | None = None) -> dict[str, Any]:
+        if target and target != "local":
+            return self._remote_read_symbol(path, name, root, target)
         _ensure_webbee_importable()
         from webbee.intel.outline import (
             outline as _outline,

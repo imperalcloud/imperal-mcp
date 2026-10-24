@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .config import Config
 from . import auth
-from .exoskeleton import EXOSKELETON_INSTRUCTIONS, ExoskeletonRuntime, MissingCodeDependencyError
+from .exoskeleton import EXOSKELETON_INSTRUCTIONS, ExoskeletonRuntime, MissingCodeDependencyError, NotARepositoryError
 
 _CLAUDE_MD_START = "<!-- IMPERAL-MCP-EXOSKELETON:START -->"
 _CLAUDE_MD_END = "<!-- IMPERAL-MCP-EXOSKELETON:END -->"
@@ -326,6 +326,10 @@ def main(argv=None) -> None:
             print(json.dumps({"status": "ok", "workspace": prof.get("workspace"), "profile": prof.get("profile")}, indent=2))
         except MissingCodeDependencyError as exc:
             print(json.dumps({"status": "error", "workspace": exo.resolve_workspace(), "error": str(exc)}, indent=2))
+        except NotARepositoryError as exc:
+            # the setup is fine; a folder of projects has no profile of its own (its repositories do)
+            print(json.dumps({"status": "ok", "workspace": exo.resolve_workspace(), "profile": None,
+                              "note": str(exc)}, indent=2))
         return
 
     from .server import build_server

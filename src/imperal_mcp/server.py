@@ -371,17 +371,18 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         title="Code File Outline",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def outline(path: str, root: str | None = None) -> dict:
+    def outline(path: str, root: str | None = None, target: str | None = None) -> dict:
         """Tree-sitter structural map of a source file (classes, functions, methods, major blocks with exact line ranges). Call before reading large files."""
-        return _recorded("outline", exo.outline(path=path, root=root), path=path, root=root)
+        return _recorded("outline", exo.outline(path=path, root=root, target=target), path=path, root=root, target=target)
 
     @mcp.tool(
         title="Read Symbol or Span",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def read_symbol(path: str, name: str, root: str | None = None) -> dict:
+    def read_symbol(path: str, name: str, root: str | None = None, target: str | None = None) -> dict:
         """Read ONE symbol (function, class, Class.method, block name) or line range ('L120-180') from a file without loading the whole file."""
-        return _recorded("read_symbol", exo.read_symbol(path=path, name=name, root=root), path=path, name=name, root=root)
+        return _recorded("read_symbol", exo.read_symbol(path=path, name=name, root=root, target=target), path=path, name=name,
+                         root=root, target=target)
 
     @mcp.tool(
         title="Call Graph Slice",
@@ -420,11 +421,11 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         title="Frame",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
     )
-    async def frame(root: str | None = None) -> dict:
+    async def frame(root: str | None = None, target: str | None = None) -> dict:
         """The kernel's step frame for your work (the same frame a Webbee step gets): your task and plan with what is
         proven, the code around your focus from the exact graph, what your change reaches, the world, your path.
         Call it at the start and after each change."""
-        return await _exo_call(exo.frame, root=root)
+        return await _exo_call(exo.frame, root=root, target=target)
 
     @mcp.tool(title="State Lens", annotations=ToolAnnotations(readOnlyHint=True))
     async def state_lens(section: str = "all", focus: str = "", offset: int = 0) -> dict:
