@@ -4,6 +4,13 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.6.4 — 2026-10-25 — a server read never hangs the server
+
+### Fixed
+- **`outline` / `read_symbol` run on a worker thread** like every code tool: in 0.6.3 a read of a server's file after
+  another code call could wait for the very event loop it blocked, and the whole MCP server hung.
+- A call on a server is recorded with its full path there, so the kernel's frame follows the work to that repo.
+
 ## 0.6.3 — 2026-10-25 — never a whole folder; frame and file reads follow the target
 
 ### Changed
