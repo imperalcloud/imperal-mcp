@@ -629,3 +629,10 @@ def test_a_secret_directory_or_a_windows_path_is_withheld_too(tmp_path: Path):
     exo.record_call("read_symbol", {"path": "C:\\Users\\me\\.ssh\\config", "name": "L1-3"}, ok=True, text="Host x")
     exo.record_call("read_symbol", {"path": "keys\\ID_RSA", "name": "L1-3"}, ok=True, text="-----BEGIN")
     assert [e["text"] for e in exo._exchange] == ["(withheld: a secret file)"] * 3
+
+
+def test_a_secret_folder_named_by_the_root_is_withheld(tmp_path: Path):
+    exo = ExoskeletonRuntime(workspace=str(tmp_path))
+    exo.record_call("outline", {"path": "config", "root": "/home/me/.ssh"}, ok=True, text="Host x")
+    exo.record_call("outline", {"root": "deploy/secrets"}, ok=True, text="pw")
+    assert [e["text"] for e in exo._exchange] == ["(withheld: a secret file)"] * 2

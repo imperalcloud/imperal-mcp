@@ -292,7 +292,7 @@ def _secret_path(value: str, patterns: tuple, fnmatch: Any) -> bool:
         return False
     files = [p for p in patterns if not p.endswith("/")]
     dirs = {p.rstrip("/") for p in patterns if p.endswith("/")}
-    return any(fnmatch.fnmatchcase(parts[-1], pat) for pat in files) or any(d in dirs for d in parts[:-1])
+    return any(fnmatch.fnmatchcase(parts[-1], pat) for pat in files) or any(d in dirs for d in parts)
 
 
 class ExoskeletonRuntime:
@@ -327,7 +327,8 @@ class ExoskeletonRuntime:
         from imperal_sdk.code_index import SECRET_PATTERNS
         from .mask import defensive_scrub
         a = {str(k): str(v)[:2000] for k, v in (args or {}).items() if v is not None}
-        if any(_secret_path(v, SECRET_PATTERNS, fnmatch) for v in a.values()):
+        joined = "/".join(x for x in (a.get("root", ""), a.get("path", "")) if x)    # a root may name the secret folder
+        if any(_secret_path(v, SECRET_PATTERNS, fnmatch) for v in list(a.values()) + [joined]):
             body = "(withheld: a secret file)"          # never what a secret file holds
         else:
             body = str(defensive_scrub(str(text or "")[:2000]))
