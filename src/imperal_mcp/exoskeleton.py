@@ -282,6 +282,7 @@ Follow these operating rules to navigate repositories accurately, minimize unnec
 
 
 _EXCHANGE_MAX = 60     # the gateway's bound on one frame's exchange
+_HOST_SYNC_REUSE_S = 60.0   # a remote repo is listed over SFTP at most once a minute (only changed files are read)
 
 
 def _secret_path(value: str, patterns: tuple, fnmatch: Any) -> bool:
@@ -318,6 +319,7 @@ class ExoskeletonRuntime:
         self._me = ""
         self._started = time.time()
         self._baselined: set[str] = set()
+        self._host_syncs: dict[str, threading.Thread] = {}
 
     # -- the kernel's frame (phase B, spec 2026-10-24 §4.2) -------------------------------------------
 
@@ -539,16 +541,69 @@ class ExoskeletonRuntime:
             pass
         return keys
 
+    def _catalog_key(self, alias: str, root: str) -> str:
+        """The vault catalog's repo at ``root`` on the machine ``alias`` names ("" when none)."""
+        try:
+            repos = (self._vault("GET", "/v1/memory/code/repos") or {}).get("repos") or []
+        except Exception:
+            return ""
+        want = str(root or "").rstrip("/")
+        hits = [r for r in repos if str(r.get("root_path") or "").rstrip("/") == want]
+        hits.sort(key=lambda r: alias not in (str(r.get("machine_label") or ""), str(r.get("ref") or "")))
+        return str(hits[0].get("repo_key") or "") if hits else ""
+
+    def _sync_host(self, alias: str, root: str) -> str:
+        """A repo on a server the user reaches with their own ssh (``host:<alias>``) is synced into the vault by
+        webbee's SFTP sync (nothing written there; only changed files are read) -- design 2026-10-24 §5.1. The first
+        sync is waited for (no key without it); after it a question answers at once and a refresh runs behind, at
+        most once per ``_HOST_SYNC_REUSE_S`` (a sync lists the tree over SFTP: ~1 min live); every answer carries
+        ``synced_at``. "" when it cannot be synced (the catalog then answers)."""
+        import time
+        memo = f"host:{alias}:{root}"
+        known = self._repo_keys.get(memo, "")
+        if not known and memo not in self._synced_at:
+            known = self._catalog_key(alias, root)         # synced before (by any source): answer now, refresh behind
+            if known:
+                self._repo_keys[memo] = known
+        if known and time.monotonic() - self._synced_at.get(memo, 0.0) < _HOST_SYNC_REUSE_S:
+            return known
+        running = self._host_syncs.get(memo)
+        if known:
+            if running is None or not running.is_alive():
+                t = threading.Thread(target=self._run_host_sync, args=(memo, alias, root), daemon=True,
+                                     name=f"imperal-mcp-host-sync-{alias}")
+                self._host_syncs[memo] = t
+                t.start()
+            return known
+        self._run_host_sync(memo, alias, root)
+        return self._repo_keys.get(memo, "")
+
+    def _run_host_sync(self, memo: str, alias: str, root: str) -> None:
+        import asyncio
+        import time
+        try:
+            _ensure_webbee_importable()
+            from webbee import tools as wt
+            client = self._client
+            out = _off_thread(lambda: asyncio.run(wt.remote_sync(client, alias, root, []))) or {}
+        except Exception:
+            return
+        key = str(out.get("repo_key") or "")
+        if key:
+            self._repo_keys[memo] = key
+        self._synced_at[memo] = time.monotonic()      # a failed refresh waits a window too: never a sync per question
+
     def _repo_key(self, root: str | None, target: str | None) -> str:
         """The vault's key of the repo asked about: a remote target's repo from the catalog (root path, machine);
         the local workspace synced first (its edits reach the vault before the question)."""
         if target and target != "local":
             alias = target.split(":", 1)[-1]
             want = str(root or "").rstrip("/")
-            repos = (self._vault("GET", "/v1/memory/code/repos") or {}).get("repos") or []
-            hits = [r for r in repos if str(r.get("root_path") or "").rstrip("/") == want]
-            hits.sort(key=lambda r: alias not in (str(r.get("machine_label") or ""), str(r.get("ref") or "")))
-            return str(hits[0].get("repo_key") or "") if hits else ""
+            if target.startswith("host:") and want:
+                key = self._sync_host(alias, want)
+                if key:
+                    return key
+            return self._catalog_key(alias, want)
         ws, svc, _ = self._get_indexer(root)
         import time
         if ws in self._repo_keys and time.monotonic() - self._synced_at.get(ws, 0.0) < _SYNC_REUSE_S:

@@ -656,3 +656,73 @@ def test_the_frame_pointers_reach_the_kernel_for_this_session(tmp_path: Path):
     body = [c[3] for c in cloud.calls if c[1] == "/v1/memory/frame/lens"][-1]
     assert body["session_id"].startswith("mcp-imp_u_ME-") and body["tool"] == "state_lens"
     assert body["args"] == {"section": "reality"}
+
+
+# ── a remote repo (host:<alias>) is synced before the question, like the local one (design §5.1) ──
+
+def test_a_host_target_syncs_its_repo_before_the_question(tmp_path: Path, monkeypatch):
+    import webbee.tools as wt
+    calls = []
+
+    async def fake_remote_sync(client, host, root, paths):
+        calls.append((host, root, list(paths)))
+        return {"repo_key": "rk_remote", "root": root, "host": host}
+    monkeypatch.setattr(wt, "remote_sync", fake_remote_sync)
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud())
+    assert exo._repo_key("/home/ipw-repo", "host:whm-jump") == "rk_remote"
+    assert exo._repo_key("/home/ipw-repo", "host:whm-jump") == "rk_remote"       # within the window: no second sync
+    assert calls == [("whm-jump", "/home/ipw-repo", [])]
+
+
+def test_a_host_sync_that_fails_falls_back_to_the_catalog(tmp_path: Path, monkeypatch):
+    import webbee.tools as wt
+
+    async def broken(client, host, root, paths):
+        return {"repo_key": "", "partial_reason": "needs interactive login"}
+    monkeypatch.setattr(wt, "remote_sync", broken)
+    cloud = _Cloud({"/v1/memory/code/repos": {"repos": [{"repo_key": "rk_cat", "root_path": "/home/ipw-repo",
+                                                          "machine_label": "whm-jump"}]}})
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+    assert exo._repo_key("/home/ipw-repo", "host:whm-jump") == "rk_cat"
+
+
+def test_a_known_host_repo_answers_at_once_while_it_refreshes(tmp_path: Path, monkeypatch):
+    """A remote sync lists the tree over SFTP (~1 min live); after the first, a question never waits for it."""
+    import threading
+    import webbee.tools as wt
+    from imperal_mcp import exoskeleton as ex
+    gate, calls = threading.Event(), []
+
+    async def slow_sync(client, host, root, paths):
+        calls.append(1)
+        if len(calls) > 1:
+            gate.wait(5)
+        return {"repo_key": "rk_remote"}
+    monkeypatch.setattr(wt, "remote_sync", slow_sync)
+    monkeypatch.setattr(ex, "_HOST_SYNC_REUSE_S", 0.0)
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud())
+    assert exo._repo_key("/home/ipw-repo", "host:whm-jump") == "rk_remote"      # the first sync is waited for
+    import time
+    t = time.monotonic()
+    assert exo._repo_key("/home/ipw-repo", "host:whm-jump") == "rk_remote"      # the refresh runs behind
+    assert time.monotonic() - t < 1.0
+    gate.set()
+
+
+def test_a_host_repo_in_the_catalog_never_waits_for_its_first_sync_here(tmp_path: Path, monkeypatch):
+    import threading
+    import time
+    import webbee.tools as wt
+    gate = threading.Event()
+
+    async def slow_sync(client, host, root, paths):
+        gate.wait(5)
+        return {"repo_key": "rk_cat"}
+    monkeypatch.setattr(wt, "remote_sync", slow_sync)
+    cloud = _Cloud({"/v1/memory/code/repos": {"repos": [{"repo_key": "rk_cat", "root_path": "/home/ipw-repo",
+                                                          "machine_label": "whm-jump"}]}})
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+    t = time.monotonic()
+    assert exo._repo_key("/home/ipw-repo", "host:whm-jump") == "rk_cat"
+    assert time.monotonic() - t < 1.0
+    gate.set()
