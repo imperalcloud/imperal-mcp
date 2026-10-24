@@ -613,3 +613,11 @@ def test_a_failed_frame_keeps_the_exchange_for_the_next(tmp_path: Path):
     out = exo.frame()
     assert out["ok"] is False and out["content"].startswith("frame unavailable:")
     assert [e["tool"] for e in exo._exchange] == ["search_code"]
+
+
+def test_the_exchange_never_carries_a_secret_file_or_raw_pii(tmp_path: Path):
+    exo = ExoskeletonRuntime(workspace=str(tmp_path))
+    exo.record_call("read_symbol", {"path": "config/.env.local", "name": "L1-5"}, ok=True, text="DB_PASS=hunter2")
+    exo.record_call("search_code", {"query": "mail"}, ok=True, text="owner: someone@example.com")
+    assert exo._exchange[0]["text"] == "(withheld: a secret file)" and "hunter2" not in str(exo._exchange[0])
+    assert "someone@example.com" not in exo._exchange[1]["text"]

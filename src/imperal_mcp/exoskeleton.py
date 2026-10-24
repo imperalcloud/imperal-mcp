@@ -312,8 +312,16 @@ class ExoskeletonRuntime:
 
     def record_call(self, tool: str, args: dict | None, ok: bool = True, text: str = "") -> None:
         """One call of this agent's imperal-mcp tools, in the kernel's exchange shape -- the next frame carries it."""
+        import fnmatch
+        from imperal_sdk.code_index import SECRET_PATTERNS
+        from .mask import defensive_scrub
         a = {str(k): str(v)[:2000] for k, v in (args or {}).items() if v is not None}
-        self._exchange.append({"app_id": "", "tool": str(tool), "args": a, "ok": bool(ok), "text": str(text or "")[:2000]})
+        names = [os.path.basename(v).lower() for v in a.values() if "/" in v or "." in v]
+        if any(fnmatch.fnmatchcase(n, pat) for n in names for pat in SECRET_PATTERNS if not pat.endswith("/")):
+            body = "(withheld: a secret file)"          # never what a secret file holds
+        else:
+            body = str(defensive_scrub(str(text or "")[:2000]))
+        self._exchange.append({"app_id": "", "tool": str(tool), "args": a, "ok": bool(ok), "text": body})
         del self._exchange[:-_EXCHANGE_MAX]
 
     def task(self, goal: str, items: list | None = None, root: str | None = None) -> dict[str, Any]:
