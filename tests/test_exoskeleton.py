@@ -781,3 +781,20 @@ def test_a_server_call_is_recorded_with_its_full_path(tmp_path: Path):
     exo.record_call("read_symbol", {"path": "core/a.py", "name": "run"})
     assert exo._exchange[0]["args"]["path"] == "/home/ipw-repo/core/a.py"
     assert exo._exchange[1]["args"]["path"] == "core/a.py"
+
+
+def test_an_unavailable_answer_names_its_real_cause(tmp_path: Path, monkeypatch):
+    """Live 2026-10-25: "no synced copy" hid what failed -- the repo WAS synced; the answer now says why."""
+    import webbee.tools as wt
+
+    async def fake_remote_sync(client, host, root, paths):
+        return {"repo_key": "rk_remote"}
+    monkeypatch.setattr(wt, "remote_sync", fake_remote_sync)
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud())
+
+    def boom(*a, **k):
+        raise RuntimeError("the gateway timed out")
+    monkeypatch.setattr(exo, "_vault", boom)
+    out = exo.search_code("x", root="/home/ipw-repo", target="host:whm-jump")
+    assert out["status"] == "unavailable" and "the gateway timed out" in out["content"]
+    assert "no synced copy" not in out["content"]

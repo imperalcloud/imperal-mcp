@@ -645,20 +645,25 @@ class ExoskeletonRuntime:
 
     def _ask(self, method: str, path: str, root: str | None, target: str | None, *,
              params: dict | None = None, body: dict | None = None) -> dict | None:
-        """The vault's answer, or None (no client, not synced, unreachable) -- the caller falls back, marked."""
+        """The vault's answer, or None (no client, not synced, unreachable) -- the caller falls back, marked; why it
+        is None is kept in ``_last_miss`` (an unavailable answer names it, never a guess)."""
         if self._client is None:
+            self._last_miss = "this session has no Imperal client"
             return None
         try:
             key = self._repo_key(root, target)
             if not key:
+                self._last_miss = f"the vault graph holds no synced copy of {root} on {target or 'local'}"
                 return None
             if body is not None:
                 ans = self._vault(method, path, body={**body, "repo_key": key})
             else:
                 ans = self._vault(method, path, params={**(params or {}), "repo_key": key})
-        except Exception:
+        except Exception as exc:
+            self._last_miss = f"the vault graph could not be asked: {type(exc).__name__}: {str(exc)[:300]}"
             return None
         if not isinstance(ans, dict) or ans.get("ok") is False:
+            self._last_miss = f"the vault graph answered: {str((ans or {}).get('content') or ans)[:300]}"
             return None
         return ans
 
@@ -666,10 +671,10 @@ class ExoskeletonRuntime:
     def _vault_meta(ans: dict) -> dict[str, Any]:
         return {"source": "vault graph", "repo_key": ans.get("repo_key"), "synced_at": ans.get("synced_at")}
 
-    @staticmethod
-    def _remote_unavailable(target: str | None, root: str | None) -> dict[str, Any] | None:
+    def _remote_unavailable(self, target: str | None, root: str | None) -> dict[str, Any] | None:
         if target and target != "local":
-            return {"status": "unavailable", "content": f"the vault graph holds no synced copy of {root} on {target}"}
+            return {"status": "unavailable", "content": getattr(self, "_last_miss", "") or
+                    f"the vault graph holds no synced copy of {root} on {target}"}
         return None
 
     @staticmethod
