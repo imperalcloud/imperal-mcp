@@ -772,3 +772,12 @@ def test_outline_and_read_symbol_of_a_host_target_read_the_graph(tmp_path: Path,
     assert "def run()" in rs["rendered"] and rs["start_line"] == 3 and rs["source"] == "vault graph"
     slice_call = [c for c in cloud.calls if c[1] == "/v1/memory/code/slice"][-1]
     assert slice_call[3]["symbols"] == ["a.py::run"]
+
+
+def test_a_server_call_is_recorded_with_its_full_path(tmp_path: Path):
+    """The kernel finds a server's repo by the full path (resolve_path): a relative path plus its root."""
+    exo = ExoskeletonRuntime(workspace=str(tmp_path))
+    exo.record_call("read_symbol", {"path": "core/a.py", "name": "run", "root": "/home/ipw-repo", "target": "host:whm-jump"})
+    exo.record_call("read_symbol", {"path": "core/a.py", "name": "run"})
+    assert exo._exchange[0]["args"]["path"] == "/home/ipw-repo/core/a.py"
+    assert exo._exchange[1]["args"]["path"] == "core/a.py"

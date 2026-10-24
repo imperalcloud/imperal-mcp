@@ -343,6 +343,10 @@ class ExoskeletonRuntime:
     def record_call(self, tool: str, args: dict | None, ok: bool = True, text: str = "") -> None:
         """One call of this agent's imperal-mcp tools, in the kernel's exchange shape -- the next frame carries it."""
         a = {str(k): str(v)[:2000] for k, v in (args or {}).items() if v is not None}
+        if str(a.get("target") or "").startswith(("host:", "ssh:")) and a.get("root") and a.get("path") \
+                and not a["path"].startswith("/"):
+            # the kernel finds a server's repo by the full path there (resolve_path)
+            a["path"] = a["root"].rstrip("/") + "/" + a["path"]
         try:
             import fnmatch
             from imperal_sdk.code_index import SECRET_PATTERNS
