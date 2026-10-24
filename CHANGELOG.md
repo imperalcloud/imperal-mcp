@@ -4,6 +4,16 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.6.2 — 2026-10-24 — a server's repo stays fresh; one machine id on macOS
+
+### Changed
+- **A repo on a server you reach with your own ssh (`target="host:<alias>"`, `root=<path>`) is synced into the vault graph**
+  by webbee's SFTP sync (nothing is written there; only changed files are read): the first time before the question,
+  then refreshed behind it at most once a minute -- a question never waits for a listing it already has. Every answer
+  carries `synced_at`.
+- **Requires `webbee >= 0.5.10`**: one machine id per machine on macOS (the hardware UUID) -- a restart no longer
+  registers a new machine and syncs the repo again.
+
 ## 0.6.1 — 2026-10-24 — the code tools ask the exact graph; the kernel's frame for your agent
 
 ### Changed
