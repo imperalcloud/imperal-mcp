@@ -615,6 +615,26 @@ def test_a_failed_frame_keeps_the_exchange_for_the_next(tmp_path: Path):
     assert [e["tool"] for e in exo._exchange] == ["search_code"]
 
 
+def test_a_frame_refused_for_credits_says_why_and_keeps_its_step(tmp_path: Path):
+    """Phase D: the frame is paid (system pricing); a refusal names its reason, and the retry asks for the same step
+    (the kernel charges once per step)."""
+    from imperal_mcp.client import ImperalError
+    why = "not enough credits for a frame (5 credits, balance 2) -- top up in the panel"
+
+    class _Broke(_Cloud):
+        async def _request(self, method, path, *, json=None, params=None, timeout=60):
+            if path == "/v1/memory/frame":
+                self.calls.append((method, path, params, json))
+                raise ImperalError(f'POST {path} -> 402: {{"detail":"{why}"}}', status_code=402)
+            return await super()._request(method, path, json=json, params=params, timeout=timeout)
+    cloud = _Broke({"/v1/auth/me": {"imperal_id": "imp_u_ME"}})
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+    out = exo.frame()
+    assert out == {"ok": False, "content": why}
+    exo.frame()
+    assert [c[3]["step"] for c in cloud.calls if c[1] == "/v1/memory/frame"] == [1, 1]
+
+
 def test_the_exchange_never_carries_a_secret_file_or_raw_pii(tmp_path: Path):
     exo = ExoskeletonRuntime(workspace=str(tmp_path))
     exo.record_call("read_symbol", {"path": "config/.env.local", "name": "L1-5"}, ok=True, text="DB_PASS=hunter2")

@@ -63,6 +63,15 @@ _SYNC_REUSE_S = 3.0      # one tool call's questions share one sync of the works
 _PROFILE_KEYS = ("repo_key", "file_count", "def_count", "languages", "top_symbols")
 
 
+def _detail_of(message: str) -> str:
+    """The gateway's ``detail`` out of an ``ImperalError`` message (``METHOD path -> code: {"detail": ...}``)."""
+    _, _, body = message.partition(": ")
+    try:
+        return str(json.loads(body).get("detail") or body)
+    except Exception:
+        return body or message
+
+
 def _off_thread(fn):
     """Run ``fn`` on a worker thread and return its result (an async client is driven there with its own loop:
     a sync MCP tool may be called on the server's loop thread, where ``asyncio.run`` cannot start)."""
@@ -430,6 +439,8 @@ class ExoskeletonRuntime:
             ans = self._vault("POST", "/v1/memory/frame", body=body) or {}
         except Exception as exc:
             self._exchange = (pending + self._exchange)[-_EXCHANGE_MAX:]     # nothing is lost: the next frame sends it
+            if getattr(exc, "status_code", None) == 402:    # the frame is paid and was not charged: the kernel's reason
+                return {"ok": False, "content": _detail_of(str(exc))}
             return {"ok": False, "content": f"frame unavailable: {type(exc).__name__}: {str(exc)[:200]}"}
         self._frame_step += 1
         return {"ok": True, "frame": str(ans.get("frame") or ""), "tool_groups": list(ans.get("tool_groups") or []),
