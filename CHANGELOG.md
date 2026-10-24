@@ -4,6 +4,15 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.6.3 — 2026-10-25 — never a whole folder; frame and file reads follow the target
+
+### Changed
+- **A folder that is no repository is never indexed or synced whole** (a home folder, a folder of projects): the code
+  tools say so and ask for `root=<a repository inside it>`. Requires `webbee >= 0.5.11` (the same rule for its sync).
+- **`frame(root, target)`** takes the repo the work is in, a server's repo too (`target="host:<alias>"`).
+- **`outline` / `read_symbol` take `target`**: a server's file is read from the code graph in the vault.
+- The kernel's frame for an external agent no longer carries Webbee's reality-probe order.
+
 ## 0.6.2 — 2026-10-24 — a server's repo stays fresh; one machine id on macOS
 
 ### Changed
