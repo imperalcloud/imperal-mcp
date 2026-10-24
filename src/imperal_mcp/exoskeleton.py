@@ -299,6 +299,8 @@ Follow these operating rules to navigate repositories accurately, minimize unnec
 
 
 _EXCHANGE_MAX = 60     # the gateway's bound on one frame's exchange
+# a group repeated around a repeated piece -- (a+)+, (a*)*, (x|xy)+ -- backtracks without end (the vault refuses it too)
+_NESTED_QUANTIFIER = re.compile(r"\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)\s*[+*{]|\((?:[^()\\]|\\.)*\|(?:[^()\\]|\\.)*\)\s*[+*{]")
 _HOST_SYNC_REUSE_S = 60.0   # a remote repo is listed over SFTP at most once a minute (only changed files are read)
 
 
@@ -934,6 +936,51 @@ class ExoskeletonRuntime:
         )
         return {"status": "ok", "workspace": ws, **combined}
 
+    def grep_code(self, pattern: str, root: str | None = None, target: str | None = None, path_glob: str | None = None,
+                  k: int = 50, regex: bool = False) -> dict[str, Any]:
+        """An exact text (or a regex) inside the code -- what the symbol search does not index (a string inside a
+        function body). A server's repo: the vault's synced text; a local repo: its indexable files (never a secret,
+        never a dependency tree)."""
+        k = max(1, min(int(k or 50), 500))
+        if regex and _NESTED_QUANTIFIER.search(str(pattern or "")):
+            return {"status": "error", "error": "a nested quantifier (a repeated group around a repeated piece) can "
+                                                "run without end -- use a literal or a simpler pattern"}
+        if target and target != "local":
+            params = {"q": pattern, "k": k, "regex": str(bool(regex)).lower()}
+            if path_glob:
+                params["path_glob"] = path_glob
+            ans = self._ask("GET", "/v1/memory/code/grep", root, target, params=params)
+            if ans is None:
+                return self._remote_unavailable(target, root)
+            return {"status": "ok", "workspace": root, "pattern": pattern, "matches": list(ans.get("items") or []),
+                    "total": ans.get("total"), "truncated": ans.get("truncated"), **self._vault_meta(ans)}
+        import fnmatch
+        ws = self.resolve_workspace(root)
+        if not _is_repository(ws):
+            raise NotARepositoryError(f"{ws} is not a repository (no .git, no project manifest) -- pass root=<a "
+                                      "repository inside it>")
+        _ensure_webbee_importable()
+        from webbee.intel.service import _local_listing
+        rx = re.compile(pattern) if regex else None
+        matches: list[dict[str, Any]] = []
+        total = 0
+        for item in _local_listing(ws):
+            rel = item["path"]
+            if path_glob and not fnmatch.fnmatch(rel, path_glob):
+                continue
+            try:
+                with open(os.path.join(ws, rel), encoding="utf-8", errors="replace") as f:
+                    for n, line in enumerate(f, start=1):
+                        part = line[:2000]
+                        if (rx.search(part) if rx else pattern in part):
+                            total += 1
+                            if len(matches) < k:
+                                matches.append({"path": rel, "line": n, "text": line.rstrip("\n")[:300]})
+            except OSError:
+                continue
+        return {"status": "ok", "workspace": ws, "pattern": pattern, "matches": matches, "total": total,
+                "truncated": total > len(matches), "source": "local files"}
+
     def _remote_outline(self, path: str, root: str | None, target: str) -> dict[str, Any]:
         ans = self._ask("GET", "/v1/memory/code/outline", root, target, params={"path": path})
         if ans is None:
@@ -945,9 +992,19 @@ class ExoskeletonRuntime:
                 "rendered": rendered, **self._vault_meta(ans)}
 
     def _remote_read_symbol(self, path: str, name: str, root: str | None, target: str) -> dict[str, Any]:
-        if re.fullmatch(r"L?\d+-\d+", str(name or "")):
-            return {"status": "unavailable", "content": "a line range of a server's file is not in the code graph -- "
-                                                        "read a definition by its name"}
+        m = re.fullmatch(r"L?(\d+)-(\d+)", str(name or ""))
+        if m:                                 # a line range: from the synced file's text (phase C)
+            lo, hi = int(m.group(1)), int(m.group(2))
+            ans = self._ask("GET", "/v1/memory/code/file", root, target, params={"path": path, "max_chars": 2_000_000})
+            if ans is None:
+                return self._remote_unavailable(target, root)
+            lines = str(ans.get("text") or "").splitlines()
+            hi = min(hi, len(lines))
+            body = "\n".join(lines[lo - 1:hi])
+            return {"status": "ok", "workspace": root, "path": ans.get("path") or path, "symbol": name,
+                    "start_line": lo, "end_line": hi,
+                    "rendered": f"[{ans.get('path') or path} lines {lo}-{hi} of {ans.get('total_lines')}, from the synced "
+                                f"file]\n{body}", **self._vault_meta(ans)}
         ans = self._ask("POST", "/v1/memory/code/slice", root, target, body={"symbols": [f"{path}::{name}"], "depth": 1})
         items = [i for i in ((ans or {}).get("data") or {}).get("items") or [] if isinstance(i, dict) and i.get("text")]
         if not items:

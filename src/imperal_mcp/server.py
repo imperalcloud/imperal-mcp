@@ -427,6 +427,14 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         Call it at the start and after each change."""
         return await _exo_call(exo.frame, root=root, target=target)
 
+    @mcp.tool(title="Grep Code", annotations=ToolAnnotations(readOnlyHint=True))
+    async def grep_code(pattern: str, root: str | None = None, target: str | None = None, path_glob: str | None = None,
+                        k: int = 50, regex: bool = False) -> dict:
+        """An exact text (or regex) inside the code -- a string in a function body the symbol search does not index.
+        `target`: local (default), ssh:<connection_id> or host:<alias> with `root` = the repo path there."""
+        return await _exo_call(exo.grep_code, pattern=pattern, root=root, target=target, path_glob=path_glob, k=k,
+                               regex=regex)
+
     @mcp.tool(title="State Lens", annotations=ToolAnnotations(readOnlyHint=True))
     async def state_lens(section: str = "all", focus: str = "", offset: int = 0) -> dict:
         """What the kernel holds for your session, by section (law, plan, reality, memory, conversation, path) -- where

@@ -805,3 +805,40 @@ def test_impact_shows_users_by_name(sample_workspace: Path):
     exo = ExoskeletonRuntime(workspace=str(sample_workspace), client=_Cloud({"/code/impact": ans}))
     out = exo.impact_of_change(["compute_total"])
     assert out["by_name"] == [{"path": "pkg/other.py", "line": 7, "user": "go", "name": "x"}] and out["by_name_count"] == 1
+
+
+# ── frame phase C Task 5: an exact text and a server's line range ──
+
+def test_grep_code_on_a_server_and_locally(tmp_path: Path, monkeypatch):
+    import webbee.tools as wt
+
+    async def fake_remote_sync(client, host, root, paths):
+        return {"repo_key": "rk_remote"}
+    monkeypatch.setattr(wt, "remote_sync", fake_remote_sync)
+    cloud = _Cloud({"/v1/memory/code/grep": {"ok": True, "items": [{"path": "core/n.py", "line": 3, "text": "x"}],
+                                             "total": 1, "truncated": False, "synced_at": 1.0}})
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+    out = exo.grep_code("UNEXPECTED EFFECT", root="/home/ipw-repo", target="host:whm-jump")
+    assert out["matches"] == [{"path": "core/n.py", "line": 3, "text": "x"}] and out["source"] == "vault graph"
+    repo = tmp_path / "r"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "a.py").write_text("def f():\n    return f\"UNEXPECTED EFFECT: {1}\"\n")
+    (repo / ".env").write_text("UNEXPECTED EFFECT=secret\n")
+    loc = ExoskeletonRuntime(workspace=str(tmp_path)).grep_code("UNEXPECTED EFFECT", root="r")
+    assert [(m["path"], m["line"]) for m in loc["matches"]] == [("a.py", 2)]
+    bad = ExoskeletonRuntime(workspace=str(tmp_path)).grep_code(r"(a+)+$", root="r", regex=True)
+    assert bad["status"] == "error" and "nested" in bad["error"]
+
+
+def test_a_server_line_range_is_read_from_the_file_text(tmp_path: Path, monkeypatch):
+    import webbee.tools as wt
+
+    async def fake_remote_sync(client, host, root, paths):
+        return {"repo_key": "rk_remote"}
+    monkeypatch.setattr(wt, "remote_sync", fake_remote_sync)
+    text = "".join(f"line {i}\n" for i in range(1, 21))
+    cloud = _Cloud({"/v1/memory/code/file": {"ok": True, "path": "a.py", "total_lines": 20, "text": text}})
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+    out = exo.read_symbol("a.py", "L5-7", root="/home/ipw-repo", target="host:whm-jump")
+    assert out["status"] == "ok" and out["start_line"] == 5 and out["end_line"] == 7
+    assert "line 5\nline 6\nline 7" in out["rendered"] and "line 8" not in out["rendered"]
