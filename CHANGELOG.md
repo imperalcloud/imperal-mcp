@@ -4,6 +4,19 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.6.5 — 2026-10-25 — an exact text, a server's line range, callers by name
+
+### Added
+- **`grep_code(pattern, root, target, path_glob, k, regex)`**: an exact text inside the code -- a string in a function
+  body the symbol search does not index. A server's repo is searched in the vault's synced text (literal only); a local
+  repo in its indexable files (never a secret, never a link out of the repo).
+- **`read_symbol(name="L120-180", target=...)`** reads a line range of a server's file.
+- **`impact_of_change`** lists the callers found only by name (`by_name`: an instance's method the scope rules cannot
+  link), marked as such.
+
+### Fixed
+- An unavailable answer names its real cause instead of "no synced copy".
+
 ## 0.6.4 — 2026-10-25 — a server read never hangs the server
 
 ### Fixed
