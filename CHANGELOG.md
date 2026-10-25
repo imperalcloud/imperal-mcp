@@ -7,6 +7,18 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.8.5 — 2026-10-25
+
+### Fixed
+- Why a server's repo has no answer reaches the answer (an unknown host, a folder that does not exist, a failed
+  sync) -- never the generic "no synced copy" over it.
+- `freshness` and the reason of a miss belong to the call that asked: parallel calls never borrow another's.
+- `impact_of_change` counts a user two steps away only through a real user one step away, never through a file
+  that merely changed together.
+
+Needs the kernel of the same day: a shell's calls are its steps (the path counted "0 steps"), an MCP frame's current
+request is the user's newest message, a session's surface is named, a script the kernel cannot judge "ran".
+
 ## 0.8.4 — 2026-10-25
 
 ### Fixed

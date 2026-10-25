@@ -1006,3 +1006,38 @@ def test_get_app_names_its_callable_tools_never_a_skeleton_entry():
     got = app_summary(app)
     assert [t["name"] for t in got["tools"]] == ["web_search"] and got["tools"][0]["action_type"] == "read"
     assert got["version"] == "1.1.0" and len(got["tools"][0]["about"]) <= 241 and "manifest_json" not in got
+
+
+# ── MCP audit 2 (after 0.8.4): the reason stays, freshness is the call's own, second-depth users are real ──
+
+def test_an_unknown_hosts_reason_reaches_the_answer(tmp_path: Path, monkeypatch):
+    import webbee.tools as wt
+    monkeypatch.setattr(wt, "remote_head", _head(why="no-such-host: OSError: Name or service not known"))
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud({"/v1/memory/code/repos": {"repos": []}}))
+    out = exo.grep_code("x", root="/home/ipw-repo", target="host:no-such-host")
+    assert out["status"] == "unavailable" and "Name or service not known" in out["content"]
+
+
+def test_freshness_belongs_to_the_call_that_asked(tmp_path: Path):
+    import threading
+    exo = ExoskeletonRuntime(workspace=str(tmp_path))
+    exo._fresh = {"server": "host:whm-jump", "server_head": "abc"}
+    seen = {}
+
+    def other():
+        seen["fresh"], seen["miss"] = exo._fresh, exo._last_miss
+    t = threading.Thread(target=other)
+    t.start()
+    t.join()
+    assert seen == {"fresh": {}, "miss": ""} and exo._fresh["server_head"] == "abc"
+
+
+def test_a_second_depth_user_counts_only_through_a_real_first_depth_user(tmp_path: Path, monkeypatch):
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud())
+    items = [{"id": "a.py", "title": "a.py", "via": "scope", "depth": 1, "targets": ["x.py::f"]},
+             {"id": "t_a.py", "title": "t_a.py", "via": "scope", "depth": 2, "uses": "a.py", "targets": ["a.py::g"]},
+             {"id": "c.py", "title": "c.py", "via": "measured", "origin": "changed together", "depth": 1},
+             {"id": "t_c.py", "title": "t_c.py", "via": "scope", "depth": 2, "uses": "C", "targets": ["c.py::C"]}]
+    monkeypatch.setattr(exo, "_ask", lambda *a, **k: {"data": {"items": items}, "repo_key": "rk"})
+    out = exo.impact_of_change(["f"], root="/r", target="host:h")
+    assert out["dependent_files"] == ["a.py", "t_a.py"] and out["changed_together"] == ["c.py (0.0)"]

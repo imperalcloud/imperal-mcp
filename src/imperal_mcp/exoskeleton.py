@@ -572,6 +572,22 @@ def _secret_path(value: str, patterns: tuple, fnmatch: Any) -> bool:
 class ExoskeletonRuntime:
     """Stateful local + cloud bridge for Imperal MCP Exoskeleton tools."""
 
+    @property
+    def _fresh(self) -> dict[str, Any]:
+        return getattr(self._per_call, "fresh", {})
+
+    @_fresh.setter
+    def _fresh(self, value: dict[str, Any]) -> None:
+        self._per_call.fresh = value
+
+    @property
+    def _last_miss(self) -> str:
+        return getattr(self._per_call, "miss", "")
+
+    @_last_miss.setter
+    def _last_miss(self, value: str) -> None:
+        self._per_call.miss = value
+
     def __init__(self, workspace_root: str | None = None, workspace: str | None = None, client: Any = None) -> None:
         self._default_root = _resolve_root(workspace or workspace_root)
         self._client = _OnLoop(client, self) if client is not None else None   # code questions go to the vault
@@ -596,7 +612,10 @@ class ExoskeletonRuntime:
         self._host_syncs: dict[str, threading.Thread] = {}
         self._host_heads: dict[str, tuple[float, dict]] = {}     # memo -> (when asked, remote_head's answer)
         self._sync_errors: dict[str, str] = {}                    # memo -> why its last sync failed
-        self._fresh: dict[str, Any] = {}                          # how fresh the last remote answer's copy is
+        # per call (each tool runs on its own worker thread, parallel calls at once): how fresh the copy of the
+        # repo asked about is, and why an answer is missing -- never another call's (MCP audit 2026-10-25: a local
+        # impact_of_change carried whm-jump's freshness)
+        self._per_call = threading.local()
 
     # -- the kernel's frame (phase B, spec 2026-10-24 §4.2) -------------------------------------------
 
@@ -1058,11 +1077,14 @@ class ExoskeletonRuntime:
         if self._client is None:
             self._last_miss = "this session has no Imperal client"
             return None
-        self._fresh = {}
+        self._fresh, self._last_miss = {}, ""
         try:
             key = self._repo_key(root, target)
             if not key:
-                self._last_miss = f"the vault graph holds no synced copy of {root} on {target or 'local'}"
+                # the reason found on the way (an unknown host, a missing folder, a failed sync) stays -- never this
+                # generic line over it (MCP audit 2026-10-25)
+                self._last_miss = (self._last_miss
+                                   or f"the vault graph holds no synced copy of {root} on {target or 'local'}")
                 return None
             if body is not None:
                 ans = self._vault(method, path, body={**body, "repo_key": key})
@@ -1277,6 +1299,12 @@ class ExoskeletonRuntime:
                                and str(it.get("origin") or "") == "changed together"),
                               key=lambda it: -float(it.get("confidence") or 0))
             items = [it for it in items if it not in together]
+            # a user two steps away is one only through a user one step away -- never through a file that merely
+            # changed together (MCP audit 2026-10-25: four tests "depended" on a private method via such files)
+            near = {str(it.get("id") or "") for it in items if int(it.get("depth") or 1) <= 1}
+            items = [it for it in items if int(it.get("depth") or 1) <= 1
+                     or str(it.get("uses") or "") in near
+                     or any(str(t).split("::", 1)[0] in near for t in it.get("targets") or [])]
             files = [it.get("title") or it.get("id") for it in items]
             self._record_read("impact_of_change", returned_text=json.dumps(items, ensure_ascii=False))
             out = {"status": "ok", "workspace": root if target else self.resolve_workspace(root),
