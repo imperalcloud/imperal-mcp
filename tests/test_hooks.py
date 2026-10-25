@@ -411,3 +411,11 @@ def test_a_hook_frame_names_the_folder_the_shell_works_in(spool):
                gateway=gw)
     body = [b for n, b in gw.calls if n == "frame"][0]
     assert body["cwd"] == "/w/imperal-mcp" and body["repo_root"] == "/w/imperal-mcp"
+
+
+def test_two_withheld_commands_stay_two_calls():
+    """Live 2026-10-25: two different `ssh -i ~/.ssh/key ...` commands became one label -- REPEATED in the frame."""
+    a = H.tool_items({**CLAUDE_BASH, "tool_input": {"command": "ssh -i ~/.ssh/k host 'git log'"}})[0]
+    b = H.tool_items({**CLAUDE_BASH, "tool_input": {"command": "ssh -i ~/.ssh/k host 'deploy'"}})[0]
+    assert a["args"]["command"] != b["args"]["command"] and "~/.ssh" not in a["args"]["command"]
+    assert a["args"]["command"].startswith("(withheld: a command on a secret file")

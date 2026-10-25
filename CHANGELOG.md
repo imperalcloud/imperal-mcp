@@ -4,6 +4,12 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.7.3 — 2026-10-25
+
+### Fixed
+- Two different commands on a secret file (e.g. two `ssh -i <key> ...` runs) stay two calls: the withheld label
+  carries a short fingerprint, so the frame no longer reports them as one repeated call.
+
 ## 0.7.2 — 2026-10-25 — the frame's code map follows the shell's folder
 
 ### Fixed

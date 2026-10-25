@@ -386,8 +386,9 @@ _PRINTS_SECRETS = re.compile(r"(?i)(?:^|[\s;&|(/])(?:vault\s+(?:kv\s+)?(?:get|re
 def _only_safe_args(a: dict, cmd: str) -> dict:
     """A call on a secret file keeps only where it acted (its path, target) -- never a value that may hold it."""
     out = {k: v for k, v in a.items() if k in _SAFE_ARGS}
-    if cmd:
-        out["command"] = "(withheld: a command on a secret file)"
+    if cmd:   # a short fingerprint keeps two different withheld commands two calls (never the command itself)
+        import hashlib
+        out["command"] = f"(withheld: a command on a secret file #{hashlib.sha256(cmd.encode()).hexdigest()[:8]})"
     return out
 
 
