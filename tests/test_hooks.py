@@ -192,10 +192,16 @@ def test_the_spool_reaches_the_server_s_next_frame(spool, tmp_path):
     cloud = _Cloud({"/v1/auth/me": {"imperal_id": "imp_u_ME"}, "/v1/memory/frame": {"frame": "F"}})
     exo = ExoskeletonRuntime(workspace=str(ws), client=cloud)
     exo.task("fix alpha", [{"content": "edit a", "status": "pending"}])
+    # the calls and memory before task() go with the plan's record, in the same session and step (0.8.1)
+    rec = [c[3] for c in cloud.calls if c[1] == "/v1/memory/frame/record"][-1]
+    assert rec["session_id"] == H.mcp_session("imp_u_ME", "s1") and rec["step"] == 4
+    assert [e["tool"] for e in rec["exchange"]] == ["bash"] and rec["memory"][0]["kind"] == "user_request"
+    assert rec["items"] == [{"content": "edit a", "status": "pending"}]
+    H.run_hook("post-tool", payload, gateway=_Gateway())
     out = exo.frame()
     body = [c[3] for c in cloud.calls if c[1] == "/v1/memory/frame"][-1]
     assert out["ok"] and body["session_id"] == H.mcp_session("imp_u_ME", "s1") and body["step"] == 5
-    assert [e["tool"] for e in body["exchange"]] == ["bash"] and body["memory"][0]["kind"] == "user_request"
+    assert [e["tool"] for e in body["exchange"]] == ["bash"]
     st = H.Spool("s1").state()
     assert st["step"] == 5 and st["goal"] == "fix alpha" and st["items"][0]["content"] == "edit a"
     assert H.Spool("s1").drain() == ([], [])

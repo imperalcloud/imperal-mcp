@@ -45,6 +45,15 @@ _READ_TOOLS = {"read", "read_file", "view", "view_file", "read_many_files"}
 _PATCH_FILE = re.compile(r"^\*\*\* (?:Update|Add|Delete) File: (.+)$", re.M)
 
 
+# the MCP server's own tools (tests/test_memory_pack.py holds them equal to the server's list): a final that names one
+# names what the agent was given, never a made-up name (live 2026-10-25: `search_history` in an answer was held)
+MCP_TOOL_NAMES = ("check_syntax", "checkpoint", "checkpoint_diff", "checkpoint_rollback", "coding_context",
+                  "contract_slice", "deploy_ir", "frame", "get_app", "graph_slice", "grep_code", "impact_of_change",
+                  "list_apps", "orient", "outline", "read_symbol", "recall", "recall_context", "remember_fact",
+                  "repo_profile", "run_read_tool", "run_write_tool", "save_repo_note", "search_code", "search_history",
+                  "smoke_ir", "state_lens", "task", "token_savings", "upload_file", "validate_ir", "vault_log_read")
+
+
 def spool_dir() -> str:
     return os.environ.get("IMPERAL_MCP_SPOOL") or os.path.join(os.path.expanduser("~"), ".local", "share",
                                                                 "imperal-mcp", "spool")
@@ -404,6 +413,17 @@ def last_answer(payload: dict) -> str:
     return ""
 
 
+def code_tools_missing() -> str:
+    """One line when this install has no code tools (the ``code`` extra: webbee) -- said at the session's start, never
+    found out by a failing call (live 2026-10-25: an install lost the extra, task / orient / outline failed silently)."""
+    import importlib.util
+    if importlib.util.find_spec("webbee") is not None:
+        return ""
+    return ("IMPERAL: the local code tools are OFF in this install (the 'code' extra is missing: no webbee) -- orient, "
+            "outline, read_symbol, grep_code on this machine and checkpoint fail until it is reinstalled: "
+            "uv tool install --force 'imperal-mcp[code]'  (or: pip install 'imperal-mcp[code]').")
+
+
 def context_output(payload: dict, text: str) -> dict:
     if _shell(payload) == "antigravity":
         return {"injectSteps": [{"ephemeralMessage": text}]}
@@ -495,7 +515,13 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
             where = ""
         text = EXOSKELETON_INSTRUCTIONS.strip() + ("\n\nWHERE THIS WORK STANDS (from the vault):\n" + where
                                                     if where.strip() else "")
-        return context_output(payload, text)
+        missing = code_tools_missing()
+        if missing:
+            text = missing + "\n\n" + text
+        out = context_output(payload, text)
+        if missing and _shell(payload) in ("claude", "gemini"):
+            out["systemMessage"] = missing          # the user sees it too: only they can reinstall
+        return out
     if event == "prompt":
         prompt = str(payload.get("prompt") or "")
         if prompt.lstrip().startswith(_NOT_A_REQUEST):
@@ -537,12 +563,17 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
         spool, _ss, sess = _session_of(payload, gateway)
         repo = pinned_repo(spool, os.path.realpath(str(payload.get("cwd") or os.getcwd())))
         st = spool.state()
+        # the turn's record carries the plan as it stands: the kernel accounts it with the calls that prove it (a
+        # status changed by task() since the frame, a blocked item's reason) -- before, only the next frame did
         _send(spool, lambda items, memory: gateway.record({"session_id": sess, "step": int(st.get("step") or 0),
+                                                           "goal": str(st.get("goal") or "")[:4000],
+                                                           "items": list(st.get("items") or [])[:50],
                                                            "exchange": items, "memory": memory,
                                                            "repo_key": str(st.get("repo_key") or ""),
                                                            "session_repo": repo}))
         got = gateway.final({"session_id": sess, "final_text": _clean(final)[:20000], "step": int(st.get("step") or 0),
-                             "repo_key": str(st.get("repo_key") or ""), "session_repo": repo})
+                             "repo_key": str(st.get("repo_key") or ""), "session_repo": repo,
+                             "tools": list(MCP_TOOL_NAMES)})
         if (got or {}).get("hold") and str(got.get("reason") or "").strip():
             return block_output(payload, str(got["reason"]))
         opened = [str(x) for x in (got or {}).get("open") or [] if str(x).strip()]

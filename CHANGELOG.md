@@ -4,6 +4,21 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.8.1 — 2026-10-25
+
+### Fixed
+- `task()` reaches the kernel at once (free), together with the calls made before it: a status changes in the same
+  step as the work it reports. Before, the kernel saw the plan only with the next request's frame, and a final was
+  held for an item already named blocked.
+- The Stop hook's record carries the plan, and the final carries this server's tool names: a tool named in an answer
+  is no made-up name.
+- `task()` works without the code tools; the session start says so, to the agent and to you, when the `code` extra
+  (webbee) is missing from the install.
+- A release stamp (`rel-20261025-094552`) is no card and no phone: the exact date-time stamp shape is never masked;
+  every other 13-19 digit run still is.
+
+Needs the kernel and gateway of the same day (the record accounts the plan; the final takes the tool names).
+
 ## 0.8.0 — 2026-10-25
 
 ### Added

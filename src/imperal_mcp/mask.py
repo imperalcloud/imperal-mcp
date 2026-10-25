@@ -1,4 +1,4 @@
-# Verbatim port of the gateway app/util/pii.py (SOURCE OF TRUTH: imperal_kernel/audit/_pii.py).
+# Port of the gateway app/util/pii.py (SOURCE OF TRUTH: imperal_kernel/audit/_pii.py).
 # Keep regexes + ALLOWLIST_KEYS IN SYNC with the gateway/kernel — drift hazard.
 from __future__ import annotations
 
@@ -27,18 +27,29 @@ _NOT_A_PHONE = re.compile(
     r"|\d{2,5}-\d{2,5})"                         # port range
 )
 _US_DOTTED_PHONE = re.compile(r"\d{3}\.\d{3}\.\d{4}")
+# a date-time stamp ("20261025-094552", "20261025T094552" -- a release directory's name) is neither phone nor card
+# only the separated shape (date, -/_/T, time) -- a bare or grouped number keeps every card check (security review)
+_STAMP = re.compile(r"(?:19|20)\d\d(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[-_T](?:[01]\d|2[0-3])[0-5]\d[0-5]\d")
 
 
 def _phone_or_keep(m: "re.Match[str]") -> str:
     """<PHONE> unless every whitespace-separated piece of the match is a certain non-phone."""
     pieces = m.group(0).split()
-    if pieces and all(_NOT_A_PHONE.fullmatch(p) and not _US_DOTTED_PHONE.fullmatch(p) for p in pieces):
+    if _STAMP.fullmatch(m.group(0).strip()) or pieces and all(
+            _NOT_A_PHONE.fullmatch(p) and not _US_DOTTED_PHONE.fullmatch(p) for p in pieces):
         return m.group(0)
     return "<PHONE>"
 
 
 _SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+# every 13-19 digit run is masked (fail-closed: this is the client's own layer, the gateway checks again) -- except
+# the exact date-time stamp shape: "rel-20261025-094552" went into the vault as "rel-<CARD>" (live 2026-10-25)
 _CC_RE = re.compile(r"\b(?:\d[ -]?){13,19}\b")
+
+
+def _card_or_keep(m: "re.Match[str]") -> str:
+    return m.group(0) if _STAMP.fullmatch(m.group(0).strip(" -")) else "<CARD>"
+
 
 ALLOWLIST_KEYS = frozenset({
     "id", "app_id", "imperal_id", "user_id", "tenant_id", "owner_id",
@@ -58,7 +69,7 @@ def apply_pii_redaction(text: str | None, level: PIIRedactionLevel) -> str | Non
     if level == PIIRedactionLevel.FULL_REDACT:
         return "<redacted>"
     masked = _SSN_RE.sub("<SSN>", text)
-    masked = _CC_RE.sub("<CARD>", masked)
+    masked = _CC_RE.sub(_card_or_keep, masked)
     masked = _EMAIL_RE.sub("<EMAIL>", masked)
     masked = _PHONE_RE.sub(_phone_or_keep, masked)
     return masked

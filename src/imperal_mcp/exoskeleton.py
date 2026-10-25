@@ -582,11 +582,43 @@ class ExoskeletonRuntime:
         the baseline its changes are measured from."""
         self._task_goal = str(goal or "")
         self._task_items = [dict(i) for i in items or [] if isinstance(i, dict)][:50]
-        spool = self._shell_spool(self.resolve_workspace(None))
+        ws = self.resolve_workspace(None)
+        spool = self._shell_spool(ws)
         if spool is not None:          # the shell's hooks frame each request with this task (memory plan Task 5)
             spool.update(goal=self._task_goal, items=self._task_items)
-        self._baseline(root)
-        return {"ok": True, "goal": self._task_goal, "items": len(self._task_items)}
+        recorded = self._record_plan(ws, spool)
+        try:
+            self._baseline(root)
+        except Exception:              # the code tools are off (no webbee): the plan stands, its changes go unmeasured
+            pass
+        return {"ok": True, "goal": self._task_goal, "items": len(self._task_items), "recorded": recorded}
+
+    def _record_plan(self, ws: str, spool) -> bool:
+        """The plan reaches the kernel now, with the calls made since the last frame (free): a status changes in the
+        same step as the work it reports, as a Webbee step's todo_write does -- before, the kernel saw the plan only with
+        the next request's frame, and a final held for an item already named blocked (live 2026-10-25)."""
+        if self._client is None:
+            return False
+        from .hooks import _bounded_items
+        hooked, memory = spool.drain() if spool is not None else ([], [])
+        own, self._exchange = self._exchange, []
+        allq = hooked + own
+        pending = _bounded_items(allq)
+        late = allq[:len(allq) - len(pending)]
+        try:
+            step = int(spool.state().get("step") or 0) if spool is not None else self._frame_step
+            self._vault("POST", "/v1/memory/frame/record", body={
+                "session_id": self._session(ws), "step": step, "goal": self._task_goal, "items": self._task_items,
+                "exchange": pending, "memory": memory[-20:], "session_repo": self._session_repo(ws)})
+        except Exception:
+            late, ok = allq, False               # nothing is lost: the next frame or the shell's hook sends it
+        else:
+            memory, ok = [], True
+        # ``late`` is the head of hooked + own: its shell part goes back to the spool, its own part to this runtime
+        if spool is not None and (late[:len(hooked)] or memory):
+            spool.restore(late[:len(hooked)], memory)
+        self._exchange = (late[len(hooked):] + self._exchange)[-_EXCHANGE_MAX:]
+        return ok
 
     def _baseline(self, root: str | None) -> None:
         ws, sg = self._get_shadow(root)
