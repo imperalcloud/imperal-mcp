@@ -4,6 +4,24 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.7.0 — 2026-10-25 — memory for any shell
+
+### Added
+- **`imperal-mcp setup`**: sets up imperal-mcp in every shell found on this machine -- Claude Code, Codex,
+  Antigravity CLI, Gemini CLI: the MCP server, the four hooks and the protocol block in the shell's global
+  instructions file. `--remove` takes away exactly what it put; a config that does not parse is never written.
+- **`imperal-mcp hook session-start | prompt | post-tool | stop`**: one command for every shell's hooks. Every tool
+  call, request, thought and answer of the session reaches Imperal's vault (credentials redacted before anything
+  leaves the machine; secret files and secret-printing commands withheld; `IMPERAL_MCP_IGNORE` folders never
+  recorded). Each request gets the kernel's frame in its context; a final answer with open plan items is handed
+  back until each is proven or named with its reason (then the open ones are listed); the session start carries
+  the protocol and where the work stands.
+- Bounded answers (20 000 characters, `full=true` for everything) and `IMPERAL_MCP_EXTRA_ROOTS`.
+
+### Changed
+- The protocol (server instructions, setup blocks, session start) tells any shell what imperal-mcp is and why it
+  comes first. The MCP server and the hooks share one kernel session per shell.
+
 ## 0.6.6 — 2026-10-25 — a paid frame says why it was refused
 
 ### Changed
