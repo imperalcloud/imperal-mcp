@@ -88,3 +88,22 @@ def test_the_installed_shells_are_found(home, monkeypatch):
     (home / ".codex").mkdir()
     monkeypatch.setattr(S.shutil, "which", lambda name: "/usr/bin/claude" if name == "claude" else None)
     assert S.installed_shells(str(home)) == ["claude", "codex"]
+
+
+# ── security review (bfeb02c) ──
+def test_a_rewritten_config_keeps_its_mode_and_a_new_one_is_private(home):
+    import stat
+    (home / ".claude").mkdir()
+    (home / ".claude" / "settings.json").write_text("{}")
+    (home / ".claude" / "settings.json").chmod(0o640)
+    S.setup(["claude"], home=str(home))
+    assert stat.S_IMODE((home / ".claude" / "settings.json").stat().st_mode) == 0o640
+    assert stat.S_IMODE((home / ".claude.json").stat().st_mode) == 0o600
+
+
+def test_a_module_launch_never_reads_the_current_folder(monkeypatch):
+    import sys
+    from imperal_mcp import cli
+    monkeypatch.setattr(cli, "_resolve_cli_executable", lambda: (sys.executable, ["-m", "imperal_mcp.cli"]))
+    exe, args = S._exe()
+    assert args[0] in ("-P", "-I") and args[1:] == ["-m", "imperal_mcp.cli"]

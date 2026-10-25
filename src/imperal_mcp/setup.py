@@ -8,6 +8,7 @@ User level, so imperal-mcp works in any folder. Per shell, three things, each on
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -24,8 +25,14 @@ _TIMEOUT = {"session-start": 20, "prompt": 40, "post-tool": 10, "stop": 40}
 
 
 def _exe() -> tuple[str, list]:
-    from .cli import _resolve_cli_executable
-    return _resolve_cli_executable()
+    """The program the shells run: imperal-mcp's own console script (an absolute path), else its module in an
+    interpreter that never puts the current folder on its path (security review: no module from a project wins)."""
+    import sys
+    from . import cli
+    exe, args = cli._resolve_cli_executable()
+    if args[:1] == ["-m"]:
+        args = ["-P" if sys.version_info >= (3, 11) else "-I", *args]
+    return exe, args
 
 
 def _cmd(event: str, shell: str) -> str:
@@ -62,9 +69,13 @@ def _save(path: str, data: dict) -> None:
     text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     if os.path.exists(path) and open(path, encoding="utf-8").read() == text:
         return
+    mode = os.stat(path).st_mode & 0o777 if os.path.exists(path) else 0o600   # its own mode kept; a new file private
     tmp = path + ".imperal-tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(tmp)
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as f:
         f.write(text)
+    os.chmod(tmp, mode)
     os.replace(tmp, path)
 
 
