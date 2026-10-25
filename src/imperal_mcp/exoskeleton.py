@@ -383,12 +383,39 @@ _PRINTS_SECRETS = re.compile(r"(?i)(?:^|[\s;&|(/])(?:vault\s+(?:kv\s+)?(?:get|re
                              r"|cat\s+[^;&|]*(?:credentials|\.netrc|\.pgpass|\.npmrc|\.pypirc|\.docker/config))")
 
 
+def _withhold_key() -> bytes:
+    """This machine's key for withheld-command fingerprints (made once, 0600, never sent anywhere)."""
+    base = os.environ.get("IMPERAL_MCP_SPOOL") or os.path.join(os.path.expanduser("~"), ".local", "share",
+                                                               "imperal-mcp", "spool")
+    path = os.path.join(base, "withhold.key")
+    try:
+        with open(path, "rb") as f:
+            key = f.read()
+        if len(key) >= 32:
+            return key
+    except OSError:
+        pass
+    os.makedirs(base, mode=0o700, exist_ok=True)
+    key = os.urandom(32)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(key)
+    except FileExistsError:
+        with open(path, "rb") as f:
+            key = f.read() or key
+    return key
+
+
 def _only_safe_args(a: dict, cmd: str) -> dict:
     """A call on a secret file keeps only where it acted (its path, target) -- never a value that may hold it."""
     out = {k: v for k, v in a.items() if k in _SAFE_ARGS}
-    if cmd:   # a short fingerprint keeps two different withheld commands two calls (never the command itself)
+    if cmd:   # a short fingerprint keeps two different withheld commands two calls -- keyed by this machine's own
+        # secret, so it can never be checked against a guessed command (security review)
         import hashlib
-        out["command"] = f"(withheld: a command on a secret file #{hashlib.sha256(cmd.encode()).hexdigest()[:8]})"
+        import hmac
+        mark = hmac.new(_withhold_key(), cmd.encode(), hashlib.sha256).hexdigest()[:8]
+        out["command"] = f"(withheld: a command on a secret file #{mark})"
     return out
 
 

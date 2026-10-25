@@ -31,6 +31,9 @@ SPOOL_ITEMS_MAX, SPOOL_MEMORY_MAX = 200, 50               # what a spool keeps w
 # Claude Code keeps 10 000 characters of a hook's context (more becomes a file the model is not told to read):
 # the frame a hook gives fits, DECISION first (final review I1)
 HOOK_FRAME_CHARS = 9500
+# what a shell feeds through the prompt hook that the user never typed (live 2026-10-25: a background task's
+# notice became the frame's "CURRENT REQUEST" and was charged a frame)
+_NOT_A_REQUEST = ("<task-notification>", "<system-reminder>", "[SYSTEM NOTIFICATION")
 READ_CHARS, OUTPUT_CHARS = 20000, 8000                    # what of a read / an output reaches the kernel
 _IMPERAL_TOOL = re.compile(r"^mcp_{1,2}imperal_{1,2}")    # imperal-mcp's own calls: the server records those
 _SHELL_TOOLS = {"bash", "shell", "run_shell_command", "run_command", "exec_command", "execute_command", "terminal"}
@@ -451,6 +454,8 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
         return context_output(payload, text)
     if event == "prompt":
         prompt = str(payload.get("prompt") or "")
+        if prompt.lstrip().startswith(_NOT_A_REQUEST):
+            return None            # the shell's own notice (a background task's result), not the user's request
         if prompt.strip():
             spool.add_memory({"kind": "user_request", "content": _clean(prompt)[:MEMORY_CHARS]})
         spool, _ss, sess = _session_of(payload, gateway)

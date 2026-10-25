@@ -4,6 +4,13 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.7.4 — 2026-10-25
+
+### Fixed
+- A shell's own notice fed through the prompt hook (a background task's result) is no user request: no frame is
+  charged for it and it is not remembered as the user's words.
+- A withheld command's fingerprint is keyed by this machine's own secret (never a plain hash a guess could match).
+
 ## 0.7.3 — 2026-10-25
 
 ### Fixed

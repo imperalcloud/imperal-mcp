@@ -419,3 +419,17 @@ def test_two_withheld_commands_stay_two_calls():
     b = H.tool_items({**CLAUDE_BASH, "tool_input": {"command": "ssh -i ~/.ssh/k host 'deploy'"}})[0]
     assert a["args"]["command"] != b["args"]["command"] and "~/.ssh" not in a["args"]["command"]
     assert a["args"]["command"].startswith("(withheld: a command on a secret file")
+
+
+def test_a_withheld_fingerprint_is_no_plain_hash_of_the_command(spool):
+    import hashlib
+    cmd = "cat .env"
+    [it] = H.tool_items({**CLAUDE_BASH, "tool_input": {"command": cmd}})
+    assert hashlib.sha256(cmd.encode()).hexdigest()[:8] not in it["args"]["command"]
+
+
+def test_a_system_notification_is_no_user_request(spool):
+    gw = _Gateway()
+    out = H.run_hook("prompt", {**CLAUDE_BASH, "hook_event_name": "UserPromptSubmit",
+                                "prompt": "<task-notification>\n<summary>review found x</summary>"}, gateway=gw)
+    assert out is None and gw.calls == [] and H.Spool("s1").drain() == ([], [])
