@@ -224,3 +224,13 @@ def test_antigravity_s_tool_call_and_its_words(spool):
     stop = H.run_hook("stop", {"conversationId": "c9", "workspacePaths": ["/w"], "fullyIdle": True,
                                "executionNum": 1, "terminationReason": "done"}, gateway=_Gateway(hold=True))
     assert stop["decision"] == "continue" and "blocked_on" in stop["reason"]
+
+
+def test_a_secret_touched_through_shell_punctuation_is_withheld_with_unknown_args():
+    for cmd in ("cat<.env", "x=$(cat .env) && echo $x", "grep pw config/.env.local|head", "cat ~/.ssh/id_rsa;ls"):
+        [it] = H.tool_items({**CLAUDE_BASH, "tool_input": {"command": cmd}, "tool_response": {"stdout": "PW=hunter2"}})
+        assert "hunter2" not in json.dumps(it) and ".env" not in it["args"].get("command", "")[:0] + "x"
+        assert it["text"].startswith("(withheld")
+    [w] = H.tool_items({**CLAUDE_BASH, "tool_name": "Write", "tool_input": {"file_path": "/w/.env", "content": "a",
+                                                                           "body_text": "PW=hunter2"}, "tool_response": {}})
+    assert "hunter2" not in json.dumps(w) and w["args"]["path"] == "/w/.env"

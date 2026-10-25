@@ -334,6 +334,17 @@ _NESTED_QUANTIFIER = re.compile(r"\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)\s*[+
 _HOST_SYNC_REUSE_S = 60.0   # a remote repo is listed over SFTP at most once a minute (only changed files are read)
 
 
+_SAFE_ARGS = ("path", "file_path", "root", "target", "content_chars", "name", "connection_id")
+
+
+def _only_safe_args(a: dict, cmd: str) -> dict:
+    """A call on a secret file keeps only where it acted (its path, target) -- never a value that may hold it."""
+    out = {k: v for k, v in a.items() if k in _SAFE_ARGS}
+    if cmd:
+        out["command"] = "(withheld: a command on a secret file)"
+    return out
+
+
 def exchange_item(tool: str, args: dict | None, ok: bool = True, text: str = "", text_limit: int = 2000) -> dict:
     """One tool call in the kernel's exchange shape -- a secret file's content never, PII masked (the server's own
     calls and the shell's hooks record through this one door)."""
@@ -348,20 +359,22 @@ def exchange_item(tool: str, args: dict | None, ok: bool = True, text: str = "",
         from imperal_sdk.code_index import SECRET_PATTERNS
         from .mask import defensive_scrub
         joined = "/".join(x for x in (a.get("root", ""), a.get("path", "")) if x)   # a root may name the folder
+        cmd = a.get("command", "")
         try:
-            words = shlex.split(a.get("command", ""))          # a command that reads a secret file (security review)
+            words = shlex.split(cmd)                         # a command that reads a secret file (security review)
         except ValueError:
-            words = a.get("command", "").split()
+            words = []
+        # ... and every piece between the shell's punctuation (cat<.env, x=$(cat .env), a|b;c)
+        words += [w for w in re.split(r"[\s<>|;&()`$=\"']+", cmd) if w]
         if any(_secret_path(v, SECRET_PATTERNS, fnmatch) for v in list(a.values()) + [joined] + words):
             body = "(withheld: a secret file)"          # never what a secret file holds -- in the output or the args
-            a = {k: ("(withheld)" if k in ("content", "old_string", "new_string", "old", "new") else v)
-                 for k, v in a.items()}
+            a = _only_safe_args(a, cmd)
         else:
             body = str(defensive_scrub(str(text or "")[:text_limit]))
             a = {k: str(defensive_scrub(v)) for k, v in a.items()}
     except Exception:      # recording never breaks a tool; what cannot be checked is not sent
         body = "(withheld: secrets not checked)"
-        a = {k: ("(withheld)" if k in ("content", "old_string", "new_string", "old", "new") else v) for k, v in a.items()}
+        a = _only_safe_args(a, a.get("command", ""))
     return {"app_id": "", "tool": str(tool), "args": a, "ok": bool(ok), "text": body}
 
 

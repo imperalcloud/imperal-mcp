@@ -303,6 +303,14 @@ def main(argv=None) -> None:
     p_setup.add_argument("--no-claude-md", action="store_true", help="Do not touch CLAUDE.md")
     p_setup.add_argument("--with-hooks", action="store_true", help="Also configure Claude Code PostToolUse hooks")
 
+    p_all = sub.add_parser(
+        "setup",
+        help="Set up imperal-mcp in every shell found here (Claude Code, Codex, Antigravity CLI, Gemini CLI): "
+             "the server, the hooks, the protocol",
+    )
+    p_all.add_argument("shells", nargs="*", help="claude | codex | antigravity | gemini (default: the ones found)")
+    p_all.add_argument("--remove", action="store_true", help="Take away exactly what setup put")
+
     p_hooks = sub.add_parser(
         "install-hooks",
         help="Install Claude Code PostToolUse hooks into .claude/settings.local.json",
@@ -314,6 +322,7 @@ def main(argv=None) -> None:
         help="Run a shell hook event: session-start | prompt | post-tool | stop (JSON on stdin, any shell)",
     )
     p_hook.add_argument("event", nargs="?", default="post-tool-use", help="Hook event name")
+    p_hook.add_argument("--shell", default=None, help="The shell calling (set by setup)")
     p_hook.add_argument("--workspace", default=None, help="Target project directory (default: current directory)")
 
     p_status = sub.add_parser("status", help="Show workspace Exoskeleton readiness and index profile")
@@ -338,6 +347,12 @@ def main(argv=None) -> None:
             with_hooks=args.with_hooks,
         )
         print(json.dumps({"status": "ok", **res}, indent=2))
+        return
+    if args.cmd == "setup":
+        from .setup import setup as _setup
+        res = _setup(args.shells or None, remove=args.remove)
+        print(json.dumps({"status": "ok" if res and not any("error" in v for v in res.values()) else "check",
+                          "shells": res or "no shell found (claude, codex, agy, gemini)"}, indent=2))
         return
     if args.cmd == "install-hooks":
         res = install_claude_hooks(args.workspace)
