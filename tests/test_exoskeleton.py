@@ -879,3 +879,130 @@ def test_a_server_grep_is_literal_only(tmp_path: Path):
     out = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud()).grep_code("a.*b", root="/r", target="host:h",
                                                                                  regex=True)
     assert out["status"] == "error" and "exact text" in out["error"]
+
+
+# ── 2026-10-25 MCP audit: a server's copy is checked against its HEAD; an unknown host or a missing folder says so ──
+
+def _head(commit="", why=""):
+    async def head(host, root):
+        return {"commit": commit, "branch": "master", "root": root, "why": why}
+    return head
+
+
+def test_a_copy_behind_the_servers_head_is_synced_before_the_answer(tmp_path: Path, monkeypatch):
+    import webbee.tools as wt
+    cat = {"repos": [{"repo_key": "rk", "root_path": "/home/ipw-repo", "machine_label": "whm-jump",
+                      "git_ref": "711e5630aaaa"}]}
+    cloud = _Cloud({"/v1/memory/code/repos": cat})
+    calls = []
+
+    async def sync(client, host, root, paths):
+        calls.append(host)
+        cat["repos"][0]["git_ref"] = "fd751713bbbb"
+        return {"repo_key": "rk"}
+    monkeypatch.setattr(wt, "remote_sync", sync)
+    monkeypatch.setattr(wt, "remote_head", _head("fd751713bbbb"))
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+    assert exo._repo_key("/home/ipw-repo", "host:whm-jump") == "rk" and calls == ["whm-jump"]
+    assert exo._fresh == {"server": "host:whm-jump", "server_head": "fd751713bbbb", "copy_commit": "fd751713bbbb"}
+
+
+def test_a_copy_that_stays_behind_is_named_stale_with_the_reason(tmp_path: Path, monkeypatch):
+    import webbee.tools as wt
+    cloud = _Cloud({"/v1/memory/code/repos": {"repos": [{"repo_key": "rk", "root_path": "/r", "machine_label": "h",
+                                                          "git_ref": "aaaaaaa1"}]}})
+
+    async def sync(client, host, root, paths):
+        raise OSError("sftp broke")
+    monkeypatch.setattr(wt, "remote_sync", sync)
+    monkeypatch.setattr(wt, "remote_head", _head("bbbbbbb2"))
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+    assert exo._repo_key("/r", "host:h") == "rk"
+    assert "the copy is at aaaaaaa1, the server at bbbbbbb2" in exo._fresh["stale"] and "sftp broke" in exo._fresh["stale"]
+    assert exo._vault_meta({"repo_key": "rk"})["freshness"]["stale"] == exo._fresh["stale"]
+
+
+def test_an_unknown_host_never_borrows_another_machines_copy(tmp_path: Path, monkeypatch):
+    import webbee.tools as wt
+    cloud = _Cloud({"/v1/memory/code/repos": {"repos": [{"repo_key": "rk", "root_path": "/home/ipw-repo",
+                                                          "machine_label": "whm-jump"}]}})
+    monkeypatch.setattr(wt, "remote_head", _head(why="no-such-host: OSError: Name or service not known"))
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+    assert exo._repo_key("/home/ipw-repo", "host:no-such-host") == ""
+    assert "Name or service not known" in exo._last_miss
+
+
+def test_a_sync_that_never_ends_is_bounded(tmp_path: Path, monkeypatch):
+    import threading
+    import webbee.tools as wt
+    from imperal_mcp import exoskeleton as ex
+    gate = threading.Event()
+
+    async def endless(client, host, root, paths):
+        gate.wait(5)
+        return {"repo_key": "late"}
+    monkeypatch.setattr(wt, "remote_sync", endless)
+    monkeypatch.setattr(ex, "_HOST_SYNC_WAIT_S", 0.2)
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud())
+    assert exo._repo_key("/nope", "host:h") == ""
+    assert "did not finish in 0 s" in exo._last_miss
+    gate.set()
+
+
+def test_a_regex_looking_exact_search_without_hits_says_so(tmp_path: Path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "a.py").write_text("def alpha():\n    pass\ndef beta():\n    pass\n")
+    exo = ExoskeletonRuntime(workspace=str(tmp_path))
+    out = exo.grep_code("def alpha|def beta")
+    assert out["total"] == 0 and "EXACT text" in out["note"]
+    assert exo.grep_code("def alpha|def beta", regex=True)["total"] == 2
+
+
+def test_a_folder_inside_a_repository_narrows_the_search(tmp_path: Path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("needle = 1\n")
+    (tmp_path / "b.py").write_text("needle = 2\n")
+    exo = ExoskeletonRuntime(workspace=str(tmp_path))
+    out = exo.grep_code("needle", root=str(tmp_path / "src"))
+    assert [m["path"] for m in out["matches"]] == ["src/a.py"]
+
+
+def test_a_servers_repo_takes_literal_alternatives(tmp_path: Path, monkeypatch):
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud())
+    asked = []
+
+    def ask(method, path, root, target, params=None, body=None):
+        asked.append(params["q"])
+        return {"items": [{"path": "k.py", "line": len(asked), "text": params["q"]}], "total": 1, "repo_key": "rk"}
+    monkeypatch.setattr(exo, "_ask", ask)
+    out = exo.grep_code("def a|def b", root="/r", target="host:h", regex=True)
+    assert asked == ["def a", "def b"] and out["total"] == 2
+    assert exo.grep_code("de.f", root="/r", target="host:h", regex=True)["status"] == "error"
+
+
+def test_graph_slice_names_a_symbol_it_does_not_hold(tmp_path: Path, monkeypatch):
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud())
+    monkeypatch.setattr(exo, "_ask", lambda *a, **k: {"data": {"items": []}, "repo_key": "rk"})
+    out = exo.graph_slice(["no_such_symbol_xyz"], root="/r", target="host:h")
+    assert out["not_found"] == ["no_such_symbol_xyz"] and "not a definition" in out["note"]
+
+
+def test_impact_names_changed_together_files_apart(tmp_path: Path, monkeypatch):
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud())
+    items = [{"id": "a.py", "title": "a.py", "via": "scope", "origin": "binding"},
+             {"id": "b.py", "title": "b.py", "via": "measured", "origin": "changed together", "confidence": 0.2}]
+    monkeypatch.setattr(exo, "_ask", lambda *a, **k: {"data": {"items": items}, "repo_key": "rk"})
+    out = exo.impact_of_change(["f"], root="/r", target="host:h")
+    assert out["dependent_files"] == ["a.py"] and out["changed_together"] == ["b.py (0.2)"]
+
+
+def test_get_app_names_its_callable_tools_never_a_skeleton_entry():
+    import json as _j
+    from imperal_mcp.exoskeleton import app_summary
+    app = {"app_id": "web-search", "display_name": "Web Search", "manifest_json": _j.dumps({"version": "1.1.0", "tools": [
+        {"name": "skeleton_refresh_web_search", "description": "status"},
+        {"name": "web_search", "action_type": "read", "description": "WEB SEARCH -- find pages " * 30}]})}
+    got = app_summary(app)
+    assert [t["name"] for t in got["tools"]] == ["web_search"] and got["tools"][0]["action_type"] == "read"
+    assert got["version"] == "1.1.0" and len(got["tools"][0]["about"]) <= 241 and "manifest_json" not in got

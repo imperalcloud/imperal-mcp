@@ -4,14 +4,33 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
-## 0.8.3 — 2026-10-25
-
-### Fixed
-- The prompt hook's frame fits the hook: it asks the kernel for a frame of the size the shell keeps (`budget`), so the
-  kernel drops its farthest blocks first -- the frame is never cut at its end any more (HISTORY was never seen).
-
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
+
+## 0.8.4 — 2026-10-25
+
+### Fixed
+- **A server's code is never answered from an old copy in silence.** Before a `host:` question the server's HEAD is read
+  (a few small SFTP reads); a copy behind it is synced first, and every answer carries `freshness` -- the server's HEAD,
+  the copy's commit and, when it stays behind, why. A failed sync is kept and named, never swallowed.
+- **An unknown host is an error**, never another machine's copy of the same path; a missing folder or one in no
+  repository is refused at once, and a sync the answer waits for ends within 150 s (a wrong root hung for 30 min).
+- `graph_slice` and `contract_slice` name a symbol the graph does not hold; `contract_slice` returns only the links
+  that touch what was asked.
+- `impact_of_change` lists the files that only changed together with a symbol apart (`changed_together`), never as
+  its dependents.
+- `grep_code`: an exact search for a regex-looking pattern says so instead of a silent 0; on a server's repo literal
+  texts joined by `|` (with `regex=true`) are searched together; a folder inside a repository narrows the search.
+- `orient` shows the repo's map once per commit in a session; `grep_code` counts in `token_savings`.
+- `get_app` answers with the app's callable tools (name, action type, what each does), never a manifest cut mid-JSON;
+  `run_read_tool` / `run_write_tool` take `tool` as the name too.
+- A subagent's report handed back to the shell is an observation (its names are seen), never the user's words.
+
+### Added
+- **`live_sessions`**: the user's other sessions working now -- Webbee, another shell, the panel, Telegram -- with
+  what each did last; read on request only, nothing enters the frame by itself.
+
+Needs the kernel and gateway of the same day.
 
 ## 0.8.3 — 2026-10-25
 

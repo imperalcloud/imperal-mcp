@@ -319,8 +319,8 @@ THE LOOP (every task):
    an edit; `coding_context` for the workspace facts; `token_savings` for what the graph saved.
 5. Memory: every step is written to the vault (your shell's hooks send your calls, thoughts and answers). Look back
    with `recall_context(query)` and `recall` (a past answer, page by page); `search_history(query)` finds a past
-   conversation of any surface and `recall(ref, conversation=...)` opens it -- no other conversation enters your
-   frame by itself. The frame's pointers `state_lens` and `vault_log_read` open what it counted or offloaded. Keep
+   conversation of any surface, `live_sessions` shows the user's other sessions working now (Webbee, another shell),
+   and `recall(ref, conversation=...)` opens any of them -- no other conversation enters your frame by itself. The frame's pointers `state_lens` and `vault_log_read` open what it counted or offloaded. Keep
    what lasts with `remember_fact` and `save_repo_note`.
 6. Never state a code name, file or size you did not read in this task: the kernel checks every step and the final.
 
@@ -334,10 +334,38 @@ Pricing: one `frame` costs credits (the platform's system pricing); everything e
 _EXCHANGE_MAX = 60     # the gateway's bound on one frame's exchange
 # a group repeated around a repeated piece -- (a+)+, (a*)*, (x|xy)+ -- backtracks without end (the vault refuses it too)
 _NESTED_QUANTIFIER = re.compile(r"\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)\s*[+*{]|\((?:[^()\\]|\\.)*\|(?:[^()\\]|\\.)*\)\s*[+*{]")
+_TOGETHER_SHOWN = 8         # files that changed together with a symbol, named under impact_of_change (not its users)
 _HOST_SYNC_REUSE_S = 60.0   # a remote repo is listed over SFTP at most once a minute (only changed files are read)
+_HOST_HEAD_REUSE_S = 15.0   # the server's HEAD (a few small SFTP reads) is asked again after this many seconds
+_HOST_HEAD_WAIT_S = 25.0    # ... and waited for at most this long (an unreachable host answers by then)
+_HOST_SYNC_WAIT_S = 150.0   # a sync the answer waits for (the copy is behind the server's HEAD) ends by then
 
 
 ANSWER_CHARS = 20000   # what one tool answer may put in the model's context by default (live: 65K / 354K answers)
+
+
+def app_summary(app: Any) -> Any:
+    """An app as an agent uses it: its identity and its CALLABLE tools (name, action_type, a line of what each does)
+    -- the kernel's own ``skeleton_*`` entries are no tools to call (MCP audit 2026-10-25: get_app cut the manifest
+    JSON mid-string at 20 000 chars, and run_read_tool refused a skeleton entry it listed)."""
+    if not isinstance(app, dict):
+        return app
+    try:
+        manifest = json.loads(app.get("manifest_json") or "{}") if isinstance(app.get("manifest_json"), str) \
+            else (app.get("manifest_json") or {})
+    except ValueError:
+        manifest = {}
+    tools = []
+    for t in (manifest.get("tools") if isinstance(manifest, dict) else None) or []:
+        name = str(t.get("name") or "")
+        if not name or name.startswith("skeleton_"):
+            continue
+        desc = " ".join(str(t.get("description") or "").split())
+        tools.append({"name": name, "action_type": t.get("action_type") or "", "about": desc[:240]
+                      + ("…" if len(desc) > 240 else "")})
+    keep = ("app_id", "display_name", "description", "category", "status", "pricing_model", "pricing_config")
+    return {**{k: app.get(k) for k in keep if k in app}, "version": (manifest or {}).get("version"),
+            "tools": tools, "note": "full=true gives the raw record with the whole manifest"}
 
 
 def bounded(obj: Any, limit: int = ANSWER_CHARS) -> Any:
@@ -566,6 +594,9 @@ class ExoskeletonRuntime:
         self._baselined: set[str] = set()
         self._own_repo: str | None = None          # the session's repo without a shell's hooks (once)
         self._host_syncs: dict[str, threading.Thread] = {}
+        self._host_heads: dict[str, tuple[float, dict]] = {}     # memo -> (when asked, remote_head's answer)
+        self._sync_errors: dict[str, str] = {}                    # memo -> why its last sync failed
+        self._fresh: dict[str, Any] = {}                          # how fresh the last remote answer's copy is
 
     # -- the kernel's frame (phase B, spec 2026-10-24 §4.2) -------------------------------------------
 
@@ -873,16 +904,65 @@ class ExoskeletonRuntime:
             pass
         return keys
 
-    def _catalog_key(self, alias: str, root: str) -> str:
-        """The vault catalog's repo at ``root`` on the machine ``alias`` names ("" when none)."""
+    def _catalog_row(self, alias: str, root: str, *, strict: bool = False) -> dict:
+        """The vault catalog's repo at ``root`` on the machine ``alias`` names ({} when none). ``strict``: that machine
+        only -- a ``host:`` alias never borrows another machine's copy of the same path (live 2026-10-25: host:no-such-host
+        answered from whm-jump's /home/ipw-repo)."""
         try:
             repos = (self._vault("GET", "/v1/memory/code/repos") or {}).get("repos") or []
         except Exception:
-            return ""
+            return {}
         want = str(root or "").rstrip("/")
         hits = [r for r in repos if str(r.get("root_path") or "").rstrip("/") == want]
-        hits.sort(key=lambda r: alias not in (str(r.get("machine_label") or ""), str(r.get("ref") or "")))
-        return str(hits[0].get("repo_key") or "") if hits else ""
+        mine = [r for r in hits if alias in (str(r.get("machine_label") or ""), str(r.get("ref") or ""))]
+        hits = mine if strict else mine + [r for r in hits if r not in mine]
+        return dict(hits[0]) if hits else {}
+
+    def _catalog_key(self, alias: str, root: str) -> str:
+        """The vault catalog's repo at ``root`` on the machine ``alias`` names ("" when none)."""
+        return str(self._catalog_row(alias, root).get("repo_key") or "")
+
+    def _host_head(self, memo: str, alias: str, root: str) -> dict:
+        """The server's HEAD of the repo (webbee's ``remote_head``: a few small SFTP reads), asked at most every
+        ``_HOST_HEAD_REUSE_S`` and waited for at most ``_HOST_HEAD_WAIT_S``. ``{"commit": "", "why": ""}`` when it
+        cannot tell (an older webbee): the copy is then trusted as before."""
+        import asyncio
+        import time
+        at, got = self._host_heads.get(memo, (0.0, {}))
+        if got and time.monotonic() - at < _HOST_HEAD_REUSE_S:
+            return got
+        try:
+            _ensure_webbee_importable()
+            from webbee import tools as wt
+        except Exception:
+            return {"commit": "", "why": ""}
+        if not hasattr(wt, "remote_head"):
+            return {"commit": "", "why": ""}
+        box: dict = {}
+
+        def run():
+            try:
+                box["v"] = asyncio.run(wt.remote_head(alias, root)) or {}
+            except Exception as exc:
+                box["v"] = {"commit": "", "why": f"{type(exc).__name__}: {exc}"}
+        t = threading.Thread(target=run, daemon=True, name=f"imperal-mcp-host-head-{alias}")
+        t.start()
+        t.join(_HOST_HEAD_WAIT_S)
+        got = box.get("v") or {"commit": "", "why": f"{alias}: no answer in {int(_HOST_HEAD_WAIT_S)} s"}
+        self._host_heads[memo] = (time.monotonic(), got)
+        return got
+
+    def _sync_host_now(self, memo: str, alias: str, root: str) -> None:
+        """A sync the answer waits for, bounded by ``_HOST_SYNC_WAIT_S`` -- never a hang (live 2026-10-25: 30 min)."""
+        running = self._host_syncs.get(memo)
+        if running is None or not running.is_alive():
+            running = threading.Thread(target=self._run_host_sync, args=(memo, alias, root), daemon=True,
+                                       name=f"imperal-mcp-host-sync-{alias}")
+            self._host_syncs[memo] = running
+            running.start()
+        running.join(_HOST_SYNC_WAIT_S)
+        if running.is_alive():
+            self._sync_errors[memo] = f"the sync of {root} on {alias} did not finish in {int(_HOST_SYNC_WAIT_S)} s"
 
     def _sync_host(self, alias: str, root: str) -> str:
         """A repo on a server the user reaches with their own ssh (``host:<alias>``) is synced into the vault by
@@ -892,23 +972,43 @@ class ExoskeletonRuntime:
         ``synced_at``. "" when it cannot be synced (the catalog then answers)."""
         import time
         memo = f"host:{alias}:{root}"
-        known = self._repo_keys.get(memo, "")
-        if not known and memo not in self._synced_at:
-            known = self._catalog_key(alias, root)         # synced before (by any source): answer now, refresh behind
-            if known:
-                self._repo_keys[memo] = known
-        if known and time.monotonic() - self._synced_at.get(memo, 0.0) < _HOST_SYNC_REUSE_S:
-            return known
-        running = self._host_syncs.get(memo)
+        row = self._catalog_row(alias, root, strict=True)
+        known = self._repo_keys.get(memo, "") or str(row.get("repo_key") or "")
         if known:
+            self._repo_keys[memo] = known
+        # the server's HEAD against the copy's commit: a copy behind it is synced BEFORE the answer (live 2026-10-25:
+        # the copy stayed on 711e5630 after fd751713 was deployed -- "0 matches" for the new code, no warning)
+        head = self._host_head(memo, alias, root)
+        live, mapped = str(head.get("commit") or ""), str(row.get("git_ref") or "")
+        self._fresh = {"server": f"host:{alias}", "server_head": live[:12], "copy_commit": mapped[:12]}
+        if head.get("why") and not known:
+            self._last_miss = str(head["why"])            # an unknown host, a missing folder: said, never a guess
+            return ""
+        behind = bool(live) and (not mapped or not (live.startswith(mapped) or mapped.startswith(live)))
+        if not known or behind:
+            self._sync_host_now(memo, alias, root)
+            row = self._catalog_row(alias, root, strict=True)
+            known = self._repo_keys.get(memo, "") or str(row.get("repo_key") or "")
+            mapped = str(row.get("git_ref") or mapped)
+            self._fresh["copy_commit"] = mapped[:12]
+            if not known:
+                self._last_miss = self._sync_errors.get(memo) or f"{root} on {alias} could not be synced"
+                return ""
+            if live and mapped and not (live.startswith(mapped) or mapped.startswith(live)):
+                self._fresh["stale"] = (f"the copy is at {mapped[:12]}, the server at {live[:12]}: "
+                                        + (self._sync_errors.get(memo) or "the sync did not reach it"))
+            return known
+        if head.get("why"):
+            self._fresh["stale"] = f"the server could not be asked for its HEAD ({head['why']}): the copy may be old"
+        if time.monotonic() - self._synced_at.get(memo, 0.0) >= _HOST_SYNC_REUSE_S:
+            # same commit: an uncommitted edit is caught by a listing -- behind the answer, at most once a window
+            running = self._host_syncs.get(memo)
             if running is None or not running.is_alive():
                 t = threading.Thread(target=self._run_host_sync, args=(memo, alias, root), daemon=True,
                                      name=f"imperal-mcp-host-sync-{alias}")
                 self._host_syncs[memo] = t
                 t.start()
-            return known
-        self._run_host_sync(memo, alias, root)
-        return self._repo_keys.get(memo, "")
+        return known
 
     def _run_host_sync(self, memo: str, alias: str, root: str) -> None:
         import asyncio
@@ -918,11 +1018,17 @@ class ExoskeletonRuntime:
             from webbee import tools as wt
             client = self._client
             out = _off_thread(lambda: asyncio.run(wt.remote_sync(client, alias, root, []))) or {}
-        except Exception:
+        except Exception as exc:
+            # kept, never swallowed: the next answer names it (live 2026-10-25: a refresh failed for an hour unseen)
+            self._sync_errors[memo] = f"the sync failed: {type(exc).__name__}: {str(exc)[:200]}"
+            self._synced_at[memo] = time.monotonic()
             return
         key = str(out.get("repo_key") or "")
         if key:
             self._repo_keys[memo] = key
+            self._sync_errors.pop(memo, None)
+        else:
+            self._sync_errors[memo] = str(out.get("partial_reason") or out.get("content") or "the sync gave no repo")
         self._synced_at[memo] = time.monotonic()      # a failed refresh waits a window too: never a sync per question
 
     def _repo_key(self, root: str | None, target: str | None) -> str:
@@ -932,9 +1038,7 @@ class ExoskeletonRuntime:
             alias = target.split(":", 1)[-1]
             want = str(root or "").rstrip("/")
             if target.startswith("host:") and want:
-                key = self._sync_host(alias, want)
-                if key:
-                    return key
+                return self._sync_host(alias, want)      # its own machine's copy or none (and why): never another's
             return self._catalog_key(alias, want)
         ws, svc, _ = self._get_indexer(root)
         import time
@@ -954,6 +1058,7 @@ class ExoskeletonRuntime:
         if self._client is None:
             self._last_miss = "this session has no Imperal client"
             return None
+        self._fresh = {}
         try:
             key = self._repo_key(root, target)
             if not key:
@@ -971,9 +1076,14 @@ class ExoskeletonRuntime:
             return None
         return ans
 
-    @staticmethod
-    def _vault_meta(ans: dict) -> dict[str, Any]:
-        return {"source": "vault graph", "repo_key": ans.get("repo_key"), "synced_at": ans.get("synced_at")}
+    def _vault_meta(self, ans: dict) -> dict[str, Any]:
+        """Where an answer comes from -- and, for a server's repo, how fresh its copy is: the server's HEAD and the
+        copy's commit, and why it is old when it is (never a silent "0 matches" from an old copy)."""
+        meta = {"source": "vault graph", "repo_key": ans.get("repo_key"), "synced_at": ans.get("synced_at")}
+        fresh = getattr(self, "_fresh", None) or {}
+        if fresh and fresh.get("server") and str(ans.get("repo_key") or "") in ("", *self._repo_keys.values()):
+            meta["freshness"] = dict(fresh)
+        return meta
 
     def _remote_unavailable(self, target: str | None, root: str | None) -> dict[str, Any] | None:
         if target and target != "local":
@@ -1025,8 +1135,17 @@ class ExoskeletonRuntime:
         ans = self._vault_search(query, k, None, None, root, target) if prof is not None else None
         if prof is not None and ans is not None:
             matches = list((ans.get("data") or {}).get("items") or [])[:k]
+            # the repo's map once per commit in this session; after that a line (MCP audit 2026-10-25: every orient
+            # repeated the whole profile and its top symbols)
+            seen = f"{prof.get('repo_key') or ans.get('repo_key')}@{prof.get('git_ref') or ''}"
+            shown = getattr(self, "_profiles_shown", set())
+            profile = ({key: prof.get(key) for key in _PROFILE_KEYS if key in prof} if seen not in shown else
+                       f"as in this session's first orient of this repo at {prof.get('git_ref') or '?'} -- repo_profile "
+                       "gives it again")
+            shown.add(seen)
+            self._profiles_shown = shown
             out = {"status": "ok", "workspace": root if target else self.resolve_workspace(root), "query": query,
-                   "profile": {key: prof.get(key) for key in _PROFILE_KEYS if key in prof}, "matches": matches,
+                   "profile": profile, "matches": matches,
                    "semantic": ans.get("semantic"), "best_match": ans.get("best_match"), **self._vault_meta(ans)}
             self._record_read("orient", returned_text=json.dumps(out, ensure_ascii=False))
             return out
@@ -1110,8 +1229,16 @@ class ExoskeletonRuntime:
         if ans is not None:
             items = list((ans.get("data") or {}).get("items") or [])
             self._record_read("graph_slice", returned_text=json.dumps(items, ensure_ascii=False))
-            return {"status": "ok", "workspace": root if target else self.resolve_workspace(root), "symbols": items,
-                    **self._vault_meta(ans)}
+            out = {"status": "ok", "workspace": root if target else self.resolve_workspace(root), "symbols": items,
+                   **self._vault_meta(ans)}
+            found = {str(i.get("qualname") or i.get("title") or "").rsplit(".", 1)[-1] for i in items} | {
+                str(i.get("qualname") or "") for i in items}
+            missing = [s for s in sym_list if s.split("::")[-1] not in found and s.split("::")[-1].rsplit(".", 1)[-1]
+                       not in found]
+            if missing:      # an empty slice is "not in the graph", never a silent ok (MCP audit 2026-10-25)
+                out["not_found"] = missing
+                out["note"] = f"{', '.join(missing)}: not a definition in the code graph of this repo"
+            return out
         return self._remote_unavailable(target, root) or {**self._local_graph_slice(symbols, depth, root), "coarse": COARSE}
 
     def _local_graph_slice(self, symbols: list[str] | str, depth: int = 1, root: str | None = None) -> dict[str, Any]:
@@ -1144,10 +1271,19 @@ class ExoskeletonRuntime:
         ans = self._ask("POST", "/v1/memory/code/impact", root, target, body={"symbols": sym_list})
         if ans is not None:
             items = list((ans.get("data") or {}).get("items") or [])
+            # files that only CHANGED TOGETHER with it in git history are no users of it: named apart, briefly (MCP
+            # audit 2026-10-25: 31 "dependents" of a private method, 15-21 KB, none of them calling it)
+            together = sorted((it for it in items if it.get("via") == "measured"
+                               and str(it.get("origin") or "") == "changed together"),
+                              key=lambda it: -float(it.get("confidence") or 0))
+            items = [it for it in items if it not in together]
             files = [it.get("title") or it.get("id") for it in items]
             self._record_read("impact_of_change", returned_text=json.dumps(items, ensure_ascii=False))
             out = {"status": "ok", "workspace": root if target else self.resolve_workspace(root),
                    "queried_symbols": sym_list, "dependent_files": files, "items": items,
+                   "changed_together": [f"{it.get('title') or it.get('id')} ({float(it.get('confidence') or 0):.1f})"
+                                        for it in together[:_TOGETHER_SHOWN]]
+                   + ([f"+{len(together) - _TOGETHER_SHOWN} more"] if len(together) > _TOGETHER_SHOWN else []),
                    "same_file": ans.get("same_file") or [], "by_name_count": ans.get("by_name_count"),
                    "by_name": ans.get("by_name") or [],      # found only by name (an instance's method), marked
                    **self._vault_meta(ans)}
@@ -1203,9 +1339,17 @@ class ExoskeletonRuntime:
                 q = (query or (sym_list[0] if len(sym_list) == 1 else "")).lower()
                 eps = [e for e in cat.get("endpoints") or [] if not q or q in json.dumps(e).lower()][:k]
                 sl = self.graph_slice(sym_list, root=root, target=target) if sym_list else {"symbols": []}
-                return {"status": "ok", "workspace": root if target else self.resolve_workspace(root),
-                        "contracts": eps, "links": cat.get("links") or [], "symbols": sl.get("symbols") or [],
-                        "source": "vault graph"}
+                names = [s.split("::")[-1].rsplit(".", 1)[-1].lower() for s in sym_list] + ([q] if q else [])
+                # only the links that touch what was asked (MCP audit 2026-10-25: an unknown symbol got every link)
+                links = [ln for ln in cat.get("links") or [] if not names
+                         or any(n and n in json.dumps(ln).lower() for n in names)][:k]
+                out = {"status": "ok", "workspace": root if target else self.resolve_workspace(root),
+                       "contracts": eps, "links": links, "symbols": sl.get("symbols") or [], "source": "vault graph"}
+                if sl.get("not_found"):
+                    out["not_found"], out["note"] = sl["not_found"], sl.get("note")
+                if names and not (eps or links or out["symbols"]):
+                    out["note"] = f"nothing in the code graph or its contracts matches {', '.join(sym_list) or query}"
+                return out
             except Exception:
                 pass
         return self._remote_unavailable(target, root) or {
@@ -1248,22 +1392,42 @@ class ExoskeletonRuntime:
             return {"status": "error", "error": "a nested quantifier (a repeated group around a repeated piece) can "
                                                 "run without end -- use a literal or a simpler pattern"}
         if target and target != "local":
-            if regex:          # the vault is shared: literal only (a backtracking pattern cannot be told by its text)
-                return {"status": "error", "error": "a server's repo is searched by an exact text only -- pass the "
-                                                    "literal text"}
-            params = {"q": pattern, "k": k}
-            if path_glob:
-                params["path_glob"] = path_glob
-            ans = self._ask("GET", "/v1/memory/code/grep", root, target, params=params)
-            if ans is None:
-                return self._remote_unavailable(target, root)
-            return {"status": "ok", "workspace": root, "pattern": pattern, "matches": list(ans.get("items") or []),
-                    "total": ans.get("total"), "truncated": ans.get("truncated"), **self._vault_meta(ans)}
+            words = [str(pattern or "")]
+            if regex:
+                # the vault is shared: literal only (a backtracking pattern cannot be told by its text) -- an
+                # alternation of plain texts ("def a|def b") is several exact searches, merged
+                words = str(pattern or "").split("|")
+                if any(w == "" or re.search(r"[.^$*+?{}\[\]\\()]", w) for w in words):
+                    return {"status": "error", "error": "a server's repo is searched by exact texts only -- pass "
+                                                        "the literal text, or literal texts joined by | with regex=true"}
+            matches, total, truncated, ans = [], 0, False, None
+            for w in words[:8]:
+                params = {"q": w, "k": k}
+                if path_glob:
+                    params["path_glob"] = path_glob
+                ans = self._ask("GET", "/v1/memory/code/grep", root, target, params=params)
+                if ans is None:
+                    return self._remote_unavailable(target, root)
+                matches += [m for m in ans.get("items") or [] if m not in matches]
+                total += int(ans.get("total") or 0)
+                truncated = truncated or bool(ans.get("truncated"))
+            out = {"status": "ok", "workspace": root, "pattern": pattern, "matches": matches[:k], "total": total,
+                   "truncated": truncated or len(matches) > k, **self._vault_meta(ans or {})}
+            return self._grep_out(out, pattern, regex)
         import fnmatch
         ws = self.resolve_workspace(root)
         if not _is_repository(ws):
-            raise NotARepositoryError(f"{ws} is not a repository (no .git, no project manifest) -- pass root=<a "
-                                      "repository inside it>")
+            # a folder INSIDE a repository is that repository, narrowed to the folder (MCP audit 2026-10-25: root=
+            # <repo>/src was refused) -- a folder of no repository is still refused
+            up = os.path.dirname(ws)
+            while up and up != os.path.dirname(up) and not _is_repository(up):
+                up = os.path.dirname(up)
+            if not (up and _is_repository(up)):
+                raise NotARepositoryError(f"{ws} is not a repository (no .git, no project manifest) -- pass root=<a "
+                                          "repository inside it>")
+            sub = os.path.relpath(ws, up).replace(os.sep, "/")
+            path_glob = f"{sub}/{path_glob}" if path_glob else f"{sub}/*"
+            ws = up
         _ensure_webbee_importable()
         from webbee.intel.service import _local_listing
         rx = re.compile(pattern) if regex else None
@@ -1287,8 +1451,19 @@ class ExoskeletonRuntime:
                                 matches.append({"path": rel, "line": n, "text": line.rstrip("\n")[:300]})
             except OSError:
                 continue
-        return {"status": "ok", "workspace": ws, "pattern": pattern, "matches": matches, "total": total,
-                "truncated": total > len(matches), "source": "local files"}
+        return self._grep_out({"status": "ok", "workspace": ws, "pattern": pattern, "matches": matches,
+                               "total": total, "truncated": total > len(matches), "source": "local files"},
+                              pattern, regex)
+
+    def _grep_out(self, out: dict[str, Any], pattern: str, regex: bool) -> dict[str, Any]:
+        """A grep's answer, counted in token_savings (MCP audit 2026-10-25: grep_code was never counted); no match for
+        a pattern that looks like a regex, searched as an exact text, is said -- never a silent 0 ("def a|def b"
+        found nothing and read as "not in the code")."""
+        self._record_read("grep_code", returned_text=json.dumps(out.get("matches") or [], ensure_ascii=False))
+        if not regex and not out.get("matches") and re.search(r"\||\\[sdwb(]|\.\*|\[[^\]]+\]|\(\?", str(pattern or "")):
+            out["note"] = ("searched as an EXACT text -- this pattern looks like a regex: pass regex=true (on a "
+                           "server's repo: literal texts joined by |)")
+        return out
 
     def _remote_outline(self, path: str, root: str | None, target: str) -> dict[str, Any]:
         ans = self._ask("GET", "/v1/memory/code/outline", root, target, params={"path": path})

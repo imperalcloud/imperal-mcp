@@ -21,7 +21,7 @@ from .irkit import (
     examples_text,
     build_prompt_text,
 )
-from .exoskeleton import EXOSKELETON_INSTRUCTIONS, ExoskeletonRuntime
+from .exoskeleton import EXOSKELETON_INSTRUCTIONS, ExoskeletonRuntime, app_summary
 from .mask import defensive_scrub
 
 
@@ -299,30 +299,36 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def get_app(app_id: str, full: bool = False) -> Any:
-        """Get one app's manifest + tools (with action_type) (PII-masked); bounded unless full=true."""
-        from .exoskeleton import bounded
+        """One app: what it is and its callable tools (name, action_type, what it does) -- the run_read_tool /
+        run_write_tool ``function`` names; full=true gives the raw record with the whole manifest (PII-masked)."""
         got = defensive_scrub(await client.get_app(app_id))
-        return got if full else bounded(got)
+        return got if full else app_summary(got)
 
     @mcp.tool(
         title="Run Read Tool",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    async def run_read_tool(app_id: str, function: str, args: dict | None = None) -> Any:
-        """Run a READ-only tool of a deployed app (refuses write/destructive)."""
-        return await run_read_tool_logic(client, app_id, function, args or {})
+    async def run_read_tool(app_id: str, function: str = "", args: dict | None = None, tool: str = "") -> Any:
+        """Run a READ-only tool of a deployed app (refuses write/destructive). ``function`` is the tool's name as
+        get_app lists it (``tool`` is taken as the same)."""
+        if not (function or tool):
+            return {"ok": False, "error": "name the app's tool: function=<a name get_app lists>"}
+        return await run_read_tool_logic(client, app_id, function or tool, args or {})
 
     @mcp.tool(
         title="Run Write Tool",
         annotations=ToolAnnotations(destructiveHint=True),
     )
-    async def run_write_tool(app_id: str, function: str, args: dict | None = None, ctx: Context = None) -> Any:
+    async def run_write_tool(app_id: str, function: str = "", args: dict | None = None, ctx: Context = None,
+                             tool: str = "") -> Any:
         """Run a WRITE or DESTRUCTIVE tool of a deployed app. Money tools always go
         through out-of-band panel approval (never terminal consent or autopilot):
         re-run this tool after approving in the panel to complete. Write runs
         directly; destructive requires human consent (elicitation) or session
         autopilot; read tools are refused (use run_read_tool)."""
-        return await run_write_tool_logic(client, ctx, app_id, function, args or {}, _AUTOPILOT)
+        if not (function or tool):
+            return {"ok": False, "error": "name the app's tool: function=<a name get_app lists>"}
+        return await run_write_tool_logic(client, ctx, app_id, function or tool, args or {}, _AUTOPILOT)
 
     @mcp.tool(
         title="Upload Local File",
@@ -466,6 +472,14 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         names its conversation and message, and recall(ref, conversation=...) opens it whole. Nothing of another
         conversation enters your frame by itself: ask here."""
         return await _exo_call(exo.lens, tool="search_history", args={"query": query, "limit": limit})
+
+    @mcp.tool(title="Live Sessions", annotations=ToolAnnotations(readOnlyHint=True))
+    async def live_sessions(minutes: int = 120, limit: int = 8) -> dict:
+        """The user's OTHER sessions active in the last ``minutes`` -- Webbee in a terminal, another shell through
+        imperal-mcp, the panel, Telegram: each with its surface, when it last moved, and its last request, steps and
+        answer; recall(ref, conversation=...) opens any message whole. Read-only, on request: nothing of another
+        session enters your frame by itself."""
+        return await _exo_call(exo.lens, tool="live_sessions", args={"minutes": minutes, "limit": limit})
 
     @mcp.tool(title="Vault Log Read", annotations=ToolAnnotations(readOnlyHint=True))
     async def vault_log_read(ref: str, offset: int = 0, limit: int = 0, grep: str = "") -> dict:

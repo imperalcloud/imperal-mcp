@@ -35,3 +35,17 @@ def _private_spool(tmp_path, monkeypatch):
     """Every test gets its own hook spool -- never the real one in the home folder."""
     if not os.environ.get("IMPERAL_MCP_SPOOL", "").startswith(str(tmp_path)):
         monkeypatch.setenv("IMPERAL_MCP_SPOOL", str(tmp_path / "spool-auto"))
+
+
+@pytest.fixture(autouse=True)
+def _no_real_server_head(monkeypatch):
+    """A test never opens an SSH connection: the server's HEAD is "cannot tell" unless a test says otherwise."""
+    try:
+        import webbee.tools as wt
+    except Exception:
+        return
+
+    async def unknown(host, root):
+        return {"commit": "", "branch": "", "root": root, "why": ""}
+    if hasattr(wt, "remote_head"):
+        monkeypatch.setattr(wt, "remote_head", unknown)

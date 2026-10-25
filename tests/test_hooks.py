@@ -464,3 +464,13 @@ def test_the_prompt_frame_asks_the_kernel_to_fit_the_hook(spool):
     H.run_hook("prompt", {**CLAUDE_BASH, "hook_event_name": "UserPromptSubmit", "prompt": "fix alpha"}, gateway=gw)
     body = [b for n, b in gw.calls if n == "frame"][0]
     assert body["budget"] == H.HOOK_FRAME_CHARS
+
+
+def test_a_subagent_hand_back_is_an_observation_never_a_user_request(spool):
+    gw = _Gateway()
+    report = ("Another Claude session sent a message:\n<agent-message from=\"a1\">\n[Subagent hand-back] The text below "
+              "is the final report ... `ledger_fold` at step_frame.py:644\n</agent-message>")
+    out = H.run_hook("prompt", {**CLAUDE_BASH, "hook_event_name": "UserPromptSubmit", "prompt": report}, gateway=gw)
+    items, memory = H.Spool("s1").drain()
+    assert out is None and gw.calls == [] and memory == []
+    assert items[0]["tool"] == "agent_report" and "ledger_fold" in items[0]["text"]

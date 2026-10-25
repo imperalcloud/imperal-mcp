@@ -34,6 +34,9 @@ HOOK_FRAME_CHARS = 9500
 # what a shell feeds through the prompt hook that the user never typed (live 2026-10-25: a background task's
 # notice became the frame's "CURRENT REQUEST" and was charged a frame)
 _NOT_A_REQUEST = ("<task-notification>", "<system-reminder>", "[SYSTEM NOTIFICATION")
+# a subagent's report handed back to the shell: what the agent was TOLD (an observation, its names are seen), never the
+# user's words (live 2026-10-25: two hand-backs stood as user steers; a name only they held was "made up")
+_HANDBACK = ("Another Claude session sent a message", "<agent-message")
 # what of a read / an output reaches the kernel -- an output as much as a read (live 2026-10-25: the Stop check
 # called names "never seen" that stood past 8000 chars of a 14K output the model had read whole)
 READ_CHARS, OUTPUT_CHARS = 20000, 20000
@@ -49,7 +52,8 @@ _PATCH_FILE = re.compile(r"^\*\*\* (?:Update|Add|Delete) File: (.+)$", re.M)
 # names what the agent was given, never a made-up name (live 2026-10-25: `search_history` in an answer was held)
 MCP_TOOL_NAMES = ("check_syntax", "checkpoint", "checkpoint_diff", "checkpoint_rollback", "coding_context",
                   "contract_slice", "deploy_ir", "frame", "get_app", "graph_slice", "grep_code", "impact_of_change",
-                  "list_apps", "orient", "outline", "read_symbol", "recall", "recall_context", "remember_fact",
+                  "list_apps", "live_sessions", "orient", "outline", "read_symbol", "recall", "recall_context",
+                  "remember_fact",
                   "repo_profile", "run_read_tool", "run_write_tool", "save_repo_note", "search_code", "search_history",
                   "smoke_ir", "state_lens", "task", "token_savings", "upload_file", "validate_ir", "vault_log_read")
 
@@ -530,6 +534,9 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
         prompt = str(payload.get("prompt") or "")
         if prompt.lstrip().startswith(_NOT_A_REQUEST):
             return None            # the shell's own notice (a background task's result), not the user's request
+        if prompt.lstrip().startswith(_HANDBACK) or "[Subagent hand-back]" in prompt[:600]:
+            spool.add_items([exchange_item("agent_report", {}, True, _clean(prompt), text_limit=READ_CHARS)])
+            return None
         if prompt.strip():
             spool.add_memory({"kind": "user_request", "content": _clean(prompt)[:MEMORY_CHARS]})
         spool, _ss, sess = _session_of(payload, gateway)
