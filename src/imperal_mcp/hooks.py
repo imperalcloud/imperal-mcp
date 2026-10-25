@@ -52,8 +52,8 @@ _PATCH_FILE = re.compile(r"^\*\*\* (?:Update|Add|Delete) File: (.+)$", re.M)
 # names what the agent was given, never a made-up name (live 2026-10-25: `search_history` in an answer was held)
 MCP_TOOL_NAMES = ("check_syntax", "checkpoint", "checkpoint_diff", "checkpoint_rollback", "coding_context",
                   "contract_slice", "deploy_ir", "frame", "get_app", "graph_slice", "grep_code", "impact_of_change",
-                  "list_apps", "live_sessions", "orient", "outline", "read_symbol", "recall", "recall_context",
-                  "remember_fact",
+                  "list_apps", "live_sessions", "message_session", "orient", "outline", "read_symbol", "recall",
+                  "recall_context", "remember_fact",
                   "repo_profile", "run_read_tool", "run_write_tool", "save_repo_note", "search_code", "search_history",
                   "smoke_ir", "state_lens", "task", "token_savings", "upload_file", "validate_ir", "vault_log_read")
 

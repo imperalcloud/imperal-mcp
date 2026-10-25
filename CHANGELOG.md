@@ -7,6 +7,21 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.8.6 — 2026-10-26
+
+### Added
+- **`message_session(conversation, text)`**: write to another session of the user working now (Webbee in a
+  terminal, another shell) -- a finding to check, a question, who does what. The recipient reads it as an AGENT's
+  words, never the user's: a message approves nothing, authorizes no release and changes no task. Webbee writes back
+  with the same tool; the answer shows in the frame as an AGENT MESSAGE. The user sees every message in both
+  conversations.
+
+### Fixed
+- A server repo whose catalog copy carries another machine label (the gateway: "imperal-gateway" asked as
+  host:10.88.0.1) answers again -- the one copy of that path, marked with the machine it is of; an unknown host still
+  never borrows a copy.
+- A sync the answer waits for ends within 70 s, inside the MCP client's 120 s (a moved HEAD hung the call).
+
 ## 0.8.5 — 2026-10-25
 
 ### Fixed

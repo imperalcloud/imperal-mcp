@@ -320,7 +320,9 @@ THE LOOP (every task):
 5. Memory: every step is written to the vault (your shell's hooks send your calls, thoughts and answers). Look back
    with `recall_context(query)` and `recall` (a past answer, page by page); `search_history(query)` finds a past
    conversation of any surface, `live_sessions` shows the user's other sessions working now (Webbee, another shell),
-   and `recall(ref, conversation=...)` opens any of them -- no other conversation enters your frame by itself. The frame's pointers `state_lens` and `vault_log_read` open what it counted or offloaded. Keep
+   and `recall(ref, conversation=...)` opens any of them -- no other conversation enters your frame by itself.
+   `message_session(conversation, text)` writes to one of them as an agent (never the user's words: it approves
+   nothing); an answer shows in your frame as an AGENT MESSAGE. The frame's pointers `state_lens` and `vault_log_read` open what it counted or offloaded. Keep
    what lasts with `remember_fact` and `save_repo_note`.
 6. Never state a code name, file or size you did not read in this task: the kernel checks every step and the final.
 
@@ -338,7 +340,10 @@ _TOGETHER_SHOWN = 8         # files that changed together with a symbol, named u
 _HOST_SYNC_REUSE_S = 60.0   # a remote repo is listed over SFTP at most once a minute (only changed files are read)
 _HOST_HEAD_REUSE_S = 15.0   # the server's HEAD (a few small SFTP reads) is asked again after this many seconds
 _HOST_HEAD_WAIT_S = 25.0    # ... and waited for at most this long (an unreachable host answers by then)
-_HOST_SYNC_WAIT_S = 150.0   # a sync the answer waits for (the copy is behind the server's HEAD) ends by then
+_HOST_SYNC_WAIT_S = 70.0    # a sync the answer waits for (the copy is behind the server's HEAD) ends by then -- with
+                            # the HEAD read (25 s) inside the MCP client's 120 s (live 2026-10-25: 150 s hung the call)
+_UNKNOWN_HOST = re.compile(r"(?i)not known|nodename|could not resolve|no address associated|unknown host|"
+                           r"name or service")
 
 
 ANSWER_CHARS = 20000   # what one tool answer may put in the model's context by default (live: 65K / 354K answers)
@@ -937,6 +942,15 @@ class ExoskeletonRuntime:
         hits = mine if strict else mine + [r for r in hits if r not in mine]
         return dict(hits[0]) if hits else {}
 
+    def _only_copy(self, root: str) -> bool:
+        """The catalog holds exactly one copy of ``root`` (on any machine)."""
+        try:
+            repos = (self._vault("GET", "/v1/memory/code/repos") or {}).get("repos") or []
+        except Exception:
+            return False
+        want = str(root or "").rstrip("/")
+        return sum(1 for r in repos if str(r.get("root_path") or "").rstrip("/") == want) == 1
+
     def _catalog_key(self, alias: str, root: str) -> str:
         """The vault catalog's repo at ``root`` on the machine ``alias`` names ("" when none)."""
         return str(self._catalog_row(alias, root).get("repo_key") or "")
@@ -992,6 +1006,14 @@ class ExoskeletonRuntime:
         import time
         memo = f"host:{alias}:{root}"
         row = self._catalog_row(alias, root, strict=True)
+        if not row:
+            # the catalog names a machine by the label its sync gave it (live 2026-10-25: /opt/imperal-auth-gateway
+            # is "imperal-gateway", asked as host:10.88.0.1): ONE copy of this path, on a host that does exist, is it
+            only = [r for r in [self._catalog_row(alias, root)] if r]
+            if only and self._only_copy(root):
+                head = self._host_head(memo, alias, root)
+                if not _UNKNOWN_HOST.search(str(head.get("why") or "")):
+                    row = only[0]
         known = self._repo_keys.get(memo, "") or str(row.get("repo_key") or "")
         if known:
             self._repo_keys[memo] = known
@@ -999,7 +1021,9 @@ class ExoskeletonRuntime:
         # the copy stayed on 711e5630 after fd751713 was deployed -- "0 matches" for the new code, no warning)
         head = self._host_head(memo, alias, root)
         live, mapped = str(head.get("commit") or ""), str(row.get("git_ref") or "")
-        self._fresh = {"server": f"host:{alias}", "server_head": live[:12], "copy_commit": mapped[:12]}
+        self._fresh = {"server": f"host:{alias}", "server_head": live[:12], "copy_commit": mapped[:12],
+                       **({"copy_of_machine": str(row.get("machine_label"))}
+                          if row.get("machine_label") and row.get("machine_label") != alias else {})}
         if head.get("why") and not known:
             self._last_miss = str(head["why"])            # an unknown host, a missing folder: said, never a guess
             return ""

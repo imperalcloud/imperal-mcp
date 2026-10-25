@@ -481,6 +481,14 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         session enters your frame by itself."""
         return await _exo_call(exo.lens, tool="live_sessions", args={"minutes": minutes, "limit": limit})
 
+    @mcp.tool(title="Message Session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
+    async def message_session(conversation: str, text: str) -> dict:
+        """Write to another session of the user that is working now (``live_sessions`` names them -- Webbee in a
+        terminal, another shell): a finding to check, a question, what you are doing so you do not both do it. It
+        reads your words as an AGENT's, never the user's: a message approves nothing and changes no task -- decisions
+        and releases stay the user's. Its answer comes back in your frame as an AGENT MESSAGE. The user sees both."""
+        return await _exo_call(exo.lens, tool="message_session", args={"conversation": conversation, "text": text})
+
     @mcp.tool(title="Vault Log Read", annotations=ToolAnnotations(readOnlyHint=True))
     async def vault_log_read(ref: str, offset: int = 0, limit: int = 0, grep: str = "") -> dict:
         """An output the kernel kept in the vault (ref = vault://logs/...), paged or grepped."""

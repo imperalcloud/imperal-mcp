@@ -1041,3 +1041,18 @@ def test_a_second_depth_user_counts_only_through_a_real_first_depth_user(tmp_pat
     monkeypatch.setattr(exo, "_ask", lambda *a, **k: {"data": {"items": items}, "repo_key": "rk"})
     out = exo.impact_of_change(["f"], root="/r", target="host:h")
     assert out["dependent_files"] == ["a.py", "t_a.py"] and out["changed_together"] == ["c.py (0.0)"]
+
+
+def test_the_only_copy_of_a_path_answers_for_a_host_named_otherwise(tmp_path: Path, monkeypatch):
+    """Live 2026-10-25: the gateway's repo is catalogued as "imperal-gateway", asked as host:10.88.0.1 -- one copy of
+    the path on a host that exists answers (marked); a host that does not exist still never borrows."""
+    import webbee.tools as wt
+    cat = {"repos": [{"repo_key": "rk_gw", "root_path": "/opt/imperal-auth-gateway", "machine_label": "imperal-gateway",
+                      "git_ref": "fd6d2efac60c"}]}
+    monkeypatch.setattr(wt, "remote_head", _head(why="10.88.0.1: TimeoutError: "))
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud({"/v1/memory/code/repos": cat}))
+    assert exo._repo_key("/opt/imperal-auth-gateway", "host:10.88.0.1") == "rk_gw"
+    assert exo._fresh["copy_of_machine"] == "imperal-gateway" and "could not be asked" in exo._fresh["stale"]
+    monkeypatch.setattr(wt, "remote_head", _head(why="nope: OSError: Name or service not known"))
+    exo2 = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud({"/v1/memory/code/repos": cat}))
+    assert exo2._repo_key("/opt/imperal-auth-gateway", "host:nope") == ""
