@@ -233,6 +233,9 @@ async def run_write_tool_logic(client, ctx, app_id, function, args, autopilot) -
     return out
 
 
+_LIST_TOOLS = frozenset({"impact_of_change", "graph_slice", "orient", "search_code", "grep_code", "contract_slice"})
+
+
 def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP:
     mcp = FastMCP("imperal", instructions=EXOSKELETON_INSTRUCTIONS)
     exo = ExoskeletonRuntime(workspace=workspace, client=client)
@@ -250,7 +253,11 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         """A code tool runs on a worker thread; its cloud calls run on this (the server's) loop."""
         import asyncio
         exo.loop = asyncio.get_running_loop()
+        full = bool(kwargs.pop("full", False))
         out = await asyncio.to_thread(fn, **kwargs)
+        if fn.__name__ in _LIST_TOOLS and not full:      # a list answer stays within the model's reach (Task 8)
+            from .exoskeleton import bounded
+            out = bounded(out)
         return _recorded(fn.__name__, out, **kwargs) if fn.__name__ not in ("frame", "task", "lens") else out
 
     @mcp.tool(
@@ -291,9 +298,11 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         title="Get App",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    async def get_app(app_id: str) -> Any:
-        """Get one app's manifest + tools (with action_type) (PII-masked)."""
-        return defensive_scrub(await client.get_app(app_id))
+    async def get_app(app_id: str, full: bool = False) -> Any:
+        """Get one app's manifest + tools (with action_type) (PII-masked); bounded unless full=true."""
+        from .exoskeleton import bounded
+        got = defensive_scrub(await client.get_app(app_id))
+        return got if full else bounded(got)
 
     @mcp.tool(
         title="Run Read Tool",
@@ -404,9 +413,10 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         title="Impact of Change",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    async def impact_of_change(symbols: list[str], root: str | None = None, target: str | None = None) -> dict:
-        """Given symbols you plan to modify, return the files and call sites that depend on them (code first, tests after, uses inside the same file listed apart)."""
-        return await _exo_call(exo.impact_of_change, symbols=symbols, root=root, target=target)
+    async def impact_of_change(symbols: list[str], root: str | None = None, target: str | None = None,
+                               full: bool = False) -> dict:
+        """Given symbols you plan to modify, return the files and call sites that depend on them (code first, tests after, uses inside the same file listed apart). Bounded to the first entries with their totals unless full=true."""
+        return await _exo_call(exo.impact_of_change, symbols=symbols, root=root, target=target, full=full)
 
     @mcp.tool(
         title="Task and Plan",

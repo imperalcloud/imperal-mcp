@@ -334,6 +334,42 @@ _NESTED_QUANTIFIER = re.compile(r"\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)\s*[+
 _HOST_SYNC_REUSE_S = 60.0   # a remote repo is listed over SFTP at most once a minute (only changed files are read)
 
 
+ANSWER_CHARS = 20000   # what one tool answer may put in the model's context by default (live: 65K / 354K answers)
+
+
+def bounded(obj: Any, limit: int = ANSWER_CHARS) -> Any:
+    """A tool's answer within ``limit`` characters: its longest lists cut (each keeps its first entries and says how
+    many there were), long strings clipped; ``full=true`` on the tool gives everything."""
+    def size(x: Any) -> int:
+        return len(json.dumps(x, ensure_ascii=False, default=str))
+    if not isinstance(obj, dict) or size(obj) <= limit:
+        return obj
+    out = dict(obj)
+    lists = {k: list(v) for k, v in out.items() if isinstance(v, list) and len(v) > 1}
+    data = out.get("data") if isinstance(out.get("data"), dict) else None
+    if data is not None and isinstance(data.get("items"), list):
+        out["data"] = data = dict(data)
+    shown = {k: len(v) for k, v in lists.items()}
+    for _ in range(40):
+        if size(out) <= limit:
+            break
+        cands = [k for k in lists if shown[k] > 1]
+        if data is not None and len(data.get("items") or []) > 1:
+            data["items"] = data["items"][: max(1, len(data["items"]) // 2)]
+        if not cands and (data is None or len(data.get("items") or []) <= 1):
+            break
+        for k in cands:
+            shown[k] = max(1, shown[k] // 2)
+            out[k] = lists[k][: shown[k]]
+    for k, v in lists.items():
+        if shown[k] < len(v):
+            out[f"{k}_shown"], out[f"{k}_total"] = shown[k], len(v)
+    if size(out) > limit:          # still too big: the long strings give way
+        out = {k: (v[:2000] + "…" if isinstance(v, str) and len(v) > 2000 else v) for k, v in out.items()}
+    out["truncated"] = f"bounded to {limit} chars -- pass full=true for everything"
+    return out
+
+
 _SAFE_ARGS = ("path", "file_path", "root", "target", "content_chars", "name", "connection_id")
 
 
@@ -535,7 +571,10 @@ class ExoskeletonRuntime:
             candidate = os.path.realpath(expanded)
         else:
             candidate = os.path.realpath(os.path.join(ws_real, expanded))
-        if candidate != ws_real and not candidate.startswith(ws_real + os.sep):
+        extra = [os.path.realpath(os.path.expanduser(r)) for r in
+                 os.environ.get("IMPERAL_MCP_EXTRA_ROOTS", "").split(os.pathsep) if r.strip()]
+        inside = [r for r in [ws_real] + extra if candidate == r or candidate.startswith(r + os.sep)]
+        if not inside:
             raise OutsideWorkspaceError(
                 f"Root '{root}' escapes configured workspace root '{ws_real}'"
             )
