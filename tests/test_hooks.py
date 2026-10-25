@@ -189,3 +189,38 @@ def test_a_failed_server_frame_puts_the_spool_back(spool, tmp_path):
     exo = ExoskeletonRuntime(workspace=str(ws), client=_Cloud(fail=True))
     assert exo.frame()["ok"] is False
     assert [i["tool"] for i in H.Spool("s1").drain()[0]] == ["bash"]
+
+
+# ── security review (commit 60afbb6): a secret never rides in the args or a command's output; the spool is private ──
+def test_a_secret_file_s_content_never_rides_in_the_args():
+    w = {**CLAUDE_BASH, "tool_name": "Write", "tool_input": {"file_path": "/w/.env", "content": "DB_PASS=hunter2"},
+         "tool_response": {}}
+    e = {**CLAUDE_BASH, "tool_name": "Edit", "tool_input": {"file_path": "/w/secrets/db.yaml", "old_string": "pw: a",
+                                                            "new_string": "pw: hunter2"}, "tool_response": {}}
+    sh = {**CLAUDE_BASH, "tool_input": {"command": "cat ~/.ssh/id_rsa"}, "tool_response": {"stdout": "-----BEGIN KEY"}}
+    for p in (w, e, sh):
+        assert "hunter2" not in json.dumps(H.tool_items(p)) and "BEGIN KEY" not in json.dumps(H.tool_items(p))
+
+
+def test_the_spool_is_private(spool):
+    import stat
+    H.run_hook("post-tool", CLAUDE_BASH, gateway=_Gateway())
+    assert stat.S_IMODE(spool.stat().st_mode) == 0o700
+    assert all(stat.S_IMODE(p.stat().st_mode) == 0o600 for p in spool.iterdir() if p.is_file())
+
+
+# ── Antigravity CLI (antigravity.google/docs/hooks, 2026-10): its own fields and words ──
+AGY_POST = {"conversationId": "c9", "workspacePaths": ["/w"], "transcriptPath": "/t", "modelName": "m",
+            "toolCall": {"name": "run_command", "args": {"CommandLine": "pytest -q"}}, "stepIdx": 3}
+
+
+def test_antigravity_s_tool_call_and_its_words(spool):
+    [item] = H.tool_items(AGY_POST)
+    assert item["tool"] == "bash" and item["args"]["command"] == "pytest -q" and item["ok"] is True
+    H.run_hook("post-tool", AGY_POST, gateway=_Gateway())
+    assert len(H.Spool("c9").drain()[0]) == 1
+    start = H.run_hook("session-start", {"conversationId": "c9", "workspacePaths": ["/w"]}, gateway=_Gateway())
+    assert start["injectSteps"][0]["ephemeralMessage"].startswith("IMPERAL")
+    stop = H.run_hook("stop", {"conversationId": "c9", "workspacePaths": ["/w"], "fullyIdle": True,
+                               "executionNum": 1, "terminationReason": "done"}, gateway=_Gateway(hold=True))
+    assert stop["decision"] == "continue" and "blocked_on" in stop["reason"]

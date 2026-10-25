@@ -44,10 +44,21 @@ def _safe(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", str(name or "default"))[:120] or "default"
 
 
+def _private(path: str, mode: str = "a"):
+    """A spool file only this user can read (security review: the spool holds what the session saw)."""
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if mode == "a" else os.O_TRUNC)
+    return os.fdopen(os.open(path, flags, 0o600), mode, encoding="utf-8")
+
+
 @contextlib.contextmanager
 def _locked(path: str):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path + ".lock", "a+") as lock:
+    d = os.path.dirname(path)
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(d, 0o700)
+    except OSError:
+        pass
+    with _private(path + ".lock") as lock:
         try:
             import fcntl
             fcntl.flock(lock, fcntl.LOCK_EX)
@@ -65,7 +76,7 @@ class Spool:
 
     def _append(self, kind: str, obj: dict) -> None:
         with _locked(self.base):
-            with open(self.base + ".jsonl", "a", encoding="utf-8") as f:
+            with _private(self.base + ".jsonl") as f:
                 f.write(json.dumps({"k": kind, "v": obj}, ensure_ascii=False) + "\n")
 
     def add_items(self, items: list) -> None:
@@ -100,7 +111,7 @@ class Spool:
                     newer = f.read()
             except FileNotFoundError:
                 newer = ""
-            with open(self.base + ".jsonl", "w", encoding="utf-8") as f:
+            with _private(self.base + ".jsonl", "w") as f:
                 for it in items:
                     f.write(json.dumps({"k": "item", "v": it}, ensure_ascii=False) + "\n")
                 for m in memory:
@@ -119,7 +130,7 @@ class Spool:
         with _locked(self.base):
             st = {**self.state(), **fields}
             tmp = self.base + ".state.tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
+            with _private(tmp, "w") as f:
                 json.dump(st, f)
             os.replace(tmp, self.base + ".state.json")
         return st
@@ -138,7 +149,7 @@ def announce(cwd: str, session: str) -> None:
                if isinstance(v, dict) and time.time() - float(v.get("at") or 0) < 7 * 86400}
         cur[os.path.realpath(cwd or ".")] = {"session": session, "at": time.time()}
         tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
+        with _private(tmp, "w") as f:
             json.dump(cur, f)
         os.replace(tmp, path)
 
@@ -164,11 +175,30 @@ def mcp_session(me: str, shell_session: str) -> str:
     return "mcp-" + me + "-" + hashlib.sha1(f"shell|{shell_session}".encode()).hexdigest()[:12]
 
 
+def normalize(payload: dict) -> dict:
+    """Antigravity CLI names its fields its own way (``conversationId``, ``workspacePaths``, ``toolCall``): the same
+    payload in the common words (the other shells already use them)."""
+    if "conversationId" not in payload:
+        return payload
+    call = payload.get("toolCall") if isinstance(payload.get("toolCall"), dict) else {}
+    paths = payload.get("workspacePaths") if isinstance(payload.get("workspacePaths"), list) else []
+    err = str(payload.get("error") or "")
+    out = {**payload, "session_id": str(payload.get("conversationId") or ""), "cwd": str(paths[0]) if paths else "",
+           "transcript_path": str(payload.get("transcriptPath") or ""), "_shell": "antigravity"}
+    if call:
+        out.update(tool_name=str(call.get("name") or ""),
+                   tool_input=call.get("args") if isinstance(call.get("args"), dict) else {},
+                   tool_response={"error": err} if err else "")
+    return out
+
+
 def _event(payload: dict) -> str:
     return str(payload.get("hook_event_name") or "")
 
 
 def _shell(payload: dict) -> str:
+    if payload.get("_shell") == "antigravity" or "conversationId" in payload:
+        return "antigravity"
     ev = _event(payload)
     if ev in ("AfterTool", "BeforeTool", "AfterAgent", "BeforeAgent") or (
             isinstance(payload.get("tool_response"), dict) and "llmContent" in payload["tool_response"]):
@@ -204,6 +234,7 @@ def _command(inp: dict) -> str:
 
 def tool_items(payload: dict) -> list:
     """A shell's tool call as the kernel's exchange items (``[]`` for imperal-mcp's own -- the server has them)."""
+    payload = normalize(payload)
     name = str(payload.get("tool_name") or "")
     if not name or _IMPERAL_TOOL.match(name):
         return []
@@ -260,11 +291,15 @@ def last_answer(payload: dict) -> str:
 
 
 def context_output(payload: dict, text: str) -> dict:
+    if _shell(payload) == "antigravity":
+        return {"injectSteps": [{"ephemeralMessage": text}]}
     return {"hookSpecificOutput": {"hookEventName": _event(payload), "additionalContext": text}}
 
 
 def block_output(payload: dict, reason: str) -> dict:
-    return {"decision": "deny" if _shell(payload) == "gemini" else "block", "reason": reason}
+    """Hand the final back to the model, in the shell's words (Gemini: deny; Antigravity: continue; else block)."""
+    word = {"gemini": "deny", "antigravity": "continue"}.get(_shell(payload), "block")
+    return {"decision": word, "reason": reason}
 
 
 def _session_of(payload: dict, gateway) -> tuple[Spool, str, str]:
@@ -290,7 +325,7 @@ def _send(spool: Spool, send: Callable[[list, list], Any]) -> Any:
 def run_hook(event: str, payload: dict, gateway=None) -> dict | None:
     """One hook event; the answer to print (or ``None``). Never raises."""
     try:
-        return _run(event, payload if isinstance(payload, dict) else {}, gateway or _Gateway())
+        return _run(event, normalize(payload if isinstance(payload, dict) else {}), gateway or _Gateway())
     except Exception:
         return None
 

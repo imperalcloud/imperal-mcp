@@ -344,15 +344,24 @@ def exchange_item(tool: str, args: dict | None, ok: bool = True, text: str = "",
         a["path"] = a["root"].rstrip("/") + "/" + a["path"]
     try:
         import fnmatch
+        import shlex
         from imperal_sdk.code_index import SECRET_PATTERNS
         from .mask import defensive_scrub
         joined = "/".join(x for x in (a.get("root", ""), a.get("path", "")) if x)   # a root may name the folder
-        if any(_secret_path(v, SECRET_PATTERNS, fnmatch) for v in list(a.values()) + [joined]):
-            body = "(withheld: a secret file)"          # never what a secret file holds
+        try:
+            words = shlex.split(a.get("command", ""))          # a command that reads a secret file (security review)
+        except ValueError:
+            words = a.get("command", "").split()
+        if any(_secret_path(v, SECRET_PATTERNS, fnmatch) for v in list(a.values()) + [joined] + words):
+            body = "(withheld: a secret file)"          # never what a secret file holds -- in the output or the args
+            a = {k: ("(withheld)" if k in ("content", "old_string", "new_string", "old", "new") else v)
+                 for k, v in a.items()}
         else:
             body = str(defensive_scrub(str(text or "")[:text_limit]))
+            a = {k: str(defensive_scrub(v)) for k, v in a.items()}
     except Exception:      # recording never breaks a tool; what cannot be checked is not sent
         body = "(withheld: secrets not checked)"
+        a = {k: ("(withheld)" if k in ("content", "old_string", "new_string", "old", "new") else v) for k, v in a.items()}
     return {"app_id": "", "tool": str(tool), "args": a, "ok": bool(ok), "text": body}
 
 
