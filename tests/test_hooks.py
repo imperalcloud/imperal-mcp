@@ -234,3 +234,57 @@ def test_a_secret_touched_through_shell_punctuation_is_withheld_with_unknown_arg
     [w] = H.tool_items({**CLAUDE_BASH, "tool_name": "Write", "tool_input": {"file_path": "/w/.env", "content": "a",
                                                                            "body_text": "PW=hunter2"}, "tool_response": {}})
     assert "hunter2" not in json.dumps(w) and w["args"]["path"] == "/w/.env"
+
+
+# ── final review C1: no credential leaves this machine through a hook ──
+_LEAKS = "sk-proj-abcdefghijklmnopqrstuv ghp_abcdefghijklmnopqrstuvwxyz12 hunter2 S3cr3tP4ss wJalrXUtnFEMIK7MDENG tok123"
+
+
+def _assert_clean(obj):
+    dump = json.dumps(obj)
+    for leak in _LEAKS.split():
+        assert leak not in dump, (leak, dump[:300])
+
+
+def test_commands_outputs_and_reads_lose_their_credentials():
+    cases = [
+        {**CLAUDE_BASH, "tool_input": {"command": 'export OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuv && '
+                                                  'curl -H "Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz12" x'},
+         "tool_response": {"stdout": "password=hunter2 AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENG"}},
+        {**CLAUDE_BASH, "tool_input": {"command": "vault kv get imperal/gateway"},
+         "tool_response": {"stdout": "db_password    S3cr3tP4ss"}},
+        {**CLAUDE_BASH, "tool_input": {"command": "printenv"}, "tool_response": {"stdout": "X=S3cr3tP4ss"}},
+        {**CLAUDE_BASH, "tool_name": "Read", "tool_input": {"file_path": "/w/config/database.yml"},
+         "tool_response": {"file": {"content": "production:\n  password: hunter2\n"}}},
+        {**CLAUDE_BASH, "tool_input": {"command": "cat ~/.git-credentials"},
+         "tool_response": {"stdout": "https://u:tok123@github.com"}},
+        {**CLAUDE_BASH, "tool_name": "mcp__github__create_issue", "tool_input": {"token": "ghp_abcdefghijklmnopqrstuvwxyz12",
+                                                                               "title": "x"}, "tool_response": "ok"},
+    ]
+    for c in cases:
+        _assert_clean(H.tool_items(c))
+
+
+def test_an_unknown_tool_keeps_only_its_name_and_result_flag():
+    [it] = H.tool_items({**CLAUDE_BASH, "tool_name": "mcp__other__do", "tool_input": {"q": "x"},
+                         "tool_response": "anything"})
+    assert it["tool"] == "mcp__other__do" and it["args"] == {} and it["text"] == ""
+
+
+def test_prompts_and_finals_lose_their_credentials(spool):
+    gw = _Gateway()
+    H.run_hook("prompt", {**CLAUDE_BASH, "hook_event_name": "UserPromptSubmit",
+                          "prompt": "use password=hunter2 and ghp_abcdefghijklmnopqrstuvwxyz12"}, gateway=gw)
+    H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "set token: tok123"},
+               gateway=gw)
+    _assert_clean(gw.calls)
+
+
+def test_an_ignored_folder_records_nothing(spool, monkeypatch, tmp_path):
+    monkeypatch.setenv("IMPERAL_MCP_IGNORE", str(tmp_path / "private"))
+    (tmp_path / "private").mkdir()
+    H.run_hook("post-tool", {**CLAUDE_BASH, "cwd": str(tmp_path / "private")}, gateway=_Gateway())
+    gw = _Gateway()
+    assert H.run_hook("prompt", {**CLAUDE_BASH, "cwd": str(tmp_path / "private"), "hook_event_name": "UserPromptSubmit",
+                                 "prompt": "x"}, gateway=gw) is None
+    assert H.Spool("s1").drain() == ([], []) and gw.calls == []

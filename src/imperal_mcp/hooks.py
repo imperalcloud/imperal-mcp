@@ -259,7 +259,9 @@ def tool_items(payload: dict) -> list:
     if low in ("grep", "glob", "search_file_content", "ls", "list_directory"):
         return [exchange_item("grep" if low != "glob" else "glob", {k: str(v) for k, v in inp.items()}, ok, text,
                               text_limit=OUTPUT_CHARS)]
-    return [exchange_item(name, {k: str(v)[:500] for k, v in inp.items()}, ok, text, text_limit=OUTPUT_CHARS)]
+    # any other tool (another MCP server's, a web fetch...): its name and whether it went well -- never its args or
+    # its answer, which may carry anything (final review C1)
+    return [{"app_id": "", "tool": name, "args": {}, "ok": bool(ok), "text": ""}]
 
 
 def last_answer(payload: dict) -> str:
@@ -330,8 +332,27 @@ def run_hook(event: str, payload: dict, gateway=None) -> dict | None:
         return None
 
 
+def _clean(text: str) -> str:
+    """A prompt or an answer as it may leave the machine: PII masked, credentials redacted (final review C1)."""
+    from .mask import defensive_scrub
+    from .secrets_scrub import scrub_secrets
+    return str(scrub_secrets(str(defensive_scrub(str(text or "")))))
+
+
+def ignored(cwd: str) -> bool:
+    """A folder the user keeps out of the vault (``IMPERAL_MCP_IGNORE``, paths joined by the OS separator)."""
+    here = os.path.realpath(cwd or ".")
+    for r in os.environ.get("IMPERAL_MCP_IGNORE", "").split(os.pathsep):
+        root = os.path.realpath(os.path.expanduser(r)) if r.strip() else ""
+        if root and (here == root or here.startswith(root + os.sep)):
+            return True
+    return False
+
+
 def _run(event: str, payload: dict, gateway) -> dict | None:
     shell_session = str(payload.get("session_id") or "default")
+    if event != "session-start" and ignored(str(payload.get("cwd") or os.getcwd())):
+        return None
     announce(str(payload.get("cwd") or os.getcwd()), shell_session)
     spool = Spool(shell_session)
     if event == "post-tool":
@@ -348,13 +369,13 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
     if event == "prompt":
         prompt = str(payload.get("prompt") or "")
         if prompt.strip():
-            spool.add_memory({"kind": "user_request", "content": prompt[:MEMORY_CHARS]})
+            spool.add_memory({"kind": "user_request", "content": _clean(prompt)[:MEMORY_CHARS]})
         spool, _ss, sess = _session_of(payload, gateway)
         st = spool.state()
         step = int(st.get("step") or 0) + 1
 
         def _frame(items, memory):
-            return gateway.frame({"session_id": sess, "step": step, "goal": str(st.get("goal") or prompt)[:4000],
+            return gateway.frame({"session_id": sess, "step": step, "goal": str(st.get("goal") or _clean(prompt))[:4000],
                                   "items": list(st.get("items") or []), "exchange": items, "memory": memory,
                                   "repo_key": str(st.get("repo_key") or "")})
         ans = _send(spool, _frame)
@@ -364,13 +385,14 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
     if event == "stop":
         final = last_answer(payload)
         if final.strip():
-            spool.add_memory({"kind": "final", "content": final[:MEMORY_CHARS]})
+            spool.add_memory({"kind": "final", "content": _clean(final)[:MEMORY_CHARS]})
         spool, _ss, sess = _session_of(payload, gateway)
         st = spool.state()
         _send(spool, lambda items, memory: gateway.record({"session_id": sess, "step": int(st.get("step") or 0),
                                                            "exchange": items, "memory": memory,
                                                            "repo_key": str(st.get("repo_key") or "")}))
-        got = gateway.final({"session_id": sess, "final_text": final[:20000], "repo_key": str(st.get("repo_key") or "")})
+        got = gateway.final({"session_id": sess, "final_text": _clean(final)[:20000],
+                             "repo_key": str(st.get("repo_key") or "")})
         if (got or {}).get("hold") and str(got.get("reason") or "").strip():
             return block_output(payload, str(got["reason"]))
         return None

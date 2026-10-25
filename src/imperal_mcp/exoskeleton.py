@@ -371,6 +371,12 @@ def bounded(obj: Any, limit: int = ANSWER_CHARS) -> Any:
 
 
 _SAFE_ARGS = ("path", "file_path", "root", "target", "content_chars", "name", "connection_id")
+# commands whose output IS secrets (final review C1): their output never leaves the machine
+_PRINTS_SECRETS = re.compile(r"(?i)(?:^|[\s;&|(])(?:vault\s+(?:kv\s+)?(?:get|read)|printenv|env(?=\s*(?:$|[;&|)]))"
+                             r"|export\s+-p|set(?=\s*(?:$|[;&|)]))|gh\s+auth\s+(?:token|status\s+-t)"
+                             r"|kubectl\s+get\s+secrets?|aws\s+configure\s+(?:get|export)|security\s+find-\S+-password"
+                             r"|op\s+(?:read|item\s+get)|bw\s+get|pass\s+show|doppler\s+secrets"
+                             r"|cat\s+[^;&|]*(?:credentials|\.netrc|\.pgpass|\.npmrc|\.pypirc|\.docker/config))")
 
 
 def _only_safe_args(a: dict, cmd: str) -> dict:
@@ -394,6 +400,7 @@ def exchange_item(tool: str, args: dict | None, ok: bool = True, text: str = "",
         import shlex
         from imperal_sdk.code_index import SECRET_PATTERNS
         from .mask import defensive_scrub
+        from .secrets_scrub import is_code_path, scrub_secrets
         joined = "/".join(x for x in (a.get("root", ""), a.get("path", "")) if x)   # a root may name the folder
         cmd = a.get("command", "")
         try:
@@ -405,9 +412,15 @@ def exchange_item(tool: str, args: dict | None, ok: bool = True, text: str = "",
         if any(_secret_path(v, SECRET_PATTERNS, fnmatch) for v in list(a.values()) + [joined] + words):
             body = "(withheld: a secret file)"          # never what a secret file holds -- in the output or the args
             a = _only_safe_args(a, cmd)
+        elif cmd and _PRINTS_SECRETS.search(cmd):
+            body = "(withheld: a command that prints secrets)"   # vault kv get, printenv, gh auth token ...
+            a = {k: str(scrub_secrets(str(defensive_scrub(v)))) for k, v in a.items()}
         else:
-            body = str(defensive_scrub(str(text or "")[:text_limit]))
-            a = {k: str(defensive_scrub(v)) for k, v in a.items()}
+            # final review C1: credentials (tokens, passwords, keys, URL user-info) go before anything leaves
+            code = is_code_path(a.get("path", ""))
+            body = str(scrub_secrets(str(defensive_scrub(str(text or "")[:text_limit])), code=code))
+            a = {k: str(scrub_secrets(str(defensive_scrub(v)), code=code and k in ("old_string", "new_string",
+                                                                                  "content"))) for k, v in a.items()}
     except Exception:      # recording never breaks a tool; what cannot be checked is not sent
         body = "(withheld: secrets not checked)"
         a = _only_safe_args(a, a.get("command", ""))
