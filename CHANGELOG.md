@@ -4,6 +4,13 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.6.6 — 2026-10-25 — a paid frame says why it was refused
+
+### Changed
+- **`frame`**: the kernel's frame is priced in Imperal's system pricing (credits per frame, set by the platform admin;
+  pointers such as `state_lens` / `recall` stay free). A frame refused for credits returns the kernel's reason
+  ("not enough credits for a frame ... -- top up in the panel") and keeps its step, so a retry is never charged twice.
+
 ## 0.6.5 — 2026-10-25 — an exact text, a server's line range, callers by name
 
 ### Added
