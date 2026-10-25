@@ -542,7 +542,7 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
             body = {"session_id": sess, "step": step, "goal": str(st.get("goal") or _clean(prompt))[:4000],
                     "items": list(st.get("items") or []), "exchange": items, "memory": memory,
                     "repo_key": str(st.get("repo_key") or ""), "cwd": where, "repo_root": where,
-                    "session_repo": repo}
+                    "session_repo": repo, "budget": HOOK_FRAME_CHARS}   # the kernel composes it to fit, far blocks first
             got = gateway.frame(body) or {}
             if got.get("refused"):         # not charged: the step is still written (free) and keeps its number (I3)
                 # its memory was committed before the charge (kernel I4): the record writes the calls, never the memory

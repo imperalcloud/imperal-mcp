@@ -455,3 +455,12 @@ def test_a_shell_call_carries_the_folder_it_ran_in():
     assert cx["args"]["cwd"] == "/w/sub"
     [no] = H.tool_items({**CLAUDE_BASH, "cwd": ""})
     assert "cwd" not in no["args"]
+
+
+def test_the_prompt_frame_asks_the_kernel_to_fit_the_hook(spool):
+    """live 2026-10-25: every hook frame was cut at 9500 chars inside KNOWLEDGE -- HISTORY never seen; the kernel
+    composes it to the hook's size instead, its far blocks dropped first."""
+    gw = _Gateway()
+    H.run_hook("prompt", {**CLAUDE_BASH, "hook_event_name": "UserPromptSubmit", "prompt": "fix alpha"}, gateway=gw)
+    body = [b for n, b in gw.calls if n == "frame"][0]
+    assert body["budget"] == H.HOOK_FRAME_CHARS

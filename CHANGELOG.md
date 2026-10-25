@@ -4,6 +4,24 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.8.3 — 2026-10-25
+
+### Fixed
+- The prompt hook's frame fits the hook: it asks the kernel for a frame of the size the shell keeps (`budget`), so the
+  kernel drops its farthest blocks first -- the frame is never cut at its end any more (HISTORY was never seen).
+
+Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
+background is proven by the read of its log, WORLD takes the code map's commit, and more).
+
+## 0.8.3 — 2026-10-25
+
+### Fixed
+- The prompt hook's frame fits the hook: it asks the kernel for a frame of the size the shell keeps (`budget`), so the
+  kernel drops its farthest blocks first -- the frame is never cut at its end any more (HISTORY was never seen).
+
+Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
+background is proven by the read of its log, WORLD takes the code map's commit, and more).
+
 ## 0.8.2 — 2026-10-25
 
 ### Fixed
