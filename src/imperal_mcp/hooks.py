@@ -34,7 +34,9 @@ HOOK_FRAME_CHARS = 9500
 # what a shell feeds through the prompt hook that the user never typed (live 2026-10-25: a background task's
 # notice became the frame's "CURRENT REQUEST" and was charged a frame)
 _NOT_A_REQUEST = ("<task-notification>", "<system-reminder>", "[SYSTEM NOTIFICATION")
-READ_CHARS, OUTPUT_CHARS = 20000, 8000                    # what of a read / an output reaches the kernel
+# what of a read / an output reaches the kernel -- an output as much as a read (live 2026-10-25: the Stop check
+# called names "never seen" that stood past 8000 chars of a 14K output the model had read whole)
+READ_CHARS, OUTPUT_CHARS = 20000, 20000
 _IMPERAL_TOOL = re.compile(r"^mcp_{1,2}imperal_{1,2}")    # imperal-mcp's own calls: the server records those
 _SHELL_TOOLS = {"bash", "shell", "run_shell_command", "run_command", "exec_command", "execute_command", "terminal"}
 _EDIT_TOOLS = {"edit", "multiedit", "replace", "edit_file", "str_replace"}
@@ -222,6 +224,44 @@ def current_session(workspace: str, server_parent: int | None = None) -> str:
     return next((s for s, v in entries if v.get("cwd") == ws), "")
 
 
+def session_repo(cwd: str) -> str:
+    """The repository a session works in, as its key -- the vault project of the session's memory (owner 2026-10-25:
+    "проект на репо"): the key Webbee computes for the git work tree around ``cwd`` (``webbee.repo.compute_repo_key``:
+    the origin URL, else the tree's path, hashed); "" outside a work tree (a folder of repositories is none -- the
+    session gets a project of its own)."""
+    import subprocess
+    try:
+        top = subprocess.run(["git", "-C", cwd or ".", "rev-parse", "--show-toplevel"], capture_output=True,
+                             text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    root = top.stdout.strip() if top.returncode == 0 else ""
+    if not root:
+        return ""
+    try:
+        from webbee.repo import compute_repo_key
+        return str(compute_repo_key(root))
+    except Exception:              # no webbee here (no [code] extra): the same formula
+        try:
+            url = subprocess.run(["git", "-C", root, "remote", "get-url", "origin"], capture_output=True, text=True,
+                                 timeout=3)
+            ident = url.stdout.strip() if url.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            ident = ""
+        return hashlib.sha256((ident or os.path.realpath(root)).encode("utf-8")).hexdigest()[:12]
+
+
+def pinned_repo(spool: "Spool", cwd: str) -> str:
+    """The session's repo, worked out once (its first prompt) and kept: a session never moves between vault projects
+    when its folder changes."""
+    st = spool.state()
+    if "session_repo" in st:
+        return str(st.get("session_repo") or "")
+    key = session_repo(cwd)
+    spool.update(session_repo=key)
+    return key
+
+
 def mcp_session(me: str, shell_session: str) -> str:
     """The kernel's session for a shell session -- the same id from the hooks and from the MCP server."""
     return "mcp-" + me + "-" + hashlib.sha1(f"shell|{shell_session}".encode()).hexdigest()[:12]
@@ -401,13 +441,17 @@ def _bounded_items(items: list) -> list:
 
 def _send(spool: Spool, send: Callable[[list, list], Any]) -> Any:
     items, memory = spool.drain()
+    sent = _bounded_items(items)
     try:
-        return send(_bounded_items(items), memory[-MEMORY_MAX:])
+        got = send(sent, memory[-MEMORY_MAX:])
     except Exception as exc:
         code = getattr(exc, "status_code", None)
         if not (isinstance(code, int) and 400 <= code < 500 and code not in (401, 402, 408, 429)):
             spool.restore(items, memory)      # a passing failure: sent next time; a refusal for good: dropped (I5)
         raise
+    if len(sent) < len(items):                # the older calls past one request's size go with the next one
+        spool.restore(items[:len(items) - len(sent)], [])
+    return got
 
 
 def run_hook(event: str, payload: dict, gateway=None) -> dict | None:
@@ -459,17 +503,22 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
         if prompt.strip():
             spool.add_memory({"kind": "user_request", "content": _clean(prompt)[:MEMORY_CHARS]})
         spool, _ss, sess = _session_of(payload, gateway)
+        where = os.path.realpath(str(payload.get("cwd") or os.getcwd()))   # the code map follows the shell's folder
+        repo = pinned_repo(spool, where)
         st = spool.state()
         step = int(st.get("step") or 0) + 1
-        where = os.path.realpath(str(payload.get("cwd") or os.getcwd()))   # the code map follows the shell's folder
 
         def _frame(items, memory):
             body = {"session_id": sess, "step": step, "goal": str(st.get("goal") or _clean(prompt))[:4000],
                     "items": list(st.get("items") or []), "exchange": items, "memory": memory,
-                    "repo_key": str(st.get("repo_key") or ""), "cwd": where, "repo_root": where}
+                    "repo_key": str(st.get("repo_key") or ""), "cwd": where, "repo_root": where,
+                    "session_repo": repo}
             got = gateway.frame(body) or {}
             if got.get("refused"):         # not charged: the step is still written (free) and keeps its number (I3)
-                gateway.record({k: body[k] for k in ("session_id", "exchange", "memory", "repo_key")} | {"step": step - 1})
+                # its memory was committed before the charge (kernel I4): the record writes the calls, never the memory
+                # twice (review: the request landed in the thread twice)
+                gateway.record({k: body[k] for k in ("session_id", "exchange", "repo_key", "session_repo")}
+                               | {"step": step - 1, "memory": []})
             return got
         ans = _send(spool, _frame) or {}
         if ans.get("refused"):
@@ -486,12 +535,14 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
         if final.strip():
             spool.add_memory({"kind": "final", "content": _clean(final)[:MEMORY_CHARS]})
         spool, _ss, sess = _session_of(payload, gateway)
+        repo = pinned_repo(spool, os.path.realpath(str(payload.get("cwd") or os.getcwd())))
         st = spool.state()
         _send(spool, lambda items, memory: gateway.record({"session_id": sess, "step": int(st.get("step") or 0),
                                                            "exchange": items, "memory": memory,
-                                                           "repo_key": str(st.get("repo_key") or "")}))
-        got = gateway.final({"session_id": sess, "final_text": _clean(final)[:20000],
-                             "repo_key": str(st.get("repo_key") or "")})
+                                                           "repo_key": str(st.get("repo_key") or ""),
+                                                           "session_repo": repo}))
+        got = gateway.final({"session_id": sess, "final_text": _clean(final)[:20000], "step": int(st.get("step") or 0),
+                             "repo_key": str(st.get("repo_key") or ""), "session_repo": repo})
         if (got or {}).get("hold") and str(got.get("reason") or "").strip():
             return block_output(payload, str(got["reason"]))
         opened = [str(x) for x in (got or {}).get("open") or [] if str(x).strip()]

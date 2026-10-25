@@ -4,6 +4,23 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.8.0 — 2026-10-25
+
+### Added
+- `search_history(query)`: your past conversations of any surface (Webbee, the panel, Telegram, other shells'
+  sessions) that hold the words; each hit names its conversation and message. `recall(ref, conversation=...)` opens
+  one whole. Nothing of another conversation enters your frame by itself (needs the kernel's thread isolation).
+- An external session's vault project is the repository it started in (the key Webbee computes), pinned once per
+  session; outside a repository the session has a project of its own.
+
+### Fixed
+- A Bash output reaches the kernel up to 20 000 characters (was 8 000): names past the cut were called "never seen".
+- `ssh / scp / sftp -i <key>` (and `IdentityFile`) uses the key -- the command is no longer withheld as a secret-file
+  read; the same key path anywhere else in the command still withholds it.
+- A refused (unpaid) frame no longer sends the step's memory twice; a final names its step.
+- What does not fit one request waits in the spool for the next one, never dropped; the `frame` tool keeps one
+  request's size too.
+
 ## 0.7.4 — 2026-10-25
 
 ### Fixed

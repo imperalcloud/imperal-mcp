@@ -318,8 +318,10 @@ THE LOOP (every task):
 4. Safety: `checkpoint` before risky multi-file edits, `checkpoint_diff`, `checkpoint_rollback`; `check_syntax` after
    an edit; `coding_context` for the workspace facts; `token_savings` for what the graph saved.
 5. Memory: every step is written to the vault (your shell's hooks send your calls, thoughts and answers). Look back
-   with `recall_context(query)` and `recall` (a past answer, page by page); the frame's pointers `state_lens` and
-   `vault_log_read` open what it counted or offloaded. Keep what lasts with `remember_fact` and `save_repo_note`.
+   with `recall_context(query)` and `recall` (a past answer, page by page); `search_history(query)` finds a past
+   conversation of any surface and `recall(ref, conversation=...)` opens it -- no other conversation enters your
+   frame by itself. The frame's pointers `state_lens` and `vault_log_read` open what it counted or offloaded. Keep
+   what lasts with `remember_fact` and `save_repo_note`.
 6. Never state a code name, file or size you did not read in this task: the kernel checks every step and the final.
 
 APPS: `list_apps`, `get_app`, `run_read_tool`, `run_write_tool` (money tools need panel approval), `upload_file`;
@@ -435,13 +437,24 @@ def exchange_item(tool: str, args: dict | None, ok: bool = True, text: str = "",
         from .secrets_scrub import is_code_path, scrub_secrets
         joined = "/".join(x for x in (a.get("root", ""), a.get("path", "")) if x)   # a root may name the folder
         cmd = a.get("command", "")
+        # an identity given to ssh / scp / sftp in its own slot is USED to sign in, never printed (live 2026-10-25:
+        # `ssh -i ~/.ssh/<key> host './deploy.sh status'` was withheld whole). The command is judged by ITS OWN words;
+        # only one occurrence per identity slot is set aside -- the same path anywhere else is a read (security review)
         try:
             words = shlex.split(cmd)                         # a command that reads a secret file (security review)
         except ValueError:
             words = []
         # ... and every piece between the shell's punctuation (cat<.env, x=$(cat .env), a|b;c)
-        words += [w for w in re.split(r"[\s<>|;&()`$=\"']+", cmd) if w]
-        if any(_secret_path(v, SECRET_PATTERNS, fnmatch) for v in list(a.values()) + [joined] + words):
+        pieces = [w for w in re.split(r"[\s<>|;&()`$=\"']+", cmd) if w]
+        for slot in (_ssh_identity_slots(cmd) if _SSH_PROGRAM.search(cmd) else []):
+            if slot in words:                                # the slot once from the words, its pieces once each
+                words.remove(slot)
+            for part in [x for x in re.split(r"[\s<>|;&()`$=\"']+", slot) if x]:
+                if part in pieces:
+                    pieces.remove(part)
+        words += pieces
+        values = [v for k, v in a.items() if k != "command"]
+        if any(_secret_path(v, SECRET_PATTERNS, fnmatch) for v in values + [joined] + words):
             body = "(withheld: a secret file)"          # never what a secret file holds -- in the output or the args
             a = _only_safe_args(a, cmd)
         elif cmd and _PRINTS_SECRETS.search(re.sub(r"[\"'`\\]", "", cmd)):    # quotes and escapes cannot hide it
@@ -458,6 +471,63 @@ def exchange_item(tool: str, args: dict | None, ok: bool = True, text: str = "",
         body = "(withheld: secrets not checked)"
         a = _only_safe_args(a, a.get("command", ""))
     return {"app_id": "", "tool": str(tool), "args": a, "ok": bool(ok), "text": body}
+
+
+_SSH_PROGRAM = re.compile(r"(?:^|[\s;&|(/])(?:ssh|scp|sftp)(?=\s)")
+
+
+# the options of ssh / scp / sftp (OpenSSH 9): those that take a value, and those that do not -- an option outside
+# both gives no exemption (fail closed, security review)
+_SSH_OPT_ARG = {"ssh": set("BbcDEeFIiJLlmOoPpQRSWw"), "scp": set("cDFiJlloPSX"), "sftp": set("BbcDFiJloPRSsX")}
+_SSH_OPT_FLAG = {"ssh": set("46AaCfGgKkMNnqsTtVvXxYy"), "scp": set("346ABCOpqRrsTv"), "sftp": set("46AaCfNpqrv")}
+
+
+def _ssh_identity_slots(cmd: str) -> list:
+    """The words that are an identity slot (``-i <key>``, ``-i<key>``, ``-o IdentityFile=<key>``) in the OPTION AREA of
+    the ssh / scp / sftp calls of ``cmd`` -- each once per slot, as written; ``[]`` (no exemption) when the command
+    has a newline, ``$( )``, backticks or a process substitution, does not parse, or an option area holds an option
+    this table does not know or a value that is itself an option (fail closed, security review)."""
+    import shlex
+    cmd = str(cmd or "")
+    # an escape (the shell and this parser may read it apart), a function or an alias that may BE "ssh": no exemption
+    if re.search(r"[\n\r`\\]|\$\(|[<>]\(|\balias\b|\bfunction\b|\b(?:ssh|scp|sftp)\s*\(\s*\)", cmd):
+        return []
+    try:
+        lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|")
+        lex.whitespace_split = True
+        lex.commenters = ""                                  # a "#" is no comment here: nothing is cut away
+        tokens = list(lex)
+    except ValueError:
+        return []
+    if any(t and set(t) <= set(";&|") for t in tokens):
+        return []           # one simple command only: no separator outside quotes, so every reading agrees (review)
+    slots: list = []
+    for argv in [tokens]:
+        # the program itself: its bare name (found on PATH) or a system path -- never ./ssh or a lookalike
+        prog = argv[0] if argv and argv[0] in _SSH_OPT_ARG else (
+            argv[0].rsplit("/", 1)[-1] if argv and re.fullmatch(r"/(?:usr/(?:local/)?)?bin/(?:ssh|scp|sftp)", argv[0])
+            else "")
+        if prog not in _SSH_OPT_ARG:
+            if argv and argv[0].rsplit("/", 1)[-1] in _SSH_OPT_ARG:
+                return []                                    # an ssh of unknown origin: no exemption at all
+            continue
+        with_arg, flags = _SSH_OPT_ARG[prog], _SSH_OPT_FLAG[prog]
+        i = 1
+        while i < len(argv) and argv[i].startswith("-") and argv[i] not in ("-", "--"):
+            w = argv[i]
+            if w[1:2] in with_arg:
+                rest = w[2:]
+                value = rest or (argv[i + 1] if i + 1 < len(argv) else "")
+                if not value or value.startswith("-"):
+                    return []
+                if w[1:2] == "i" or (w[1:2] == "o" and value.lower().startswith("identityfile")):
+                    slots.append(w if rest else value)
+                i += 1 if rest else 2
+            elif all(c in flags for c in w[1:]):
+                i += 1
+            else:
+                return []
+    return slots
 
 
 def _secret_path(value: str, patterns: tuple, fnmatch: Any) -> bool:
@@ -494,6 +564,7 @@ class ExoskeletonRuntime:
         self._me = ""
         self._started = time.time()
         self._baselined: set[str] = set()
+        self._own_repo: str | None = None          # the session's repo without a shell's hooks (once)
         self._host_syncs: dict[str, threading.Thread] = {}
 
     # -- the kernel's frame (phase B, spec 2026-10-24 §4.2) -------------------------------------------
@@ -562,12 +633,25 @@ class ExoskeletonRuntime:
         from .hooks import Spool
         return Spool(shell)
 
+    def _session_repo(self, ws: str) -> str:
+        """The session's repo (its vault project): the shell's pinned one, else this server's own, worked out once."""
+        from .hooks import pinned_repo, session_repo
+        spool = self._shell_spool(ws)
+        if spool is not None:
+            return pinned_repo(spool, ws)
+        if self._own_repo is None:
+            self._own_repo = session_repo(ws)
+        return self._own_repo
+
     def lens(self, tool: str, args: dict | None = None, root: str | None = None) -> dict[str, Any]:
-        """A pointer the frame gave (state_lens / recall / vault_log_read), answered by the kernel for this session."""
+        """A pointer the frame gave (state_lens / recall / vault_log_read) or a search of past conversations
+        (search_history), answered by the kernel for this session."""
         try:
             if self._client is None:
                 raise RuntimeError("no Imperal client")
-            body = {"session_id": self._session(self.resolve_workspace(root)), "tool": str(tool), "args": dict(args or {})}
+            ws = self.resolve_workspace(root)
+            body = {"session_id": self._session(ws), "tool": str(tool), "args": dict(args or {}),
+                    "session_repo": self._session_repo(ws)}
             return self._vault("POST", "/v1/memory/frame/lens", body=body) or {}
         except Exception as exc:
             return {"ok": False, "content": f"{tool} unavailable: {type(exc).__name__}: {str(exc)[:200]}"}
@@ -583,7 +667,10 @@ class ExoskeletonRuntime:
         hooked, memory = spool.drain() if spool is not None else ([], [])   # the shell's own calls and memory
         step = (int(spool.state().get("step") or 0) if spool is not None else self._frame_step) + 1
         own = self._exchange + changed
-        pending = (hooked + own)[-_EXCHANGE_MAX:]
+        from .hooks import _bounded_items
+        allq = hooked + own
+        pending = _bounded_items(allq)             # one request's count AND size (review: 60 x 20K is past 2 MB)
+        late = allq[:len(allq) - len(pending)]       # the older ones wait for the next frame, never lost
         self._exchange = []
         try:
             if self._client is None:
@@ -595,7 +682,7 @@ class ExoskeletonRuntime:
                 repo_key = ""                   # the frame still comes; its code map says it is not synced
             body = {"session_id": session, "step": step, "goal": self._task_goal,
                     "items": self._task_items, "exchange": pending, "cwd": where, "repo_root": where,
-                    "repo_key": repo_key or "", "memory": memory[-20:]}
+                    "repo_key": repo_key or "", "memory": memory[-20:], "session_repo": self._session_repo(ws)}
             ans = self._vault("POST", "/v1/memory/frame", body=body) or {}
         except Exception as exc:
             self._exchange = (own + self._exchange)[-_EXCHANGE_MAX:]     # nothing is lost: the next frame sends it
@@ -605,6 +692,11 @@ class ExoskeletonRuntime:
                 return {"ok": False, "content": _detail_of(str(exc))}
             return {"ok": False, "content": f"frame unavailable: {type(exc).__name__}: {str(exc)[:200]}"}
         self._frame_step = step
+        if late:
+            if spool is not None:
+                spool.restore(late, [])
+            else:
+                self._exchange = (late + self._exchange)[-_EXCHANGE_MAX:]
         if spool is not None:
             spool.update(step=step, repo_key=repo_key or "")
         return {"ok": True, "frame": str(ans.get("frame") or ""), "tool_groups": list(ans.get("tool_groups") or []),

@@ -452,9 +452,20 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         return await _exo_call(exo.lens, tool="state_lens", args={"section": section, "focus": focus, "offset": offset})
 
     @mcp.tool(title="Recall", annotations=ToolAnnotations(readOnlyHint=True))
-    async def recall(ref: str, offset: int = 0, n: int = 1) -> dict:
-        """A past request or answer of your session whole (ref = A<seq> / U<seq> / last_answers / all)."""
-        return await _exo_call(exo.lens, tool="recall", args={"ref": ref, "offset": offset, "n": n})
+    async def recall(ref: str, offset: int = 0, n: int = 1, conversation: str = "") -> dict:
+        """A past request or answer whole (ref = A<seq> / U<seq> / last_answers / all) -- of your session, or of
+        another conversation of yours by its id (``conversation``, as search_history names it)."""
+        args: dict = {"ref": ref, "offset": offset, "n": n}
+        if conversation:
+            args["conversation"] = conversation
+        return await _exo_call(exo.lens, tool="recall", args=args)
+
+    @mcp.tool(title="Search History", annotations=ToolAnnotations(readOnlyHint=True))
+    async def search_history(query: str, limit: int = 10) -> dict:
+        """Your past conversations that hold ``query`` -- Webbee, the panel, Telegram, other shells' sessions; each hit
+        names its conversation and message, and recall(ref, conversation=...) opens it whole. Nothing of another
+        conversation enters your frame by itself: ask here."""
+        return await _exo_call(exo.lens, tool="search_history", args={"query": query, "limit": limit})
 
     @mcp.tool(title="Vault Log Read", annotations=ToolAnnotations(readOnlyHint=True))
     async def vault_log_read(ref: str, offset: int = 0, limit: int = 0, grep: str = "") -> dict:

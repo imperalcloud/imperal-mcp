@@ -334,7 +334,11 @@ def test_a_frame_refused_for_credits_keeps_the_step_s_memory_and_its_step(spool)
     out = H.run_hook("prompt", {**CLAUDE_BASH, "hook_event_name": "UserPromptSubmit", "prompt": "fix"}, gateway=gw)
     assert "not enough credits" in out["hookSpecificOutput"]["additionalContext"]
     rec = [b for n, b in gw.calls if n == "record"][0]
-    assert [e["tool"] for e in rec["exchange"]] == ["bash"] and rec["memory"][0]["kind"] == "user_request"
+    # the memory went with the frame -- the kernel commits it before the charge (I4); the record writes the calls
+    # and never the memory twice (review 2026-10-25: the request landed in the thread twice)
+    fr = [b for n, b in gw.calls if n == "frame"][0]
+    assert fr["memory"][0]["kind"] == "user_request"
+    assert [e["tool"] for e in rec["exchange"]] == ["bash"] and rec["memory"] == []
     assert H.Spool("s1").state().get("step", 0) == 0
 
 
@@ -414,9 +418,10 @@ def test_a_hook_frame_names_the_folder_the_shell_works_in(spool):
 
 
 def test_two_withheld_commands_stay_two_calls():
-    """Live 2026-10-25: two different `ssh -i ~/.ssh/key ...` commands became one label -- REPEATED in the frame."""
-    a = H.tool_items({**CLAUDE_BASH, "tool_input": {"command": "ssh -i ~/.ssh/k host 'git log'"}})[0]
-    b = H.tool_items({**CLAUDE_BASH, "tool_input": {"command": "ssh -i ~/.ssh/k host 'deploy'"}})[0]
+    """Live 2026-10-25: two different withheld commands became one label -- REPEATED in the frame. (An `ssh -i
+    <key>` run is no longer withheld: the key is used, not read -- tests/test_memory_pack.py.)"""
+    a = H.tool_items({**CLAUDE_BASH, "tool_input": {"command": "grep Host ~/.ssh/config"}})[0]
+    b = H.tool_items({**CLAUDE_BASH, "tool_input": {"command": "grep User ~/.ssh/config"}})[0]
     assert a["args"]["command"] != b["args"]["command"] and "~/.ssh" not in a["args"]["command"]
     assert a["args"]["command"].startswith("(withheld: a command on a secret file")
 
