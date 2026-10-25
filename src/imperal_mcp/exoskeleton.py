@@ -471,7 +471,10 @@ class ExoskeletonRuntime:
     # -- the kernel's frame (phase B, spec 2026-10-24 §4.2) -------------------------------------------
 
     def record_call(self, tool: str, args: dict | None, ok: bool = True, text: str = "") -> None:
-        """One call of this agent's imperal-mcp tools, in the kernel's exchange shape -- the next frame carries it."""
+        """One call of this agent's imperal-mcp tools, in the kernel's exchange shape -- the next frame carries it.
+        With the shell's hooks on, the hook records it (with its whole answer) -- never twice."""
+        if self._shell_session(self.resolve_workspace(None)):
+            return
         self._exchange.append(exchange_item(tool, args, ok, text))
         del self._exchange[:-_EXCHANGE_MAX]
 

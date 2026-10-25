@@ -1,7 +1,7 @@
 {
   "name": "imperal-mcp",
   "description": "Build and deploy Imperal apps from any LLM. Gives Claude Code validate_ir, smoke_ir, deploy_ir, list_apps, get_app, run_read_tool, run_write_tool and upload_file -- the full developer workflow for the Imperal platform.",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "author": {
     "name": "Imperal, Inc.",
     "email": "support@imperal.io"

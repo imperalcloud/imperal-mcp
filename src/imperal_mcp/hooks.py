@@ -257,6 +257,15 @@ def _shell(payload: dict) -> str:
     return "codex" if "turn_id" in payload or "model" in payload else "claude"
 
 
+def _mcp_text(resp: Any) -> Any:
+    """An MCP tool's answer as the shells hand it: content blocks ``[{"type": "text", "text": ...}]`` -> their text."""
+    if isinstance(resp, list):
+        return "\n".join(str(b.get("text") or "") for b in resp if isinstance(b, dict) and b.get("type") == "text")
+    if isinstance(resp, dict) and isinstance(resp.get("content"), list):
+        return _mcp_text(resp["content"])
+    return resp
+
+
 def _text_of(resp: Any) -> tuple[str, bool]:
     """A tool's answer as text, and whether it went well."""
     if isinstance(resp, str):
@@ -287,8 +296,17 @@ def tool_items(payload: dict) -> list:
     """A shell's tool call as the kernel's exchange items (``[]`` for imperal-mcp's own -- the server has them)."""
     payload = normalize(payload)
     name = str(payload.get("tool_name") or "")
-    if not name or _IMPERAL_TOOL.match(name):
+    if not name:
         return []
+    if _IMPERAL_TOOL.match(name):
+        # imperal-mcp's own call, with its answer (live 2026-10-25: kept only in the server's memory for a frame that
+        # never came, its names were called made up at the final) -- a frame or a task is no observation
+        tool = _IMPERAL_TOOL.sub("", name)
+        if tool in ("frame", "task"):
+            return []
+        inp = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+        text, ok = _text_of(_mcp_text(payload.get("tool_response")))
+        return [exchange_item(tool, inp, ok, text, text_limit=READ_CHARS)]
     inp = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
     text, ok = _text_of(payload.get("tool_response"))
     low = name.lower()

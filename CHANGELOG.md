@@ -4,6 +4,13 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.7.1 — 2026-10-25 — imperal-mcp's own calls reach the vault
+
+### Fixed
+- With the shell's hooks on, a call of imperal-mcp's own tools (impact_of_change, read_symbol, grep_code ...) is
+  recorded by the hook with its whole answer -- before, the server kept it for a frame that never came, so the
+  final answer's check called names those tools showed "made up". The server no longer records them twice.
+
 ## 0.7.0 — 2026-10-25 — memory for any shell
 
 ### Added

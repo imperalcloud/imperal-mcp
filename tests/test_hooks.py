@@ -76,9 +76,30 @@ def test_edits_reads_and_patches_become_the_kernel_s_tools():
     assert [(i["tool"], i["args"]["path"]) for i in H.tool_items(patch)] == [("edit_file", "a.py"), ("edit_file", "b.py")]
 
 
-def test_imperal_s_own_tools_are_left_to_the_server():
-    for name in ("mcp__imperal__frame", "mcp_imperal_frame"):
-        assert H.tool_items({**CLAUDE_BASH, "tool_name": name, "tool_input": {}}) == []
+def test_imperal_s_own_tools_are_recorded_by_the_hook_with_their_answer():
+    """Live 2026-10-25: impact_of_change showed two names, the final check called them made up -- the server kept
+    its own calls in memory for a frame that never came (the hooks bring the frames now)."""
+    for name in ("mcp__imperal__impact_of_change", "mcp_imperal_impact_of_change"):
+        [it] = H.tool_items({**CLAUDE_BASH, "tool_name": name, "tool_input": {"symbols": ["plan_truth_block"]},
+                             "tool_response": '{"same_file": [{"user": "TenantVaultTurnBridge._strict_frame"}]}'})
+        assert it["tool"] == "impact_of_change" and "_strict_frame" in it["text"]
+        assert it["args"]["symbols"] == "['plan_truth_block']"
+    assert H.tool_items({**CLAUDE_BASH, "tool_name": "mcp__imperal__frame", "tool_input": {}}) == []   # a frame is no observation
+
+
+def test_with_hooks_the_server_does_not_record_its_calls_twice(spool, tmp_path):
+    from imperal_mcp.exoskeleton import ExoskeletonRuntime
+    ws = tmp_path / "w"
+    ws.mkdir()
+    exo = ExoskeletonRuntime(workspace=str(ws))
+    exo.record_call("search_code", {"query": "a"}, ok=True, text="x")
+    assert len(exo._exchange) == 1
+    H.announce(str(ws), "s7")
+    import os
+    H.Spool("s7").update(pids=[os.getppid()])
+    H.announce(str(ws), "s7")
+    exo.record_call("search_code", {"query": "b"}, ok=True, text="y")
+    assert len(exo._exchange) == 1
 
 
 def test_a_secret_file_is_withheld_in_the_spool(spool):
