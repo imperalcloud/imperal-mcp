@@ -1,4 +1,6 @@
 from __future__ import annotations
+import os
+import pytest
 
 import sys
 from pathlib import Path
@@ -26,3 +28,10 @@ for src_dir in (
         if s in sys.path:
             sys.path.remove(s)
         sys.path.insert(0, s)
+
+
+@pytest.fixture(autouse=True)
+def _private_spool(tmp_path, monkeypatch):
+    """Every test gets its own hook spool -- never the real one in the home folder."""
+    if not os.environ.get("IMPERAL_MCP_SPOOL", "").startswith(str(tmp_path)):
+        monkeypatch.setenv("IMPERAL_MCP_SPOOL", str(tmp_path / "spool-auto"))

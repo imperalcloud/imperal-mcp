@@ -26,6 +26,11 @@ from typing import Any, Callable
 from .exoskeleton import EXOSKELETON_INSTRUCTIONS, exchange_item
 
 EXCHANGE_MAX, MEMORY_MAX, MEMORY_CHARS = 60, 20, 4000     # the gateway's bounds on one step
+REQUEST_CHARS = 300_000                                   # one step's exchange, well under Temporal's 2 MB payload
+SPOOL_ITEMS_MAX, SPOOL_MEMORY_MAX = 200, 50               # what a spool keeps while nothing can be sent
+# Claude Code keeps 10 000 characters of a hook's context (more becomes a file the model is not told to read):
+# the frame a hook gives fits, DECISION first (final review I1)
+HOOK_FRAME_CHARS = 9500
 READ_CHARS, OUTPUT_CHARS = 20000, 8000                    # what of a read / an output reaches the kernel
 _IMPERAL_TOOL = re.compile(r"^mcp_{1,2}imperal_{1,2}")    # imperal-mcp's own calls: the server records those
 _SHELL_TOOLS = {"bash", "shell", "run_shell_command", "run_command", "exec_command", "execute_command", "terminal"}
@@ -78,6 +83,32 @@ class Spool:
         with _locked(self.base):
             with _private(self.base + ".jsonl") as f:
                 f.write(json.dumps({"k": kind, "v": obj}, ensure_ascii=False) + "\n")
+            if os.path.getsize(self.base + ".jsonl") > 4 * REQUEST_CHARS:     # nothing can be sent: keep a tail
+                items, memory = self._read()
+                self._write(items, memory, "")
+
+    def _read(self) -> tuple[list, list]:
+        items, memory = [], []
+        try:
+            with open(self.base + ".jsonl", encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except FileNotFoundError:
+            return [], []
+        for ln in lines:
+            try:
+                rec = json.loads(ln)
+            except ValueError:
+                continue
+            (items if rec.get("k") == "item" else memory).append(rec.get("v"))
+        return items, memory
+
+    def _write(self, items: list, memory: list, newer: str) -> None:
+        with _private(self.base + ".jsonl", "w") as f:
+            for it in items[-SPOOL_ITEMS_MAX:]:
+                f.write(json.dumps({"k": "item", "v": it}, ensure_ascii=False) + "\n")
+            for m in memory[-SPOOL_MEMORY_MAX:]:
+                f.write(json.dumps({"k": "memory", "v": m}, ensure_ascii=False) + "\n")
+            f.write(newer)
 
     def add_items(self, items: list) -> None:
         for it in items:
@@ -87,21 +118,11 @@ class Spool:
         self._append("memory", entry)
 
     def drain(self) -> tuple[list, list]:
-        items, memory = [], []
         with _locked(self.base):
-            try:
-                with open(self.base + ".jsonl", encoding="utf-8") as f:
-                    lines = f.read().splitlines()
+            items, memory = self._read()
+            with contextlib.suppress(FileNotFoundError):
                 os.remove(self.base + ".jsonl")
-            except FileNotFoundError:
-                return [], []
-        for ln in lines:
-            try:
-                rec = json.loads(ln)
-            except ValueError:
-                continue
-            (items if rec.get("k") == "item" else memory).append(rec.get("v"))
-        return items, memory
+        return items[-SPOOL_ITEMS_MAX:], memory[-SPOOL_MEMORY_MAX:]
 
     def restore(self, items: list, memory: list) -> None:
         """What a failed send drained goes back (in front of anything newer)."""
@@ -111,12 +132,7 @@ class Spool:
                     newer = f.read()
             except FileNotFoundError:
                 newer = ""
-            with _private(self.base + ".jsonl", "w") as f:
-                for it in items:
-                    f.write(json.dumps({"k": "item", "v": it}, ensure_ascii=False) + "\n")
-                for m in memory:
-                    f.write(json.dumps({"k": "memory", "v": m}, ensure_ascii=False) + "\n")
-                f.write(newer)
+            self._write(items, memory, newer)
 
     def state(self) -> dict:
         try:
@@ -136,9 +152,40 @@ class Spool:
         return st
 
 
+def _ppid(pid: int) -> int:
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
+            return int(f.read().rsplit(")", 1)[1].split()[1])
+    except (OSError, ValueError, IndexError):
+        import subprocess
+        out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True, timeout=2)
+        return int((out.stdout or "0").strip() or 0)
+
+
+def _shell_pids() -> list:
+    """The processes above this hook (its shell, the shell's own parents): the MCP server that shell started has
+    one of them as its parent -- that is how two shells in one folder never share a session (final review I2)."""
+    out, pid = [], os.getppid()
+    for _ in range(5):
+        if pid <= 1:
+            break
+        out.append(pid)
+        try:
+            pid = _ppid(pid)
+        except Exception:
+            break
+    return out
+
+
 def announce(cwd: str, session: str) -> None:
-    """The shell session working in ``cwd`` now -- the MCP server finds its spool by it."""
+    """The shell session working in ``cwd`` now, and the processes it runs under -- the MCP server finds its spool
+    by them (one entry per shell session)."""
     path = os.path.join(spool_dir(), "current.json")
+    spool = Spool(session)
+    pids = spool.state().get("pids")
+    if not pids:
+        pids = _shell_pids()
+        spool.update(pids=pids)
     with _locked(path):
         try:
             with open(path, encoding="utf-8") as f:
@@ -146,28 +193,30 @@ def announce(cwd: str, session: str) -> None:
         except (OSError, ValueError):
             cur = {}
         cur = {k: v for k, v in (cur if isinstance(cur, dict) else {}).items()
-               if isinstance(v, dict) and time.time() - float(v.get("at") or 0) < 7 * 86400}
-        cur[os.path.realpath(cwd or ".")] = {"session": session, "at": time.time()}
+               if isinstance(v, dict) and "cwd" in v and time.time() - float(v.get("at") or 0) < 7 * 86400}
+        cur[session] = {"cwd": os.path.realpath(cwd or "."), "at": time.time(), "pids": list(pids)}
         tmp = path + ".tmp"
         with _private(tmp, "w") as f:
             json.dump(cur, f)
         os.replace(tmp, path)
 
 
-def current_session(workspace: str) -> str:
-    """The shell session last seen working in ``workspace`` (or a folder inside it, or one containing it)."""
+def current_session(workspace: str, server_parent: int | None = None) -> str:
+    """The shell session of this MCP server: the one whose hook ran under the server's own parent (its shell);
+    without that, the one last seen in exactly ``workspace`` -- never a parent folder's, never a guess."""
     try:
         with open(os.path.join(spool_dir(), "current.json"), encoding="utf-8") as f:
             cur = json.load(f)
     except (OSError, ValueError):
         return ""
+    entries = [(s, v) for s, v in (cur if isinstance(cur, dict) else {}).items() if isinstance(v, dict)]
+    entries.sort(key=lambda e: -float(e[1].get("at") or 0))
+    if server_parent:
+        hit = next((s for s, v in entries if server_parent in (v.get("pids") or [])), "")
+        if hit or any(v.get("pids") for _s, v in entries):
+            return hit                      # the pids decide when the hooks know them
     ws = os.path.realpath(workspace or ".")
-    best = ("", 0.0)
-    for cwd, v in (cur if isinstance(cur, dict) else {}).items():
-        near = cwd == ws or cwd.startswith(ws + os.sep) or ws.startswith(cwd + os.sep)
-        if near and isinstance(v, dict) and float(v.get("at") or 0) > best[1]:
-            best = (str(v.get("session") or ""), float(v.get("at") or 0))
-    return best[0]
+    return next((s for s, v in entries if v.get("cwd") == ws), "")
 
 
 def mcp_session(me: str, shell_session: str) -> str:
@@ -315,12 +364,26 @@ def _session_of(payload: dict, gateway) -> tuple[Spool, str, str]:
     return spool, shell_session, mcp_session(me, shell_session) if me else ""
 
 
+def _bounded_items(items: list) -> list:
+    """The newest items that fit one request (count and characters)."""
+    out, size = [], 0
+    for it in reversed(items[-EXCHANGE_MAX:]):
+        n = len(json.dumps(it, ensure_ascii=False, default=str))
+        if out and size + n > REQUEST_CHARS:
+            break
+        out.append(it)
+        size += n
+    return list(reversed(out))
+
+
 def _send(spool: Spool, send: Callable[[list, list], Any]) -> Any:
     items, memory = spool.drain()
     try:
-        return send(items[-EXCHANGE_MAX:], memory[-MEMORY_MAX:])
-    except Exception:
-        spool.restore(items, memory)
+        return send(_bounded_items(items), memory[-MEMORY_MAX:])
+    except Exception as exc:
+        code = getattr(exc, "status_code", None)
+        if not (isinstance(code, int) and 400 <= code < 500 and code not in (401, 402, 408, 429)):
+            spool.restore(items, memory)      # a passing failure: sent next time; a refusal for good: dropped (I5)
         raise
 
 
@@ -351,7 +414,7 @@ def ignored(cwd: str) -> bool:
 
 def _run(event: str, payload: dict, gateway) -> dict | None:
     shell_session = str(payload.get("session_id") or "default")
-    if event != "session-start" and ignored(str(payload.get("cwd") or os.getcwd())):
+    if ignored(str(payload.get("cwd") or os.getcwd())):   # an ignored folder: nothing recorded, announced or asked
         return None
     announce(str(payload.get("cwd") or os.getcwd()), shell_session)
     spool = Spool(shell_session)
@@ -375,12 +438,22 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
         step = int(st.get("step") or 0) + 1
 
         def _frame(items, memory):
-            return gateway.frame({"session_id": sess, "step": step, "goal": str(st.get("goal") or _clean(prompt))[:4000],
-                                  "items": list(st.get("items") or []), "exchange": items, "memory": memory,
-                                  "repo_key": str(st.get("repo_key") or "")})
-        ans = _send(spool, _frame)
+            body = {"session_id": sess, "step": step, "goal": str(st.get("goal") or _clean(prompt))[:4000],
+                    "items": list(st.get("items") or []), "exchange": items, "memory": memory,
+                    "repo_key": str(st.get("repo_key") or "")}
+            got = gateway.frame(body) or {}
+            if got.get("refused"):         # not charged: the step is still written (free) and keeps its number (I3)
+                gateway.record({k: body[k] for k in ("session_id", "exchange", "memory", "repo_key")} | {"step": step - 1})
+            return got
+        ans = _send(spool, _frame) or {}
+        if ans.get("refused"):
+            return context_output(payload, str(ans.get("content") or "the frame was not charged"))
         spool.update(step=step)
-        frame = str((ans or {}).get("frame") or (ans or {}).get("content") or "")
+        frame = str(ans.get("frame") or ans.get("content") or "")
+        if len(frame) > HOOK_FRAME_CHARS:
+            note = ("\n... (the rest of this frame is past your shell's context limit -- it is already paid and in "
+                    "the vault: state_lens / recall open any part; call `frame` again only after you change something)")
+            frame = frame[: HOOK_FRAME_CHARS - len(note)] + note
         return context_output(payload, frame) if frame.strip() else None
     if event == "stop":
         final = last_answer(payload)
@@ -395,6 +468,9 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
                              "repo_key": str(st.get("repo_key") or "")})
         if (got or {}).get("hold") and str(got.get("reason") or "").strip():
             return block_output(payload, str(got["reason"]))
+        opened = [str(x) for x in (got or {}).get("open") or [] if str(x).strip()]
+        if opened and _shell(payload) in ("claude", "gemini"):   # past the holds: what is open is named (I6)
+            return {"systemMessage": "Imperal: still open -- " + "; ".join(o[:160] for o in opened[:8])}
         return None
     return None
 
@@ -421,7 +497,7 @@ class _Gateway:
         except Exception as exc:
             if getattr(exc, "status_code", None) == 402:      # not charged: the model hears why, the step stays
                 from .exoskeleton import _detail_of
-                return {"content": _detail_of(str(exc))}
+                return {"content": _detail_of(str(exc)), "refused": True}
             raise
 
     def record(self, body: dict) -> dict:

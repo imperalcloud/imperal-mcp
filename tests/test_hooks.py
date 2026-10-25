@@ -113,7 +113,7 @@ def test_a_stop_with_open_items_blocks_in_each_shell_s_words(spool):
                                  "prompt_response": "done"}, gateway=_Gateway(hold=True))
     assert gemini["decision"] == "deny" and "blocked_on" in gemini["reason"]
     assert H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "done"},
-                      gateway=_Gateway(hold=False)) is None
+                      gateway=_Gateway(hold=False)) == {"systemMessage": "Imperal: still open -- b"}   # named, not held
 
 
 def test_the_final_answer_is_recorded_before_it_is_judged(spool):
@@ -288,3 +288,82 @@ def test_an_ignored_folder_records_nothing(spool, monkeypatch, tmp_path):
     assert H.run_hook("prompt", {**CLAUDE_BASH, "cwd": str(tmp_path / "private"), "hook_event_name": "UserPromptSubmit",
                                  "prompt": "x"}, gateway=gw) is None
     assert H.Spool("s1").drain() == ([], []) and gw.calls == []
+
+
+# ── final review I1/I2/I3/I5/I6 ──
+def test_a_hook_frame_fits_the_shell_s_context_limit_and_says_it_is_paid(spool):
+    gw = _Gateway(frame="=== DECISION ===\nDO X\n" + "y" * 60000)
+    out = H.run_hook("prompt", {**CLAUDE_BASH, "hook_event_name": "UserPromptSubmit", "prompt": "x"}, gateway=gw)
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert len(ctx) <= H.HOOK_FRAME_CHARS and ctx.startswith("=== DECISION ===") and "already paid" in ctx
+
+
+def test_the_protocol_says_a_hook_frame_needs_no_second_call():
+    from imperal_mcp.exoskeleton import EXOSKELETON_INSTRUCTIONS as P
+    assert "already" in P and "until you change" in P
+
+
+def test_a_frame_refused_for_credits_keeps_the_step_s_memory_and_its_step(spool):
+    class _Broke(_Gateway):
+        def frame(self, body):
+            self._go("frame", body)
+            return {"content": "not enough credits for a frame (5 credits, balance 2)", "refused": True}
+    gw = _Broke()
+    H.run_hook("post-tool", CLAUDE_BASH, gateway=gw)
+    out = H.run_hook("prompt", {**CLAUDE_BASH, "hook_event_name": "UserPromptSubmit", "prompt": "fix"}, gateway=gw)
+    assert "not enough credits" in out["hookSpecificOutput"]["additionalContext"]
+    rec = [b for n, b in gw.calls if n == "record"][0]
+    assert [e["tool"] for e in rec["exchange"]] == ["bash"] and rec["memory"][0]["kind"] == "user_request"
+    assert H.Spool("s1").state().get("step", 0) == 0
+
+
+def test_a_request_the_gateway_refuses_for_good_is_dropped_not_kept_forever(spool):
+    class _Bad(_Gateway):
+        def frame(self, body):
+            from imperal_mcp.client import ImperalError
+            self._go("frame", body)
+            raise ImperalError("POST /v1/memory/frame -> 422: too big", status_code=422)
+    H.run_hook("post-tool", CLAUDE_BASH, gateway=_Bad())
+    H.run_hook("prompt", {**CLAUDE_BASH, "hook_event_name": "UserPromptSubmit", "prompt": "x"}, gateway=_Bad())
+    assert H.Spool("s1").drain() == ([], [])
+
+
+def test_the_spool_keeps_a_bounded_tail(spool):
+    s = H.Spool("s9")
+    s.add_items([{"tool": "bash", "args": {}, "ok": True, "text": "x" * 100}] * (H.SPOOL_ITEMS_MAX + 50))
+    items, _m = s.drain()
+    assert len(items) == H.SPOOL_ITEMS_MAX
+
+
+def test_past_the_holds_the_open_items_are_named(spool):
+    class _Pass(_Gateway):
+        def final(self, body):
+            self._go("final", body)
+            return {"hold": False, "reason": "", "open": ["edit beta", "deploy"]}
+    out = H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "done"},
+                     gateway=_Pass())
+    assert out == {"systemMessage": "Imperal: still open -- edit beta; deploy"}
+
+
+def test_two_shells_in_one_folder_each_keep_their_session(spool, monkeypatch):
+    monkeypatch.setattr(H, "_shell_pids", lambda: [111, 11])
+    H.run_hook("post-tool", {**CLAUDE_BASH, "session_id": "A", "cwd": "/w"}, gateway=_Gateway())
+    monkeypatch.setattr(H, "_shell_pids", lambda: [222, 22])
+    H.run_hook("post-tool", {**CLAUDE_BASH, "session_id": "B", "cwd": "/w"}, gateway=_Gateway())
+    assert H.current_session("/w", server_parent=11) == "A" and H.current_session("/w", server_parent=22) == "B"
+    assert H.current_session("/w/sub", server_parent=99) == ""        # no parent-folder guess, no other shell's
+
+
+def test_secret_dumps_hidden_behind_quotes_or_flags_are_withheld():
+    for cmd in ('env -i X=1 sh -c env', '"printenv"', "declare -px", "cat /proc/self/environ", "less ~/.netrc",
+                'p\\rintenv'):
+        [it] = H.tool_items({**CLAUDE_BASH, "tool_input": {"command": cmd}, "tool_response": {"stdout": "K=S3cr3tP4ss"}})
+        assert "S3cr3tP4ss" not in json.dumps(it), cmd
+
+
+def test_a_token_alone_in_a_url_and_a_secret_on_the_cut_are_redacted():
+    from imperal_mcp.secrets_scrub import scrub_secrets
+    assert "ghp_abcdefghijklmnopqrstuvwxyz12" not in scrub_secrets("git clone https://ghp_abcdefghijklmnopqrstuvwxyz12@github.com/x")
+    long_out = "x" * 7990 + " password=hunter2hunter2hunter2"
+    [it] = H.tool_items({**CLAUDE_BASH, "tool_input": {"command": "ls"}, "tool_response": {"stdout": long_out}})
+    assert "hunter2" not in it["text"]

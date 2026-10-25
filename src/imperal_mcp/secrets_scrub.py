@@ -65,12 +65,18 @@ _SECRET_RE = re.compile(
 
 
 
+# imperal-mcp addition (security review; to be synced into the kernel): a token alone as URL user-info
+# (``https://ghp_x@github.com``) -- a user name before ``@`` with no password is redacted too
+_SECRET_URI_USER_ONLY_RE = re.compile(r"(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}://)[^\s/@:]{8,}@")
+
+
 def scrub_secrets(text: str, code: bool = False) -> str:
     """Redact common secret/token shapes. ``code``: the text is source code -- a secret-named key keeps an unquoted
     value (an identifier, a type, an expression)."""
     s = str(text or "")
     s = _mask_pem(s)
     s = _SECRET_URI_USERINFO_RE.sub("[REDACTED]@", s)
+    s = _SECRET_URI_USER_ONLY_RE.sub(lambda m: m.group(1) + "[REDACTED]@", s)
     s = _SECRET_AUTH_HEADER_RE.sub(lambda m: f"{m.group(1)}[REDACTED]", s)
     s = _SECRET_BEARER_RE.sub("[REDACTED]", s)
     s = _SECRET_KEYWORD_RE.sub(lambda m: _keyword_redact(m, code), s)

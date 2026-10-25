@@ -305,8 +305,9 @@ what your change reaches, the world (machines, repos, deploys) and your path so 
 right the first time; work done around it repeats reads, misses callers and gets made-up names caught later.
 
 THE LOOP (every task):
-1. `frame` — at the start and after each change (your shell's hook may already put it in your context on each user
-   message: read it, act on its DECISION section first).
+1. `frame` — at the start and after each change. Your shell's hook may already have put this message's frame in your
+   context (it is paid): read it, act on its DECISION section first, and call `frame` again only until you change
+   something -- not before.
 2. `task(goal, items)` — declare what you were asked and your plan; each item closes only by a proof the kernel saw
    (a diff, a check that exits 0, a finding with its sources). An item you cannot finish: status blocked or cancelled
    with the reason in blocked_on (what you need from the user / no access to what / why impossible). A final answer
@@ -372,8 +373,11 @@ def bounded(obj: Any, limit: int = ANSWER_CHARS) -> Any:
 
 _SAFE_ARGS = ("path", "file_path", "root", "target", "content_chars", "name", "connection_id")
 # commands whose output IS secrets (final review C1): their output never leaves the machine
-_PRINTS_SECRETS = re.compile(r"(?i)(?:^|[\s;&|(])(?:vault\s+(?:kv\s+)?(?:get|read)|printenv|env(?=\s*(?:$|[;&|)]))"
-                             r"|export\s+-p|set(?=\s*(?:$|[;&|)]))|gh\s+auth\s+(?:token|status\s+-t)"
+_PRINTS_SECRETS = re.compile(r"(?i)(?:^|[\s;&|(/])(?:vault\s+(?:kv\s+)?(?:get|read)|printenv|env(?=\s*(?:$|-|[;&|)]))"
+                             r"|export\s+-p|declare\s+-[a-z]*p|typeset|set(?=\s*(?:$|[;&|)]))|/proc/\S*/environ"
+                             r"|gh\s+auth\s+(?:token|status\s+-t)"
+                             r"|(?:cat|less|more|head|tail|bat|sed|awk|grep|strings|xxd|od)\s+[^;&|]*"
+                             r"(?:credentials|\.netrc|\.pgpass|\.npmrc|\.pypirc|\.docker/config|\.git-credentials|\.vault-token)"
                              r"|kubectl\s+get\s+secrets?|aws\s+configure\s+(?:get|export)|security\s+find-\S+-password"
                              r"|op\s+(?:read|item\s+get)|bw\s+get|pass\s+show|doppler\s+secrets"
                              r"|cat\s+[^;&|]*(?:credentials|\.netrc|\.pgpass|\.npmrc|\.pypirc|\.docker/config))")
@@ -390,7 +394,7 @@ def _only_safe_args(a: dict, cmd: str) -> dict:
 def exchange_item(tool: str, args: dict | None, ok: bool = True, text: str = "", text_limit: int = 2000) -> dict:
     """One tool call in the kernel's exchange shape -- a secret file's content never, PII masked (the server's own
     calls and the shell's hooks record through this one door)."""
-    a = {str(k): str(v)[:2000] for k, v in (args or {}).items() if v is not None}
+    a = {str(k): str(v)[:8000] for k, v in (args or {}).items() if v is not None}     # cut after the scrub, below
     if str(a.get("target") or "").startswith(("host:", "ssh:")) and a.get("root") and a.get("path") \
             and not a["path"].startswith("/"):
         # the kernel finds a server's repo by the full path there (resolve_path)
@@ -412,15 +416,16 @@ def exchange_item(tool: str, args: dict | None, ok: bool = True, text: str = "",
         if any(_secret_path(v, SECRET_PATTERNS, fnmatch) for v in list(a.values()) + [joined] + words):
             body = "(withheld: a secret file)"          # never what a secret file holds -- in the output or the args
             a = _only_safe_args(a, cmd)
-        elif cmd and _PRINTS_SECRETS.search(cmd):
+        elif cmd and _PRINTS_SECRETS.search(re.sub(r"[\"'`\\]", "", cmd)):    # quotes and escapes cannot hide it
             body = "(withheld: a command that prints secrets)"   # vault kv get, printenv, gh auth token ...
             a = {k: str(scrub_secrets(str(defensive_scrub(v)))) for k, v in a.items()}
         else:
             # final review C1: credentials (tokens, passwords, keys, URL user-info) go before anything leaves
             code = is_code_path(a.get("path", ""))
-            body = str(scrub_secrets(str(defensive_scrub(str(text or "")[:text_limit])), code=code))
+            # scrubbed whole, cut after: a secret on the cut line never survives in part (security review)
+            body = str(scrub_secrets(str(defensive_scrub(str(text or "")[:text_limit + 4000])), code=code))[:text_limit]
             a = {k: str(scrub_secrets(str(defensive_scrub(v)), code=code and k in ("old_string", "new_string",
-                                                                                  "content"))) for k, v in a.items()}
+                                                                                  "content")))[:2000] for k, v in a.items()}
     except Exception:      # recording never breaks a tool; what cannot be checked is not sent
         body = "(withheld: secrets not checked)"
         a = _only_safe_args(a, a.get("command", ""))
@@ -515,7 +520,7 @@ class ExoskeletonRuntime:
     def _shell_session(ws: str) -> str:
         try:
             from .hooks import current_session
-            return current_session(ws)
+            return current_session(ws, server_parent=os.getppid())
         except Exception:
             return ""
 
