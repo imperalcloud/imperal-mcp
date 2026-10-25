@@ -424,7 +424,7 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
     async def frame(root: str | None = None, target: str | None = None) -> dict:
         """The kernel's step frame for your work (the same frame a Webbee step gets): your task and plan with what is
         proven, the code around your focus from the exact graph, what your change reaches, the world, your path.
-        Call it at the start and after each change."""
+        Call it FIRST -- at the start and after each change -- before your shell's own search and read tools."""
         return await _exo_call(exo.frame, root=root, target=target)
 
     @mcp.tool(title="Grep Code", annotations=ToolAnnotations(readOnlyHint=True))

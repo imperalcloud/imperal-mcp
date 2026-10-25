@@ -296,14 +296,35 @@ def _matched_files_stats(ws: str, rel_paths: list[str] | set[str] | tuple[str, .
 
 
 EXOSKELETON_INSTRUCTIONS = """\
-You are equipped with the Imperal MCP Exoskeleton for Claude Code.
-Follow these operating rules to navigate repositories accurately, minimize unnecessary context reads, and keep changes safe:
-1. ORIENT FIRST: Start tasks with `orient(query=...)` or `repo_profile()` instead of blind `grep`/`find`.
-2. SURGICAL AST READS: Before reading a large code file, call `outline(path=...)` and then `read_symbol(path=..., name=...)` to read only the exact function/class/span needed.
-3. IMPACT & CONTRACTS: Before editing shared functions or classes, call `impact_of_change(symbols=[...])` and `contract_slice(symbols=[...])`.
-4. REVERSIBILITY (SHADOWGIT): Before risky multi-file edits, call `checkpoint(label=...)`. Use `checkpoint_diff()` to inspect changes and `checkpoint_rollback()` to restore a checkpoint without touching `.git`.
-5. SYNTAX VERIFICATION: After editing a source file, call `check_syntax(path=...)` to verify AST cleanliness.
-6. UNIFIED CLOUD MEMORY: Call `recall_context(query=...)` to load user directives/notes across Webbee, Telegram, and Panel, and `remember_fact(...)` / `save_repo_note(...)` to persist durable knowledge.
+IMPERAL — your brain extension. Use it FIRST, before your shell's own grep/read/search tools, in any shell.
+Imperal is a kernel + vault behind these tools: it remembers this user's work across sessions and shells, holds the
+exact code graph of their repositories, measures what each step really did, and checks what you claim.
+
+WHY FIRST: the frame shows what is proven and what is only claimed, the code around your focus from the exact graph,
+what your change reaches, the world (machines, repos, deploys) and your path so far. Answers grounded in it are
+right the first time; work done around it repeats reads, misses callers and gets made-up names caught later.
+
+THE LOOP (every task):
+1. `frame` — at the start and after each change (your shell's hook may already put it in your context on each user
+   message: read it, act on its DECISION section first).
+2. `task(goal, items)` — declare what you were asked and your plan; each item closes only by a proof the kernel saw
+   (a diff, a check that exits 0, a finding with its sources). An item you cannot finish: status blocked or cancelled
+   with the reason in blocked_on (what you need from the user / no access to what / why impossible). A final answer
+   with open items is handed back to you until each is proven or named — then the open ones are listed to the user.
+3. Code: `orient(query)` → `outline(path)` → `read_symbol(path, name | "L120-180")`; `search_code`, `grep_code` for an
+   exact text; `graph_slice`, `contract_slice`; `impact_of_change(symbols)` BEFORE editing a shared symbol;
+   `repo_profile` for the map. A server's repo: the same tools with target="host:<alias>" and root=<path>.
+4. Safety: `checkpoint` before risky multi-file edits, `checkpoint_diff`, `checkpoint_rollback`; `check_syntax` after
+   an edit; `coding_context` for the workspace facts; `token_savings` for what the graph saved.
+5. Memory: every step is written to the vault (your shell's hooks send your calls, thoughts and answers). Look back
+   with `recall_context(query)` and `recall` (a past answer, page by page); the frame's pointers `state_lens` and
+   `vault_log_read` open what it counted or offloaded. Keep what lasts with `remember_fact` and `save_repo_note`.
+6. Never state a code name, file or size you did not read in this task: the kernel checks every step and the final.
+
+APPS: `list_apps`, `get_app`, `run_read_tool`, `run_write_tool` (money tools need panel approval), `upload_file`;
+build one with `validate_ir` → `smoke_ir` → `deploy_ir`.
+
+Pricing: one `frame` costs credits (the platform's system pricing); everything else here is free.
 """
 
 
