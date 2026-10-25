@@ -1,0 +1,158 @@
+"""Memory plan Task 4: one `imperal-mcp hook <event>` command for every shell's hooks."""
+import json
+
+import pytest
+
+from imperal_mcp import hooks as H
+
+# the shells' own payloads (their documentation, 2026-10): Claude Code, Codex, Gemini CLI, Antigravity CLI
+CLAUDE_BASH = {"session_id": "s1", "transcript_path": "/t", "cwd": "/w", "hook_event_name": "PostToolUse",
+               "tool_name": "Bash", "tool_input": {"command": "pytest -q"},
+               "tool_response": {"stdout": "1 passed", "stderr": "", "interrupted": False}}
+CODEX_BASH = {"session_id": "s2", "cwd": "/w", "hook_event_name": "PostToolUse", "model": "gpt-5", "turn_id": "t1",
+              "tool_name": "Bash", "tool_use_id": "u1", "tool_input": {"command": ["bash", "-lc", "pytest -q"]},
+              "tool_response": "1 passed\n"}
+GEMINI_SHELL = {"session_id": "s3", "cwd": "/w", "hook_event_name": "AfterTool", "timestamp": "2026-10-25T00:00:00Z",
+                "tool_name": "run_shell_command", "tool_input": {"command": "pytest -q"},
+                "tool_response": {"llmContent": "1 passed", "returnDisplay": "1 passed"}}
+AGY_SHELL = {"session_id": "s4", "cwd": "/w", "hook_event_name": "PostToolUse", "tool_name": "run_command",
+             "tool_input": {"CommandLine": "pytest -q"}, "tool_response": {"output": "1 passed"}}
+
+
+class _Gateway:
+    def __init__(self, hold=False, fail=False, frame="=== DECISION ===\nFRAME"):
+        self.calls, self.hold, self.fail, self._frame = [], hold, fail, frame
+
+    def _go(self, name, body):
+        self.calls.append((name, body))
+        if self.fail:
+            raise RuntimeError("gateway down")
+
+    def me(self):
+        self._go("me", {})
+        return "imp_u_ME"
+
+    def frame(self, body):
+        self._go("frame", body)
+        return {"frame": self._frame}
+
+    def record(self, body):
+        self._go("record", body)
+        return {"ok": True, "recorded": True}
+
+    def final(self, body):
+        self._go("final", body)
+        return {"hold": self.hold, "reason": "2 item(s) still open -- prove or name them in blocked_on", "open": ["b"]}
+
+    def recall_context(self, query):
+        self._go("recall_context", {"query": query})
+        return "last task: fix alpha (1 item open)"
+
+
+@pytest.fixture
+def spool(tmp_path, monkeypatch):
+    monkeypatch.setenv("IMPERAL_MCP_SPOOL", str(tmp_path / "spool"))
+    return tmp_path / "spool"
+
+
+@pytest.mark.parametrize("payload", [CLAUDE_BASH, CODEX_BASH, GEMINI_SHELL, AGY_SHELL])
+def test_each_shell_s_tool_call_becomes_one_exchange_item(payload):
+    [item] = H.tool_items(payload)
+    assert item["tool"] == "bash" and item["args"]["command"].endswith("pytest -q") and "1 passed" in item["text"]
+    assert item["ok"] is True
+
+
+def test_edits_reads_and_patches_become_the_kernel_s_tools():
+    edit = {**CLAUDE_BASH, "tool_name": "Edit", "tool_input": {"file_path": "/w/a.py", "old_string": "x",
+                                                               "new_string": "y"}, "tool_response": {}}
+    [e] = H.tool_items(edit)
+    assert e["tool"] == "edit_file" and e["args"] == {"path": "/w/a.py", "old_string": "x", "new_string": "y"}
+    read = {**CLAUDE_BASH, "tool_name": "Read", "tool_input": {"file_path": "/w/a.py"},
+            "tool_response": {"type": "text", "file": {"filePath": "/w/a.py", "content": "def f():\n    return 1\n"}}}
+    [r] = H.tool_items(read)
+    assert r["tool"] == "read_file" and r["args"]["path"] == "/w/a.py" and "def f()" in r["text"]
+    patch = {**CODEX_BASH, "tool_name": "apply_patch", "tool_input": {"input": "*** Begin Patch\n*** Update File: a.py\n"
+                                                                                "@@\n-x\n+y\n*** Add File: b.py\n+z\n*** End Patch"}}
+    assert [(i["tool"], i["args"]["path"]) for i in H.tool_items(patch)] == [("edit_file", "a.py"), ("edit_file", "b.py")]
+
+
+def test_imperal_s_own_tools_are_left_to_the_server():
+    for name in ("mcp__imperal__frame", "mcp_imperal_frame"):
+        assert H.tool_items({**CLAUDE_BASH, "tool_name": name, "tool_input": {}}) == []
+
+
+def test_a_secret_file_is_withheld_in_the_spool(spool):
+    read = {**CLAUDE_BASH, "tool_name": "Read", "tool_input": {"file_path": "/w/.env"},
+            "tool_response": {"file": {"content": "DB_PASS=hunter2"}}}
+    H.run_hook("post-tool", read, gateway=_Gateway())
+    raw = "".join(p.read_text() for p in spool.glob("*.jsonl"))
+    assert "hunter2" not in raw and "withheld" in raw
+
+
+def test_a_prompt_records_the_request_and_answers_with_the_frame(spool):
+    gw = _Gateway()
+    H.run_hook("post-tool", CLAUDE_BASH, gateway=gw)
+    out = H.run_hook("prompt", {**CLAUDE_BASH, "hook_event_name": "UserPromptSubmit", "prompt": "fix alpha"},
+                     gateway=gw)
+    assert out["hookSpecificOutput"] == {"hookEventName": "UserPromptSubmit",
+                                         "additionalContext": "=== DECISION ===\nFRAME"}
+    body = [b for n, b in gw.calls if n == "frame"][0]
+    assert body["session_id"].startswith("mcp-imp_u_ME-") and body["step"] == 1 and body["goal"] == "fix alpha"
+    assert body["memory"] == [{"kind": "user_request", "content": "fix alpha"}]
+    assert [e["tool"] for e in body["exchange"]] == ["bash"]
+    H.run_hook("prompt", {**CLAUDE_BASH, "hook_event_name": "UserPromptSubmit", "prompt": "and beta"}, gateway=gw)
+    second = [b for n, b in gw.calls if n == "frame"][1]
+    assert second["step"] == 2 and second["exchange"] == [] and second["session_id"] == body["session_id"]
+
+
+def test_a_stop_with_open_items_blocks_in_each_shell_s_words(spool):
+    claude = H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "done"},
+                        gateway=_Gateway(hold=True))
+    assert claude["decision"] == "block" and "blocked_on" in claude["reason"]
+    gemini = H.run_hook("stop", {**GEMINI_SHELL, "hook_event_name": "AfterAgent", "prompt": "x",
+                                 "prompt_response": "done"}, gateway=_Gateway(hold=True))
+    assert gemini["decision"] == "deny" and "blocked_on" in gemini["reason"]
+    assert H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "done"},
+                      gateway=_Gateway(hold=False)) is None
+
+
+def test_the_final_answer_is_recorded_before_it_is_judged(spool):
+    gw = _Gateway()
+    H.run_hook("stop", {**CODEX_BASH, "hook_event_name": "Stop", "last_assistant_message": "all done"}, gateway=gw)
+    names = [n for n, _ in gw.calls if n != "me"]
+    assert names == ["record", "final"]
+    assert [b for n, b in gw.calls if n == "record"][0]["memory"] == [{"kind": "final", "content": "all done"}]
+
+
+def test_claude_code_s_last_answer_is_read_from_its_transcript(tmp_path, spool):
+    t = tmp_path / "t.jsonl"
+    t.write_text("\n".join(json.dumps(x) for x in [
+        {"type": "user", "message": {"content": "fix it"}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "fixed in a.py"}]}}]) + "\n")
+    gw = _Gateway()
+    H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "transcript_path": str(t)}, gateway=gw)
+    assert [b for n, b in gw.calls if n == "final"][0]["final_text"] == "fixed in a.py"
+
+
+def test_no_network_never_breaks_the_shell(spool):
+    gw = _Gateway(fail=True)
+    H.run_hook("post-tool", CLAUDE_BASH, gateway=gw)
+    assert H.run_hook("prompt", {**CLAUDE_BASH, "hook_event_name": "UserPromptSubmit", "prompt": "x"}, gateway=gw) is None
+    assert H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "d"}, gateway=gw) is None
+    items, memory = H.Spool("s1").drain()
+    assert [i["tool"] for i in items] == ["bash"] and [m["kind"] for m in memory] == ["user_request", "final"]
+
+
+def test_two_sessions_in_one_folder_never_mix(spool):
+    H.run_hook("post-tool", CLAUDE_BASH, gateway=_Gateway())
+    H.run_hook("post-tool", {**CODEX_BASH, "cwd": "/w"}, gateway=_Gateway())
+    assert len(H.Spool("s1").drain()[0]) == 1 and len(H.Spool("s2").drain()[0]) == 1
+
+
+def test_session_start_gives_the_protocol_and_where_the_work_stands(spool):
+    from imperal_mcp.exoskeleton import EXOSKELETON_INSTRUCTIONS
+    out = H.run_hook("session-start", {**CODEX_BASH, "hook_event_name": "SessionStart", "source": "startup"},
+                     gateway=_Gateway())
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert ctx.startswith(EXOSKELETON_INSTRUCTIONS.strip()[:40]) and "fix alpha" in ctx
+    assert H.current_session("/w") == "s2"

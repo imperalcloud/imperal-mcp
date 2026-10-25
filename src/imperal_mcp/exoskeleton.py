@@ -334,6 +334,28 @@ _NESTED_QUANTIFIER = re.compile(r"\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)\s*[+
 _HOST_SYNC_REUSE_S = 60.0   # a remote repo is listed over SFTP at most once a minute (only changed files are read)
 
 
+def exchange_item(tool: str, args: dict | None, ok: bool = True, text: str = "", text_limit: int = 2000) -> dict:
+    """One tool call in the kernel's exchange shape -- a secret file's content never, PII masked (the server's own
+    calls and the shell's hooks record through this one door)."""
+    a = {str(k): str(v)[:2000] for k, v in (args or {}).items() if v is not None}
+    if str(a.get("target") or "").startswith(("host:", "ssh:")) and a.get("root") and a.get("path") \
+            and not a["path"].startswith("/"):
+        # the kernel finds a server's repo by the full path there (resolve_path)
+        a["path"] = a["root"].rstrip("/") + "/" + a["path"]
+    try:
+        import fnmatch
+        from imperal_sdk.code_index import SECRET_PATTERNS
+        from .mask import defensive_scrub
+        joined = "/".join(x for x in (a.get("root", ""), a.get("path", "")) if x)   # a root may name the folder
+        if any(_secret_path(v, SECRET_PATTERNS, fnmatch) for v in list(a.values()) + [joined]):
+            body = "(withheld: a secret file)"          # never what a secret file holds
+        else:
+            body = str(defensive_scrub(str(text or "")[:text_limit]))
+    except Exception:      # recording never breaks a tool; what cannot be checked is not sent
+        body = "(withheld: secrets not checked)"
+    return {"app_id": "", "tool": str(tool), "args": a, "ok": bool(ok), "text": body}
+
+
 def _secret_path(value: str, patterns: tuple, fnmatch: Any) -> bool:
     """A path (either slash) whose file name matches a secret file pattern of the code index (``.env*``,
     ``id_*`` ...) or one of whose folders is a secret folder (``secrets/``, ``.ssh/`` ...)."""
@@ -374,23 +396,7 @@ class ExoskeletonRuntime:
 
     def record_call(self, tool: str, args: dict | None, ok: bool = True, text: str = "") -> None:
         """One call of this agent's imperal-mcp tools, in the kernel's exchange shape -- the next frame carries it."""
-        a = {str(k): str(v)[:2000] for k, v in (args or {}).items() if v is not None}
-        if str(a.get("target") or "").startswith(("host:", "ssh:")) and a.get("root") and a.get("path") \
-                and not a["path"].startswith("/"):
-            # the kernel finds a server's repo by the full path there (resolve_path)
-            a["path"] = a["root"].rstrip("/") + "/" + a["path"]
-        try:
-            import fnmatch
-            from imperal_sdk.code_index import SECRET_PATTERNS
-            from .mask import defensive_scrub
-            joined = "/".join(x for x in (a.get("root", ""), a.get("path", "")) if x)   # a root may name the folder
-            if any(_secret_path(v, SECRET_PATTERNS, fnmatch) for v in list(a.values()) + [joined]):
-                body = "(withheld: a secret file)"          # never what a secret file holds
-            else:
-                body = str(defensive_scrub(str(text or "")[:2000]))
-        except Exception:      # recording never breaks a tool; what cannot be checked is not sent
-            body = "(withheld: secrets not checked)"
-        self._exchange.append({"app_id": "", "tool": str(tool), "args": a, "ok": bool(ok), "text": body})
+        self._exchange.append(exchange_item(tool, args, ok, text))
         del self._exchange[:-_EXCHANGE_MAX]
 
     def task(self, goal: str, items: list | None = None, root: str | None = None) -> dict[str, Any]:

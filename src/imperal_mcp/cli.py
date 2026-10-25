@@ -184,6 +184,37 @@ def run_claude_hook(
     return out
 
 
+HOOK_EVENTS = ("session-start", "prompt", "post-tool", "stop")
+
+
+def run_shell_hook(event: str, workspace: str | None = None, stdin_data: str | None = None) -> int:
+    """``imperal-mcp hook <event>`` for any shell (memory plan Task 4): the shell's JSON on stdin, the answer in its
+    words on stdout; a tool call that edited a source file also gets its syntax checked (exit 2 tells the model)."""
+    from .hooks import run_hook
+    raw = stdin_data
+    if raw is None:
+        try:
+            raw = "" if sys.stdin.isatty() else sys.stdin.read()
+        except Exception:          # no stdin (a test runner, a closed pipe): an empty event
+            raw = ""
+    try:
+        payload = json.loads(raw) if raw and raw.strip() else {}
+    except ValueError:
+        payload = {}
+    payload = payload if isinstance(payload, dict) else {}
+    name = "post-tool" if event == "post-tool-use" else event
+    out = run_hook(name, payload) if name in HOOK_EVENTS else None
+    if out:
+        print(json.dumps(out, ensure_ascii=False))
+    if name == "post-tool":
+        try:
+            res = run_claude_hook("post-tool-use", workspace=workspace or payload.get("cwd"), payload=payload)
+            return int(res.get("exit_code", 0) or 0)
+        except Exception:
+            return 0
+    return 0
+
+
 def setup_claude_code(
     workspace: str | os.PathLike[str] | None = None,
     *,
@@ -280,7 +311,7 @@ def main(argv=None) -> None:
 
     p_hook = sub.add_parser(
         "hook",
-        help="Run a Claude Code hook event handler (e.g. post-tool-use)",
+        help="Run a shell hook event: session-start | prompt | post-tool | stop (JSON on stdin, any shell)",
     )
     p_hook.add_argument("event", nargs="?", default="post-tool-use", help="Hook event name")
     p_hook.add_argument("--workspace", default=None, help="Target project directory (default: current directory)")
@@ -313,12 +344,7 @@ def main(argv=None) -> None:
         print(json.dumps({"status": "ok", **res}, indent=2))
         return
     if args.cmd == "hook":
-        res = run_claude_hook(args.event, workspace=args.workspace)
-        print(json.dumps(res, indent=2))
-        exit_code = int(res.get("exit_code", 0) or 0)
-        if exit_code != 0:
-            raise SystemExit(exit_code)
-        return
+        raise SystemExit(run_shell_hook(args.event, args.workspace))
     if args.cmd == "status":
         exo = ExoskeletonRuntime(workspace=args.workspace)
         try:

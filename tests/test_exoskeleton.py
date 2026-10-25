@@ -345,11 +345,10 @@ def test_cli_install_hooks_and_hook_subcommands(sample_workspace: Path, capsys):
     assert hook_res["status"] == "ok"
     assert hook_res["syntax_check"]["clean"] is True
 
-    # CLI hook subcommand
-    cli_main(["hook", "post-tool-use", "--workspace", str(sample_workspace)])
-    cli_hook_out = json.loads(capsys.readouterr().out)
-    assert cli_hook_out["status"] == "ok"
-    assert cli_hook_out["event"] == "post-tool-use"
+    # CLI hook subcommand: a shell hook prints nothing when it has nothing to tell the model (memory plan Task 4)
+    with pytest.raises(SystemExit) as ended:
+        cli_main(["hook", "post-tool-use", "--workspace", str(sample_workspace)])
+    assert ended.value.code == 0 and capsys.readouterr().out == ""
 
 
 def test_search_code_without_semantic_vectors(sample_workspace: Path):
