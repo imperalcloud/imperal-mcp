@@ -116,3 +116,18 @@ def test_a_launched_runtime_writes_the_launcher_not_its_own_version(tmp_path, mo
     launcher.chmod(0o755)
     monkeypatch.setenv("IMPERAL_MCP_LAUNCHER", str(launcher))
     assert S._exe() == (str(launcher), [])
+
+
+def test_remove_knows_its_module_launched_server(home, monkeypatch):
+    import sys
+    monkeypatch.setattr(S, "_exe", lambda: (sys.executable, ["-P", "-m", "imperal_mcp.cli"]))
+    S.setup(["claude"], home=str(home))
+    S.setup(["claude"], home=str(home), remove=True)
+    assert "imperal" not in json.loads((home / ".claude.json").read_text() or "{}").get("mcpServers", {})
+
+
+def test_a_dotted_codex_server_of_the_user_is_kept(home):
+    (home / ".codex").mkdir()
+    (home / ".codex" / "config.toml").write_text('mcp_servers.imperal.command = "/my/own"\n')
+    S.setup(["codex"], home=str(home))
+    assert "[mcp_servers.imperal]" not in (home / ".codex" / "config.toml").read_text()

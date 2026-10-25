@@ -21,7 +21,7 @@ _START, _END = "<!-- IMPERAL-MCP:START -->", "<!-- IMPERAL-MCP:END -->"
 _TOML_START, _TOML_END = "# >>> imperal-mcp (managed: `imperal-mcp setup --remove` takes it away)", "# <<< imperal-mcp"
 _OURS = re.compile(r"imperal[-_]mcp\S* hook (session-start|prompt|post-tool|stop)\b")
 # seconds (Gemini CLI: milliseconds): a frame may take its time, a tool call never waits
-_TIMEOUT = {"session-start": 20, "prompt": 40, "post-tool": 10, "stop": 40}
+_TIMEOUT = {"session-start": 20, "prompt": 90, "post-tool": 10, "stop": 90}
 
 
 def _exe() -> tuple[str, list]:
@@ -117,7 +117,9 @@ def _set_hooks(hooks: dict, events: dict, shell: str, remove: bool, ms: bool = F
 def _set_server(data: dict, key: str, remove: bool) -> dict:
     servers = dict(data.get(key) or {}) if isinstance(data.get(key), dict) else {}
     mine = servers.get("imperal")
-    ours = isinstance(mine, dict) and "imperal" in str(mine.get("command") or "") and "mcp" in str(mine.get("command") or "")
+    said = " ".join([str((mine or {}).get("command") or "")] + [str(a) for a in (mine or {}).get("args") or []]) \
+        if isinstance(mine, dict) else ""
+    ours = bool(re.search(r"imperal[-_]mcp", said))
     if remove:
         if ours:
             servers.pop("imperal")
@@ -158,7 +160,8 @@ def _toml_server(path: str, remove: bool) -> str:
         text = text + "\n" if text else ""
     note = ""
     if not remove:
-        if re.search(r"^\[mcp_servers\.imperal\]", text, re.M):
+        if re.search(r"^\s*\[mcp_servers\.imperal\]|^\s*mcp_servers\.imperal\b|^\s*mcp_servers\s*=.*\bimperal\b"
+                     r"|^\s*imperal\s*=\s*\{", text, re.M):
             note = "an [mcp_servers.imperal] of your own is kept"
         else:
             srv = _server()

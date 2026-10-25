@@ -367,3 +367,18 @@ def test_a_token_alone_in_a_url_and_a_secret_on_the_cut_are_redacted():
     long_out = "x" * 7990 + " password=hunter2hunter2hunter2"
     [it] = H.tool_items({**CLAUDE_BASH, "tool_input": {"command": "ls"}, "tool_response": {"stdout": long_out}})
     assert "hunter2" not in it["text"]
+
+
+def test_a_read_is_never_syntax_checked_and_the_shell_flag_is_used(monkeypatch, spool):
+    from imperal_mcp import cli
+    called = []
+    monkeypatch.setattr(cli, "run_claude_hook", lambda *a, **k: called.append(k) or {"exit_code": 2})
+    read = json.dumps({**CLAUDE_BASH, "tool_name": "Read", "tool_input": {"file_path": "/w/broken.py"}})
+    assert cli.run_shell_hook("post-tool", stdin_data=read) == 0 and called == []
+    edit = json.dumps({**CLAUDE_BASH, "tool_name": "Edit", "tool_input": {"file_path": "/w/a.py", "old_string": "a",
+                                                                            "new_string": "b"}})
+    assert cli.run_shell_hook("post-tool", stdin_data=edit) == 2 and len(called) == 1
+    seen = []
+    monkeypatch.setattr(H, "run_hook", lambda ev, p, gateway=None: seen.append(p.get("_shell")))
+    cli.run_shell_hook("prompt", stdin_data=json.dumps(CLAUDE_BASH), shell="gemini")
+    assert seen == ["gemini"]

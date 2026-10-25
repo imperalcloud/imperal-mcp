@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -187,7 +188,11 @@ def run_claude_hook(
 HOOK_EVENTS = ("session-start", "prompt", "post-tool", "stop")
 
 
-def run_shell_hook(event: str, workspace: str | None = None, stdin_data: str | None = None) -> int:
+_EDITING = re.compile(r"(?i)^(?:edit|multiedit|write|write_file|replace|apply_patch|create_file|str_replace)$")
+
+
+def run_shell_hook(event: str, workspace: str | None = None, stdin_data: str | None = None,
+                   shell: str | None = None) -> int:
     """``imperal-mcp hook <event>`` for any shell (memory plan Task 4): the shell's JSON on stdin, the answer in its
     words on stdout; a tool call that edited a source file also gets its syntax checked (exit 2 tells the model)."""
     from .hooks import run_hook
@@ -202,11 +207,13 @@ def run_shell_hook(event: str, workspace: str | None = None, stdin_data: str | N
     except ValueError:
         payload = {}
     payload = payload if isinstance(payload, dict) else {}
+    if shell in ("claude", "codex", "gemini", "antigravity"):
+        payload = {**payload, "_shell": shell}      # setup wrote it: the shell's own word, not a guess
     name = "post-tool" if event == "post-tool-use" else event
     out = run_hook(name, payload) if name in HOOK_EVENTS else None
     if out:
         print(json.dumps(out, ensure_ascii=False))
-    if name == "post-tool":
+    if name == "post-tool" and (_EDITING.match(str(payload.get("tool_name") or "")) or event == "post-tool-use"):
         try:
             res = run_claude_hook("post-tool-use", workspace=workspace or payload.get("cwd"), payload=payload)
             return int(res.get("exit_code", 0) or 0)
@@ -359,7 +366,7 @@ def main(argv=None) -> None:
         print(json.dumps({"status": "ok", **res}, indent=2))
         return
     if args.cmd == "hook":
-        raise SystemExit(run_shell_hook(args.event, args.workspace))
+        raise SystemExit(run_shell_hook(args.event, args.workspace, shell=args.shell))
     if args.cmd == "status":
         exo = ExoskeletonRuntime(workspace=args.workspace)
         try:

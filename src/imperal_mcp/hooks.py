@@ -246,7 +246,9 @@ def _event(payload: dict) -> str:
 
 
 def _shell(payload: dict) -> str:
-    if payload.get("_shell") == "antigravity" or "conversationId" in payload:
+    if payload.get("_shell") in ("claude", "codex", "gemini", "antigravity"):
+        return str(payload["_shell"])
+    if "conversationId" in payload:
         return "antigravity"
     ev = _event(payload)
     if ev in ("AfterTool", "BeforeTool", "AfterAgent", "BeforeAgent") or (
@@ -477,16 +479,17 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
 
 class _Gateway:
     """The gateway as the hooks use it -- the user's own stored sign-in, short timeouts."""
-    TIMEOUT_S = 25.0
+    # aligned (final review I4): the gateway's frame workflow 70 s < this 75 s < the shell's hook timeout 90 s
+    TIMEOUT_S = 75.0
 
     def __init__(self):
         from .client import ImperalClient
         from .config import Config
         self._client = ImperalClient(Config.from_env())
 
-    def _call(self, method: str, path: str, body: dict | None = None) -> Any:
+    def _call(self, method: str, path: str, body: dict | None = None, timeout: float | None = None) -> Any:
         import asyncio
-        return asyncio.run(self._client._request(method, path, json=body, timeout=self.TIMEOUT_S))
+        return asyncio.run(self._client._request(method, path, json=body, timeout=timeout or self.TIMEOUT_S))
 
     def me(self) -> str:
         return str((self._call("GET", "/v1/auth/me") or {}).get("imperal_id") or "")
@@ -501,17 +504,17 @@ class _Gateway:
             raise
 
     def record(self, body: dict) -> dict:
-        return self._call("POST", "/v1/memory/frame/record", body) or {}
+        return self._call("POST", "/v1/memory/frame/record", body, timeout=25.0) or {}
 
     def final(self, body: dict) -> dict:
-        return self._call("POST", "/v1/memory/frame/final", body) or {}
+        return self._call("POST", "/v1/memory/frame/final", body, timeout=40.0) or {}
 
     def recall_context(self, query: str) -> str:
         """The user's directives and this work's notes (the ``recall_context`` tool's own source: memory-index)."""
         import asyncio
         from .mask import defensive_scrub
-        got = asyncio.run(self._client.run_tool("memory-index", "recall_context",
+        got = asyncio.run(asyncio.wait_for(self._client.run_tool("memory-index", "recall_context",
                                                 {"query": query, "limit": 5, "include_user_facts": True,
-                                                 "include_repo_memory": True, "include_resolved": False}))
+                                                 "include_repo_memory": True, "include_resolved": False}), 5.0))
         text = got if isinstance(got, str) else json.dumps(got, ensure_ascii=False, default=str)
         return str(defensive_scrub(text))[:4000]
