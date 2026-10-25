@@ -107,3 +107,12 @@ def test_a_module_launch_never_reads_the_current_folder(monkeypatch):
     monkeypatch.setattr(cli, "_resolve_cli_executable", lambda: (sys.executable, ["-m", "imperal_mcp.cli"]))
     exe, args = S._exe()
     assert args[0] in ("-P", "-I") and args[1:] == ["-m", "imperal_mcp.cli"]
+
+
+def test_a_launched_runtime_writes_the_launcher_not_its_own_version(tmp_path, monkeypatch):
+    """e2e py3.9: setup wrote .../runtime/py3.12-0.6.6/bin/imperal-mcp -- an upgrade would leave the hooks behind."""
+    launcher = tmp_path / "imperal-mcp"
+    launcher.write_text("#!/bin/sh\n")
+    launcher.chmod(0o755)
+    monkeypatch.setenv("IMPERAL_MCP_LAUNCHER", str(launcher))
+    assert S._exe() == (str(launcher), [])

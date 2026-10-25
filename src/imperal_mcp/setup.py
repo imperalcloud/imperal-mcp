@@ -29,6 +29,9 @@ def _exe() -> tuple[str, list]:
     interpreter that never puts the current folder on its path (security review: no module from a project wins)."""
     import sys
     from . import cli
+    launcher = os.environ.get("IMPERAL_MCP_LAUNCHER", "")
+    if launcher and os.path.isfile(launcher) and os.access(launcher, os.X_OK):
+        return launcher, []        # started through the launcher: it picks the current release on every run
     exe, args = cli._resolve_cli_executable()
     if args[:1] == ["-m"]:
         args = ["-P" if sys.version_info >= (3, 11) else "-I", *args]

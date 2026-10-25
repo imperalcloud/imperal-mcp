@@ -212,6 +212,8 @@ def main():
              % (DIST, RUNTIME_PYTHON, e, DIST))
         sys.exit(1)
     argv = [exe] + sys.argv[1:]
+    # the command the shells should run is this launcher (it picks the current release), never the release's own path
+    os.environ["IMPERAL_MCP_LAUNCHER"] = os.path.abspath(sys.argv[0])
     if _WINDOWS:                         # no exec on Windows: run it and pass its exit code on
         sys.exit(subprocess.call(argv))
     os.execv(exe, argv)
