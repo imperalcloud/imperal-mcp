@@ -404,6 +404,9 @@ class ExoskeletonRuntime:
         the baseline its changes are measured from."""
         self._task_goal = str(goal or "")
         self._task_items = [dict(i) for i in items or [] if isinstance(i, dict)][:50]
+        spool = self._shell_spool(self.resolve_workspace(None))
+        if spool is not None:          # the shell's hooks frame each request with this task (memory plan Task 5)
+            spool.update(goal=self._task_goal, items=self._task_items)
         self._baseline(root)
         return {"ok": True, "goal": self._task_goal, "items": len(self._task_items)}
 
@@ -431,7 +434,26 @@ class ExoskeletonRuntime:
             self._me = str((self._vault("GET", "/v1/auth/me") or {}).get("imperal_id") or "")
         if not self._me:
             raise RuntimeError("the gateway did not say who you are")
+        shell = self._shell_session(ws)
+        if shell:                      # the shell's hooks work in this folder: one kernel session for both
+            from .hooks import mcp_session
+            return mcp_session(self._me, shell)
         return "mcp-" + self._me + "-" + hashlib.sha1(f"{ws}|{self._started}".encode()).hexdigest()[:12]
+
+    @staticmethod
+    def _shell_session(ws: str) -> str:
+        try:
+            from .hooks import current_session
+            return current_session(ws)
+        except Exception:
+            return ""
+
+    def _shell_spool(self, ws: str):
+        shell = self._shell_session(ws)
+        if not shell:
+            return None
+        from .hooks import Spool
+        return Spool(shell)
 
     def lens(self, tool: str, args: dict | None = None, root: str | None = None) -> dict[str, Any]:
         """A pointer the frame gave (state_lens / recall / vault_log_read), answered by the kernel for this session."""
@@ -450,7 +472,11 @@ class ExoskeletonRuntime:
         ws = self.resolve_workspace(None)               # the session is this agent's workspace
         where = str(root or "") if remote else self.resolve_workspace(root)
         changed = [] if remote else self._changed_since_last_frame(root)   # a snapshot measures only local edits
-        pending = (self._exchange + changed)[-_EXCHANGE_MAX:]
+        spool = self._shell_spool(ws)
+        hooked, memory = spool.drain() if spool is not None else ([], [])   # the shell's own calls and memory
+        step = (int(spool.state().get("step") or 0) if spool is not None else self._frame_step) + 1
+        own = self._exchange + changed
+        pending = (hooked + own)[-_EXCHANGE_MAX:]
         self._exchange = []
         try:
             if self._client is None:
@@ -460,16 +486,20 @@ class ExoskeletonRuntime:
                 repo_key = self._repo_key(root, target)
             except Exception:
                 repo_key = ""                   # the frame still comes; its code map says it is not synced
-            body = {"session_id": session, "step": self._frame_step + 1, "goal": self._task_goal,
+            body = {"session_id": session, "step": step, "goal": self._task_goal,
                     "items": self._task_items, "exchange": pending, "cwd": where, "repo_root": where,
-                    "repo_key": repo_key or ""}
+                    "repo_key": repo_key or "", "memory": memory[-20:]}
             ans = self._vault("POST", "/v1/memory/frame", body=body) or {}
         except Exception as exc:
-            self._exchange = (pending + self._exchange)[-_EXCHANGE_MAX:]     # nothing is lost: the next frame sends it
+            self._exchange = (own + self._exchange)[-_EXCHANGE_MAX:]     # nothing is lost: the next frame sends it
+            if spool is not None and (hooked or memory):
+                spool.restore(hooked, memory)              # the shell's part waits in its spool (a hook may send it)
             if getattr(exc, "status_code", None) == 402:    # the frame is paid and was not charged: the kernel's reason
                 return {"ok": False, "content": _detail_of(str(exc))}
             return {"ok": False, "content": f"frame unavailable: {type(exc).__name__}: {str(exc)[:200]}"}
-        self._frame_step += 1
+        self._frame_step = step
+        if spool is not None:
+            spool.update(step=step, repo_key=repo_key or "")
         return {"ok": True, "frame": str(ans.get("frame") or ""), "tool_groups": list(ans.get("tool_groups") or []),
                 "session_id": session, "step": self._frame_step}
 

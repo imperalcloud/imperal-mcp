@@ -156,3 +156,36 @@ def test_session_start_gives_the_protocol_and_where_the_work_stands(spool):
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert ctx.startswith(EXOSKELETON_INSTRUCTIONS.strip()[:40]) and "fix alpha" in ctx
     assert H.current_session("/w") == "s2"
+
+
+# ── memory plan Task 5: the server drains the same spool, in the same session, with the same step ──
+def test_the_spool_reaches_the_server_s_next_frame(spool, tmp_path):
+    from tests.test_exoskeleton import _Cloud
+    from imperal_mcp.exoskeleton import ExoskeletonRuntime
+    ws = tmp_path / "w"
+    ws.mkdir()
+    payload = {**CLAUDE_BASH, "cwd": str(ws)}
+    H.run_hook("post-tool", payload, gateway=_Gateway())
+    H.Spool("s1").add_memory({"kind": "user_request", "content": "fix alpha"})
+    H.Spool("s1").update(step=4, me="imp_u_ME")
+    cloud = _Cloud({"/v1/auth/me": {"imperal_id": "imp_u_ME"}, "/v1/memory/frame": {"frame": "F"}})
+    exo = ExoskeletonRuntime(workspace=str(ws), client=cloud)
+    exo.task("fix alpha", [{"content": "edit a", "status": "pending"}])
+    out = exo.frame()
+    body = [c[3] for c in cloud.calls if c[1] == "/v1/memory/frame"][-1]
+    assert out["ok"] and body["session_id"] == H.mcp_session("imp_u_ME", "s1") and body["step"] == 5
+    assert [e["tool"] for e in body["exchange"]] == ["bash"] and body["memory"][0]["kind"] == "user_request"
+    st = H.Spool("s1").state()
+    assert st["step"] == 5 and st["goal"] == "fix alpha" and st["items"][0]["content"] == "edit a"
+    assert H.Spool("s1").drain() == ([], [])
+
+
+def test_a_failed_server_frame_puts_the_spool_back(spool, tmp_path):
+    from tests.test_exoskeleton import _Cloud
+    from imperal_mcp.exoskeleton import ExoskeletonRuntime
+    ws = tmp_path / "w"
+    ws.mkdir()
+    H.run_hook("post-tool", {**CLAUDE_BASH, "cwd": str(ws)}, gateway=_Gateway())
+    exo = ExoskeletonRuntime(workspace=str(ws), client=_Cloud(fail=True))
+    assert exo.frame()["ok"] is False
+    assert [i["tool"] for i in H.Spool("s1").drain()[0]] == ["bash"]
