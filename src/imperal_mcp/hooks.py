@@ -368,7 +368,11 @@ def tool_items(payload: dict) -> list:
         return [exchange_item("edit_file", {"path": p.strip(), "old_string": "", "new_string": ""}, ok, text)
                 for p in _PATCH_FILE.findall(patch)]
     if low in _SHELL_TOOLS or (not path and _command(inp)):
-        return [exchange_item("bash", {"command": _command(inp)}, ok, text, text_limit=OUTPUT_CHARS)]
+        # with the folder the shell ran it in: a `git log` without its own cd is that folder's repository's (live
+        # 2026-10-25: keyed "." in a folder of repositories, the new HEAD was dropped and WORLD kept the old one)
+        cwd = str(inp.get("cwd") or inp.get("workdir") or payload.get("cwd") or "")
+        return [exchange_item("bash", {"command": _command(inp), **({"cwd": cwd} if cwd else {})}, ok, text,
+                              text_limit=OUTPUT_CHARS)]
     if low in _EDIT_TOOLS:
         return [exchange_item("edit_file", {"path": path, "old_string": str(inp.get("old_string") or ""),
                                             "new_string": str(inp.get("new_string") or "")}, ok, text)]

@@ -444,3 +444,14 @@ def test_a_system_notification_is_no_user_request(spool):
     out = H.run_hook("prompt", {**CLAUDE_BASH, "hook_event_name": "UserPromptSubmit",
                                 "prompt": "<task-notification>\n<summary>review found x</summary>"}, gateway=gw)
     assert out is None and gw.calls == [] and H.Spool("s1").drain() == ([], [])
+
+
+def test_a_shell_call_carries_the_folder_it_ran_in():
+    """live 2026-10-25: `git log` with no cd of its own was keyed "." in a folder of repositories -- the kernel needs
+    the folder the shell ran it in."""
+    [it] = H.tool_items(CLAUDE_BASH)
+    assert it["args"] == {"command": "pytest -q", "cwd": "/w"}
+    [cx] = H.tool_items({**CODEX_BASH, "tool_input": {"command": ["bash", "-lc", "git log -1"], "workdir": "/w/sub"}})
+    assert cx["args"]["cwd"] == "/w/sub"
+    [no] = H.tool_items({**CLAUDE_BASH, "cwd": ""})
+    assert "cwd" not in no["args"]

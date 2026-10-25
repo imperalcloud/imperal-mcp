@@ -4,6 +4,15 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.8.2 — 2026-10-25
+
+### Fixed
+- A shell command reaches the kernel with the folder it ran in (the hook's `cwd`, Codex's `workdir`): a `git log`
+  without its own `cd`, run in a folder of repositories, is that repository's -- WORLD no longer keeps an older HEAD
+  beside a newer one it could not place.
+
+Needs the kernel of the same day (it places the run by that folder).
+
 ## 0.8.1 — 2026-10-25
 
 ### Fixed
