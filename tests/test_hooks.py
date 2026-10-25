@@ -403,3 +403,11 @@ def test_a_read_is_never_syntax_checked_and_the_shell_flag_is_used(monkeypatch, 
     monkeypatch.setattr(H, "run_hook", lambda ev, p, gateway=None: seen.append(p.get("_shell")))
     cli.run_shell_hook("prompt", stdin_data=json.dumps(CLAUDE_BASH), shell="gemini")
     assert seen == ["gemini"]
+
+
+def test_a_hook_frame_names_the_folder_the_shell_works_in(spool):
+    gw = _Gateway()
+    H.run_hook("prompt", {**CLAUDE_BASH, "cwd": "/w/imperal-mcp", "hook_event_name": "UserPromptSubmit", "prompt": "x"},
+               gateway=gw)
+    body = [b for n, b in gw.calls if n == "frame"][0]
+    assert body["cwd"] == "/w/imperal-mcp" and body["repo_root"] == "/w/imperal-mcp"

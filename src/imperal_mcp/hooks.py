@@ -456,11 +456,12 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
         spool, _ss, sess = _session_of(payload, gateway)
         st = spool.state()
         step = int(st.get("step") or 0) + 1
+        where = os.path.realpath(str(payload.get("cwd") or os.getcwd()))   # the code map follows the shell's folder
 
         def _frame(items, memory):
             body = {"session_id": sess, "step": step, "goal": str(st.get("goal") or _clean(prompt))[:4000],
                     "items": list(st.get("items") or []), "exchange": items, "memory": memory,
-                    "repo_key": str(st.get("repo_key") or "")}
+                    "repo_key": str(st.get("repo_key") or ""), "cwd": where, "repo_root": where}
             got = gateway.frame(body) or {}
             if got.get("refused"):         # not charged: the step is still written (free) and keeps its number (I3)
                 gateway.record({k: body[k] for k in ("session_id", "exchange", "memory", "repo_key")} | {"step": step - 1})

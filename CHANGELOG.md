@@ -4,6 +4,12 @@ All notable changes to **`imperal-mcp`** — the local stdio MCP server that let
 LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
 are documented here. Depends on `imperal-sdk`.
 
+## 0.7.2 — 2026-10-25 — the frame's code map follows the shell's folder
+
+### Fixed
+- The frame a hook brings names the folder the shell works in, so the code around the focus is that folder's
+  repository (before, it said "not synced" for a synced repository).
+
 ## 0.7.1 — 2026-10-25 — imperal-mcp's own calls reach the vault
 
 ### Fixed
