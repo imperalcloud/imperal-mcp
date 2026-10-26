@@ -5,7 +5,7 @@ readme = "README.md"
 description = "The exoskeleton for your AI coding agent: memory across sessions, a live code map, undo for every change and a hallucination check. MCP server for Claude Code, Cursor, Codex, Gemini CLI."
 requires-python = ">=3.7"
 license = { text = "GPL-3.0-only" }
-authors = [{ name = "Imperal, Inc." }]
+authors = [{ name = "Valentin Scerbacov", email = "valentin@imperal.io" }, { name = "Imperal, Inc." }]
 keywords = ["mcp", "mcp-server", "model-context-protocol", "claude-code", "cursor", "codex", "gemini-cli", "ai-agents", "coding-agent", "ai-memory", "agent-memory", "hallucination", "code-graph", "tree-sitter", "context-engineering", "llm", "developer-tools", "icnli"]
 classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",

@@ -359,6 +359,13 @@ the local credentials.
 
 ---
 
+## Author
+
+Created by **Valentin Scerbacov** ([valentin@imperal.io](mailto:valentin@imperal.io)) and built at
+**[Imperal](https://imperal.io)**.
+
+---
+
 ## License, protocol & trademarks
 
 - **Code:** [GNU General Public License v3.0 (GPL-3.0-only)](LICENSE).
