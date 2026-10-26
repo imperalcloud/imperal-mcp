@@ -335,6 +335,16 @@ def main(argv=None) -> None:
     p_status = sub.add_parser("status", help="Show workspace Exoskeleton readiness and index profile")
     p_status.add_argument("--workspace", default=None, help="Target project directory (default: current directory)")
 
+    p_watch = sub.add_parser(
+        "watch",
+        help="Hand over this session's messages from other agents (Webbee, another shell) as they arrive: one line "
+             "each on stdout, for the shell's monitor (Claude Code: Monitor)",
+    )
+    p_watch.add_argument("--session", default="", help="The shell's session id (Claude Code: the session's id)")
+    p_watch.add_argument("--conversation", default="", help="The kernel session itself (mcp-<you>-<id>)")
+    p_watch.add_argument("--workspace", default="", help="The folder the shell works in (default: current directory)")
+    p_watch.add_argument("--once", action="store_true", help="Drain what is queued now and exit")
+
     args = parser.parse_args(argv)
     cfg = Config.from_env()
 
@@ -367,6 +377,11 @@ def main(argv=None) -> None:
         return
     if args.cmd == "hook":
         raise SystemExit(run_shell_hook(args.event, args.workspace, shell=args.shell))
+    if args.cmd == "watch":
+        from .client import ImperalClient
+        from .watch import run as _watch
+        raise SystemExit(_watch(ImperalClient(cfg), conversation=args.conversation, shell_session=args.session,
+                                workspace=args.workspace, once=args.once))
     if args.cmd == "status":
         exo = ExoskeletonRuntime(workspace=args.workspace)
         try:

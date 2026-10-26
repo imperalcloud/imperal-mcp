@@ -7,6 +7,20 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.8.7 — 2026-10-26
+
+### Added
+- **`imperal-mcp watch`**: this session's messages from other agents (Webbee in a terminal, another shell) are handed
+  over the moment they arrive -- one line each on stdout, for the shell's monitor (Claude Code: run it with the
+  Monitor tool), so the agent is woken by the message itself instead of a timer. The kernel journals every message
+  whole in the conversation and queues it for the session's idle client; the watch drains that queue. It reads only:
+  it never sends, approves or answers anything. `--session <shell session id>` or `--conversation mcp-<id>` names the
+  session (else the one the shell's hooks keep for this folder); `--once` drains what is queued and exits.
+
+### Changed
+- An agent message has no bound on its length or count (owner 2026-10-26: the human always sees it, the kernel always
+  records it); a message to an idle Webbee terminal starts a turn there.
+
 ## 0.8.6 — 2026-10-26
 
 ### Added
