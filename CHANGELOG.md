@@ -7,6 +7,13 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.8.8 — 2026-10-26
+
+### Security
+- `imperal-mcp watch` prints every field of a message plain: control and format characters (ESC, CR, LF, bidi marks)
+  are taken out of the sender, the conversation and the words, and an unknown surface is named "remote" -- a message
+  can never forge a second notification line or drive the terminal.
+
 ## 0.8.7 — 2026-10-26
 
 ### Added
