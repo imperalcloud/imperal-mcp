@@ -2,6 +2,7 @@
 
 <!-- mcp-name: io.github.imperalcloud/imperal-mcp -->
 
+[![Imperal MCP on mcprush](https://mcprush.com/badge/imperal-mcp/score.svg)](https://mcprush.com/to/imperal-mcp?ref=badge)
 [![PyPI](https://img.shields.io/pypi/v/imperal-mcp)](https://pypi.org/project/imperal-mcp/)
 [![Python](https://img.shields.io/badge/python-3.7%20%7C%203.8%20%7C%203.9%20%7C%203.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-3776ab?logo=python&logoColor=white)](https://pypi.org/project/imperal-mcp/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
