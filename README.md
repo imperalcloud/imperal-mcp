@@ -14,8 +14,11 @@ change and can't fake a result - or hallucinate one past you. Fewer wasted token
 Windsurf, Claude Desktop, Cline and Goose**.
 
 ```bash
-pip install "imperal-mcp[code]" && imperal-mcp setup
+pip install "imperal-mcp[code]" && imperal-mcp login && imperal-mcp setup
 ```
+
+The code tools work offline, no account needed. Memory across sessions, the kernel's frame and the hallucination
+check run on an [Imperal Cloud](https://panel.imperal.io) account (`imperal-mcp login`).
 
 ---
 
@@ -45,6 +48,8 @@ AI coding agents are brilliant - and work blind:
 | Invents functions, files and results | **Hallucination check** - every name, file and result it states is matched against what it really read and ran |
 | Says "done" when it isn't | **A referee** - a task closes only with proof the kernel saw: a diff, a check that passed, a finding with sources |
 | Works alone | **A team** - sees your other agents working right now and talks to them |
+
+An illustration of one task - your own numbers: `token_savings()` measures them in every session.
 
 ```text
 WITHOUT the exoskeleton
