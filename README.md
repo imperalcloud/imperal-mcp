@@ -102,7 +102,10 @@ conclusion from true facts. What it can no longer do is pass off what it never s
 
 ---
 
-## Powered by ICNLI
+## Powered by ICNLI - the new HTTP for AI
+
+HTTP gave every computer one way to talk to every other. **ICNLI gives every AI agent one way to work that can be
+proven** - whatever the model, whatever the tool.
 
 **[ICNLI](https://icnli.org)** (Infrastructure Contextual Natural Language Interface) is the open protocol at the
 heart of the exoskeleton - and the reason it can promise honesty, not just speed.
