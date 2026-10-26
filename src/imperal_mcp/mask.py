@@ -41,6 +41,7 @@ def _phone_or_keep(m: "re.Match[str]") -> str:
     return "<PHONE>"
 
 
+_UUID_RE = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
 _SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 # every 13-19 digit run is masked (fail-closed: this is the client's own layer, the gateway checks again) -- except
 # the exact date-time stamp shape: "rel-20261025-094552" went into the vault as "rel-<CARD>" (live 2026-10-25)
@@ -68,11 +69,19 @@ def apply_pii_redaction(text: str | None, level: PIIRedactionLevel) -> str | Non
         return text
     if level == PIIRedactionLevel.FULL_REDACT:
         return "<redacted>"
-    masked = _SSN_RE.sub("<SSN>", text)
+    # a UUID is a structural id, never PII: shielded before the digit passes, as the kernel's _pii does (live 10-26: a
+    # panel connection id came into the frame as "ssh:0f09e3ed-78eb-4c<PHONE>e4e1254bd84" -- a second, broken target)
+    ids: list[str] = []
+
+    def _shield(m: "re.Match[str]") -> str:
+        ids.append(m.group(0))
+        return f"\x00UUID{len(ids) - 1}\x00"
+    masked = _UUID_RE.sub(_shield, text)
+    masked = _SSN_RE.sub("<SSN>", masked)
     masked = _CC_RE.sub(_card_or_keep, masked)
     masked = _EMAIL_RE.sub("<EMAIL>", masked)
     masked = _PHONE_RE.sub(_phone_or_keep, masked)
-    return masked
+    return re.sub(r"\x00UUID(\d+)\x00", lambda m: ids[int(m.group(1))], masked) if ids else masked
 
 
 def mask_pii_in_obj(obj: Any, level: PIIRedactionLevel = PIIRedactionLevel.MASK_PII) -> Any:

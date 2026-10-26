@@ -66,3 +66,11 @@ class TestPIIRedaction(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_a_uuid_is_never_masked_as_a_phone():
+    """Live 10-26: a panel connection id reached the frame as "ssh:0f09e3ed-78eb-4c<PHONE>e4e1254bd84"."""
+    from imperal_mcp.mask import PIIRedactionLevel, apply_pii_redaction
+    s = "target ssh:0f09e3ed-78eb-4c78-9681-2e4e1254bd84 and call +1 (555) 013-2468"
+    out = apply_pii_redaction(s, PIIRedactionLevel.MASK_PII)
+    assert "ssh:0f09e3ed-78eb-4c78-9681-2e4e1254bd84" in out and "<PHONE>" in out and "555" not in out

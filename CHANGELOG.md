@@ -7,6 +7,12 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.8.9 — 2026-10-26
+
+### Fixed
+- A UUID is never masked as a phone: a panel connection id reached the frame as "ssh:0f09e3ed-78eb-4c<PHONE>…" and
+  made a second, broken target. UUIDs are shielded before the digit passes, as the kernel's masker does.
+
 ## 0.8.8 — 2026-10-26
 
 ### Security
