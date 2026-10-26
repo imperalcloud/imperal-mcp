@@ -1,4 +1,4 @@
-# imperal-mcp — The ICNLI-Powered SuperSuite for LLMs & AI Agents 🐝
+# imperal-mcp - The Exoskeleton for Your AI Coding Agent 🐝
 
 <!-- mcp-name: io.github.imperalcloud/imperal-mcp -->
 
@@ -8,191 +8,148 @@
 [![Protocol: ICNLI](https://img.shields.io/badge/ICNLI-CC%20BY--SA%204.0-ff6b00)](https://icnli.org)
 [![Protocol: MCP](https://img.shields.io/badge/MCP-Stdio%20Server-10a37f)](https://modelcontextprotocol.io)
 
-**Python 3.7 – 3.14** · `pip install "imperal-mcp[code]"` works out of the box on every one of them.
+**Stop babysitting your AI.** Put it in an exoskeleton: it remembers everything, sees your whole codebase, can undo any
+change and can't fake a result - or hallucinate one past you. Fewer wasted tokens, fewer broken builds. Works with **Claude Code, Cursor, OpenAI Codex, Gemini CLI,
+Windsurf, Claude Desktop, Cline and Goose**.
 
-> **Stop running your LLM blind.**
-> `imperal-mcp` is the **all-in-one SuperSuite & Exoskeleton for LLMs** — upgrading **Claude Code, Claude Desktop, Cursor, OpenAI Codex, Windsurf, Gemini CLI, Cline, and Goose** with a live Tree-sitter AST call graph, surgical symbol reading, invisible ShadowGit checkpoints, cross-platform cloud memory, and a full-stack cloud app builder powered by **[ICNLI](https://icnli.org)** and **[Imperal Cloud](https://imperal.io)**.
-
-With a single install, your coding agent **stops dumping whole files into context**, **maps and navigates unfamiliar repositories in one call**, **checks blast radius and syntax automatically on every edit**, **remembers your architecture across every IDE, terminal, and chat surface**, and **builds, deploys, and monetizes full-stack cloud apps on the Imperal Marketplace**.
+```bash
+pip install "imperal-mcp[code]" && imperal-mcp setup
+```
 
 ---
 
-## Why Developers Switch to `imperal-mcp` Immediately
+## The problem
 
-Watch what happens to a typical LLM coding session the moment you attach `imperal-mcp`:
+AI coding agents are brilliant - and work blind:
+
+- **They forget.** Every new session, every switch from Cursor to Claude Code, starts from zero. You explain your
+  architecture again. And again.
+- **They burn tokens.** To look at one function they read the whole 2,000-line file, then `grep` the repo and read
+  three more files.
+- **They hallucinate.** A function that doesn't exist. A file it never opened. "I updated the caller" - which one?
+  "All tests pass" - nobody ran them. Said with total confidence, and you only find out in production.
+- **They break things.** They edit a shared helper without knowing who calls it, and a failed experiment leaves your
+  working tree dirty.
+
+## The fix: put your agent in an exoskeleton
+
+`imperal-mcp` wraps the agent you already use. Same model, new abilities:
+
+| Your agent today | In the exoskeleton |
+| :--- | :--- |
+| Forgets everything between sessions and tools | **Total memory** - every step, finding and decision of every session, across terminals, IDEs, the web panel and Telegram |
+| Reads whole files to find one function | **X-ray vision** - a live map of your code: it reads the 28 lines it needs, not 2,000 |
+| Edits blind | **Knows the blast radius** - every caller and file a change reaches, *before* the edit |
+| Leaves broken experiments behind | **A safety net** - invisible checkpoints; any change undone in one call, your `.git` untouched |
+| Invents functions, files and results | **Hallucination check** - every name, file and result it states is matched against what it really read and ran |
+| Says "done" when it isn't | **A referee** - a task closes only with proof the kernel saw: a diff, a check that passed, a finding with sources |
+| Works alone | **A team** - sees your other agents working right now and talks to them |
 
 ```text
-WITHOUT imperal-mcp (Standard Agent Workflow)
-  1. cat / Read 1,800-line service.py         -> 72,000 chars dumped into context
-  2. grep -rn "process_Order" across repo     -> 140 noisy text matches
-  3. Read 3 more full files to trace callers  -> +95,000 chars burned
-  4. Edit shared function blind               -> breaks 2 callers & leaves syntax error
-  5. Switch from Cursor to Claude Code        -> total amnesia; re-explain architecture from scratch
+WITHOUT the exoskeleton
+  1. cat service.py (1,800 lines)            -> 72,000 chars dumped into context
+  2. grep -rn "process_order" .              -> 140 noisy matches
+  3. read 3 more files to trace callers      -> +95,000 chars burned
+  4. edit a shared function blind            -> 2 callers broken, a syntax error left behind
+  5. "I also updated retry_backoff()"        -> that function doesn't exist
+  6. "Done, tests pass!"                     -> it never ran them
+  7. open Cursor tomorrow                    -> total amnesia
 
-WITH imperal-mcp (The SuperSuite Exoskeleton)
-  1. orient("process_order")                  -> repo profile + top ranked AST symbols in 1 call
-  2. outline("service.py")                    -> compact structural map with exact line ranges
-  3. read_symbol("service.py", "Order.run")   -> reads ONLY the 28 lines you need
-  4. impact_of_change(["Order.run"])          -> lists every dependent file & caller before you touch a line
-  5. PostToolUse hook -> check_syntax         -> catches syntax errors in milliseconds after every Edit/Write
-  6. checkpoint("before-refactor")            -> instant ShadowGit snapshot outside .git (rollback in 1 call)
-  7. recall_context / save_repo_note          -> every rule & repo note follows you across Claude, Cursor & Telegram
+WITH the exoskeleton
+  1. frame                                   -> the task, what is proven, the code around your focus, the world
+  2. read_symbol("service.py", "Order.run")  -> only the 28 lines that matter
+  3. impact_of_change(["Order.run"])         -> every caller, before you touch a line
+  4. checkpoint("before-refactor")           -> undo in one call if it goes wrong
+  5. task(goal, items)                       -> an item closes only when the kernel saw the proof
+  6. "I also updated retry_backoff()"        -> held back: no file it read holds that name
+  7. tomorrow, any tool                      -> recall: the whole history is there
 ```
 
-### The 5 Structural Bottlenecks `imperal-mcp` Eliminates
+---
 
-| Bottleneck in Standard LLM Workflows | What the `imperal-mcp` SuperSuite Delivers | Why You Feel the Difference Immediately |
-|--------------------------------------|--------------------------------------------|-----------------------------------------|
-| **Unnecessary Token & Context Burn** — Agents read entire multi-thousand-line files and raw `grep` dumps into the context window just to inspect a single function. | **Surgical AST & Call-Graph Slicing** (`outline`, `read_symbol`, `graph_slice`, `contract_slice`) returns *only* the requested symbol definition, signature, and call edges. | **Keep your context window razor-sharp** — load 30 lines of AST-verified code instead of 2,000 lines of noise, and audit exact savings with `token_savings()`. |
-| **Slow, Repetitive Orientation** — Every new task starts with dozens of sequential `find`, `ls`, `grep`, and `cat` calls before the model understands the project layout. | **One-Shot Structural Orientation** (`orient`, `repo_profile`, `search_code`, `coding_context`) maps languages, entrypoints, test runners, and ranked symbols from a live code graph. | **Zero cold-start lag** — your agent understands the repo architecture on turn 1. |
-| **Context Loss & Amnesia Across Tools** — Switch from Cursor to Claude Code, or from your terminal to web or mobile, and your LLM forgets your architecture, rules, and decisions. | **Cross-Platform Unified Cloud Memory** (`recall_context`, `remember_fact`, `save_repo_note`) syncs user directives and citation-backed repo notes across every MCP client, the Imperal Web Panel, and Telegram. | **Never repeat yourself again** — one persistent engineering brain across every surface and model you use. |
-| **Fear of Breaking Shared Code** — LLMs modify shared helpers without checking downstream callers or contracts, and failed multi-file experiments dirty `.git`. | **Blast-Radius Calculus & ShadowGit Snapshots** (`impact_of_change`, `check_syntax`, `checkpoint`, `checkpoint_diff`, `checkpoint_rollback`) verify dependents before edits and snapshot working trees outside `.git`. | **Refactor with total confidence** — know who calls what before editing, and roll back failed experiments without touching `git log`. |
-| **Dead-End Local Scripts** — Most MCP servers only wrap a single API; you cannot turn your workflows into reusable apps or revenue streams. | **Full-Stack App Builder & Marketplace Monetization** (`validate_ir`, `smoke_ir`, `deploy_ir`, `run_read_tool`, `run_write_tool`, `upload_file`) lets you build, deploy, and monetize cloud apps on the **Imperal Marketplace**. | **Turn workflows into revenue** — build cloud extensions for yourself, your team, or the entire Imperal ecosystem. |
+## Hallucinations: caught before they reach you
+
+You can't trust a sentence just because it sounds sure. So the exoskeleton doesn't trust the model's words - it
+checks them against the record of what actually happened in this task.
+
+**On every step**, the names the agent's thinking leans on - functions, files, sizes - are matched against what the
+task really read, what its commands really returned and what your code map really holds. A name found nowhere comes
+back in the next frame as **NAMED BUT NOT FOUND**, before the agent builds on it.
+
+**On the final answer**, the same check runs once more. Name a symbol nobody read, a file nobody opened, a size
+nobody measured - and the answer **doesn't reach you**. It goes back to the agent:
+
+```text
+KERNEL FACTS: your answer states what the kernel did not see happen:
+- `retry_backoff` -- no file this task read and no output it got contains this name
+Correct the answer to the facts, or do the missing work first.
+```
+
+The agent then reads the code it skipped, or corrects the claim. Either way, what you get is backed by something real.
+
+**On "done"**, words count for nothing: a plan item closes only on a proof the kernel measured - a diff, a check that
+exited 0, a finding with its sources. "Tests pass" without a test run is not a pass.
+
+**What it can't do** - and we'd rather tell you: it doesn't make the model smarter. An agent can still draw a wrong
+conclusion from true facts. What it can no longer do is pass off what it never saw.
 
 ---
 
-## The 5 Core Pillars of the SuperSuite
+## Powered by ICNLI
 
-### 1. Surgical Context & Honest Token Telemetry (AST Symbol Slicing)
-Stuffing an LLM's context window with thousands of lines of unrelated code wastes tokens, slows down time-to-first-token, and degrades reasoning accuracy.
-- **Map First, Read Only What Matters**: Instead of reading an entire 1,500-line module into context, your agent calls `outline(path)` to view a compact structural map of classes, methods, and functions with exact line ranges, then calls `read_symbol(path, "ClassName.method")` (or `L120-180`) to load only the target span.
-- **Honest, On-Disk Telemetry (`token_savings()`)**: Call `token_savings()` at any point in your session to inspect exact, measured character and line counts (`returned_chars` vs `baseline_chars`, `returned_lines` vs `baseline_lines`, `baseline_files`, and per-tool breakdowns). Baselines are measured directly from the real matched files on disk (`baseline_basis: "matched_files_on_disk"`) — never inflated against the whole repository or synthetic multipliers.
+**[ICNLI](https://icnli.org)** (Infrastructure Contextual Natural Language Interface) is the open protocol at the
+heart of the exoskeleton - and the reason it can promise honesty, not just speed.
 
-### 2. Live Code Graph, Call Contracts & Blast-Radius Analysis
-When installed with `imperal-mcp[code]`, the server maintains an incremental **Tree-sitter AST & dependency graph** (with a built-in Python `ast` fallback so Python syntax checks and outlines work even in minimal environments):
-- **`orient(query)`** — One-call task launchpad combining the repository profile with the top-ranked symbols and code matches for your task.
-- **`repo_profile()` & `coding_context()`** — Instant overview of languages, file counts, architectural hubs, test command hints, and git working-tree status.
-- **`search_code(query, kind, path_glob)`** — Hybrid symbol, semantic, and lexical search across the indexed workspace.
-- **`graph_slice(symbols, depth)`** — Batch lookup of symbol definitions, signatures, direct callers, and callees.
-- **`contract_slice(symbols)`** — Inspect exact function signatures, return annotations, raised exceptions, and real call-site argument shapes.
-- **`impact_of_change(symbols)`** — Compute every downstream file and caller symbol that depends on the code you plan to edit *before* making changes.
-- **`check_syntax(path)`** — Instant syntax validation after every edit, plus optional automatic `PostToolUse` hooks for Claude Code.
+Under ICNLI, an agent's work is a **state the kernel can prove**, not a story the model tells:
 
-### 3. Persistent Memory & Context Across Every Platform and Surface
-Your architectural knowledge should never be locked inside a single IDE tab or model vendor:
-- **`remember_fact(fact, category, tags)`** — Store standing engineering rules, user preferences, and operational directives in Imperal Cloud Memory.
-- **`save_repo_note(note, repo, citations)`** — Record durable repository conventions, build commands, and architectural invariants tied to your project.
-- **`recall_context(query)`** — Retrieve relevant user facts and repository notes from any MCP-compatible client (**Claude Code, Cursor, Windsurf, Codex, Gemini CLI**), the **Imperal Web Panel**, or **Telegram**.
+- **Every step is measured.** What a call read, changed or returned is recorded by the kernel - never taken from the
+  model's words.
+- **Proven vs. claimed.** The step frame shows what is proven and what is only claimed; a plan item is done only when
+  its proof (a diff, a check that exited 0, a finding with sources) was seen.
+- **Decisions from facts.** Progress, loops and stalls are computed from what the steps returned, and stated to the
+  agent in plain words.
+- **One state, every surface.** The same session state serves the terminal, the IDE, the web panel and Telegram.
 
-### 4. Build, Deploy & Monetize Apps on the Imperal Marketplace
-Powered by **[ICNLI (Infrastructure Contextual Natural Language Interface)](https://icnli.org)**, `imperal-mcp` is a complete **Cloud Application SDK & Execution Engine**:
-- **Author Full-Stack Cloud Apps from Natural Language**: Using the built-in MCP resources (`imperal://ir-spec`, `imperal://ui-catalog`, `imperal://examples`) and the `build_imperal_app` prompt, your LLM compiles your intent into a declarative **Imperal Intermediate Representation (`app.ir.json`)** bundle — complete with UI views, state schemas, connectors, and typed tool handlers.
-- **Validate, Smoke-Test & Deploy in Seconds**:
-  1. `validate_ir(app_ir)` — Statically verify the IR envelope and every declarative step locally.
-  2. `smoke_ir(app_ir, function, args)` — Execute a live dry-run inside an isolated sandbox store on Imperal Cloud and inspect `{ok, result, trace}`.
-  3. `deploy_ir(app_ir, app_id)` — Deploy the verified app directly into your Imperal Cloud account.
-- **Publish & Monetize on the Imperal Marketplace**: Once your app is deployed and tested, you can publish it to the **[Imperal Marketplace](https://panel.imperal.io)** — sharing or selling custom SaaS connectors, DevOps automations, analytics suites, and domain workflows to other developers and businesses.
-
-### 5. Invisible ShadowGit Safety Net & Capability-Gated Cloud Execution
-- **ShadowGit Checkpoints (`checkpoint`, `checkpoint_diff`, `checkpoint_rollback`)**: Snapshot your workspace before risky refactors into an isolated shadow git store without creating noisy WIP commits in your real `.git` history. Compare diffs at any point or roll back when an experiment fails (`checkpoint_rollback` is explicitly marked destructive so your MCP client prompts for confirmation before overwriting working files).
-- **Workspace Boundary Protection**: All local code and file tools enforce strict workspace path resolution — requests targeting paths or `root` directories outside the configured workspace root (such as `~/.zshrc` or `/etc`) are rejected with `OutsideWorkspaceError`.
-- **Three-Tier Cloud Safety (`read` / `write` / `destructive`)**:
-  - `run_read_tool` executes read-only operations and automatically scrubs PII from responses.
-  - `run_write_tool` executes standard write tools directly, requires interactive human consent (MCP elicitation) for `destructive` tools, and enforces out-of-band panel approval for financial/money operations.
-
-## Complete Tool & Resource Catalog (25 Tools + 5 Resources)
-
-### Local Code Intelligence & Call Graph (`imperal-mcp[code]`)
-
-| Tool | Read-Only | Destructive | What It Does |
-| :--- | :---: | :---: | :--- |
-| `orient(query, root?)` | Yes | No | **One-call task orientation**: combines repository profile (`files`, `languages`, `git`, `test_hints`, `sample_symbols`) with top semantic + lexical code matches for `query`. |
-| `repo_profile(root?)` | Yes | No | Returns structured repository overview: file count, language distribution, current git ref, test runner hints, and key entry-point symbols. |
-| `search_code(query, k?, path_glob?, kind?, root?)` | Yes | No | Hybrid **semantic + lexical + symbol** search across the indexed workspace (`kind`: `all`, `symbol`, or `file`). |
-| `outline(path, root?)` | Yes | No | Builds a structural map of a source file (classes, functions, methods, and major regions with exact 1-based line ranges) without loading the full file body. |
-| `read_symbol(path, name, root?)` | Yes | No | Reads **only** a specific function, class, method (`Class.method`), or line range (`L10-50`) with 1-based line numbers. |
-| `graph_slice(symbols, depth?, root?)` | Yes | No | Returns definition location, signature, direct callers, and direct callees from the live AST call graph for one or more symbols. |
-| `contract_slice(symbols?, query?, kind?, k?, root?)` | Yes | No | Extracts verified symbol contracts (definitions, signatures, and call-site evidence) in one call. |
-| `impact_of_change(symbols, root?)` | Yes | No | Computes downstream blast radius: every file and symbol that calls or depends on the symbols you plan to modify. |
-| `check_syntax(path, root?)` | Yes | No | Validates syntax of a source file after edits (Tree-sitter for multi-language ASTs + Python `ast` and JSON stdlib validation; returns `supported: false, clean: null` for unsupported file types). |
-| `coding_context(root?)` | Yes | No | Returns git branch, `HEAD`, dirty working-tree files, and recent commits for instant situational awareness. |
-| `token_savings()` | Yes | No | Reports **measured** session character and line telemetry against the real matched files on disk (`baseline_basis: "matched_files_on_disk"`, `baseline_files`, `returned_chars`, `baseline_chars`, `saved_chars`, `returned_lines`, `baseline_lines`, `saved_lines`, `compression_pct`, `by_tool`). |
-
-### Local ShadowGit Checkpoints (`imperal-mcp[code]`)
-
-| Tool | Read-Only | Destructive | What It Does |
-| :--- | :---: | :---: | :--- |
-| `checkpoint(label?, touched_paths?, root?)` | No | No | Snapshots workspace state into an isolated ShadowGit store without touching `.git` history. |
-| `checkpoint_diff(target?, root?)` | Yes | No | Shows unified diff between current working files and a ShadowGit checkpoint (`step` number or ref). |
-| `checkpoint_rollback(target?, root?)` | No | **Yes** | Restores workspace files from a ShadowGit checkpoint (`destructiveHint=True` so MCP clients prompt before overwriting working files). |
-
-### Cross-Platform Cloud Memory (`Imperal Cloud`)
-
-| Tool | Read-Only | Destructive | What It Does |
-| :--- | :---: | :---: | :--- |
-| `recall_context(query?, category?, limit?)` | Yes | No | Recalls durable standing rules, architectural decisions, user preferences, and cross-surface facts from Imperal Cloud (`memory-index`), with automatic PII scrubbing. |
-| `remember_fact(fact, category?, tags?)` | No | No | Stores a durable fact, standing rule, or user preference into unified Imperal Cloud memory across Terminal, Web Panel, and Telegram. |
-| `save_repo_note(note, repo?, citations?)` | No | No | Saves a citation-backed architectural or repository note (`file:line`) into Imperal Cloud memory. |
-
-### Imperal Cloud App Builder, Sandbox & Execution (`ICNLI`)
-
-| Tool | Read-Only | Destructive | What It Does |
-| :--- | :---: | :---: | :--- |
-| `validate_ir(app_ir)` | Yes | No | Offline structural + semantic validator for an `app.ir.json` bundle (`ir_version: "1.0"`, state, views, handlers). |
-| `smoke_ir(app_ir, function, args?)` | Yes | No | Executes a handler step-by-step inside an isolated sandbox store on Imperal Cloud and returns `{ok, result, trace}`. |
-| `deploy_ir(app_ir, app_id?)` | No | No | Validates and deploys an `app.ir.json` application to your Imperal Cloud account. |
-| `list_apps()` | Yes | No | Lists all installed and available apps in your Imperal Cloud account with `{id, name, version, description, category, status}`. |
-| `get_app(app_id)` | Yes | No | Returns full app manifest, tool schemas, and `action_type` classifications (`read` / `write` / `destructive`). |
-| `run_read_tool(app_id, function, params?)` | Yes | No | Executes a `read`-tier cloud tool and scrubs PII (`email`, `phone`, `ssn`, `card`, `jwt`, `api_key`, `iban`) from the response. |
-| `run_write_tool(app_id, function, params?)` | No | **Yes** | Executes `write` tools directly, prompts for interactive human consent on `destructive` tools (`approve_once` / `autopilot` / `reject`), and blocks direct financial transfers in favor of panel confirmation. |
-| `upload_file(path, name?)` | No | No | Uploads a local file to your Imperal Cloud storage and returns a ` storage:// ` URI for use in cloud tool calls. |
-
-### Built-In MCP Resources
-
-| Resource URI | Content |
-| :--- | :--- |
-| `imperal://exoskeleton-protocol` | Operating discipline for LLMs: orient first, surgical AST reads, blast-radius checks, and syntax verification. |
-| `imperal://ui-catalog` | Reference of the 17 declarative UI components available in `app.ir.json` views. |
-| `imperal://ir-spec` | Full specification of the `app.ir.json` envelope, state schema, and the 17 deterministic handler step types. |
-| `imperal://examples` | Complete, runnable `app.ir.json` reference applications. |
-| `imperal://build-prompt` | Step-by-step system playbook for designing, validating, smoke-testing, and deploying Imperal apps. |
+MCP is how your agent talks to the exoskeleton. **ICNLI is how the exoskeleton thinks.** The specification is open
+([CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)) at [icnli.org](https://icnli.org).
 
 ---
 
-## Installation & Quick Start
-
-### 1. Install the Package
+## Quick start
 
 ```bash
-# Full SuperSuite (Cloud + Local AST Code Graph, Call Graph, Search & ShadowGit)
+# 1. Install (Python 3.7 - 3.14; the code map included)
 pip install "imperal-mcp[code]"
 
-# Lightweight Cloud-only install (App Builder, Cloud Tools & Cross-Surface Memory)
-pip install imperal-mcp
-```
-
-> **Python 3.7 – 3.14 compatibility**: On Python 3.10+, `imperal-mcp` runs natively. On older system Pythons (3.7 – 3.9), the zero-dependency `_launch.py` bootstrapper automatically provisions an isolated Python 3.12 runtime via `uv` and installs `imperal-mcp[code]==<version>` on first launch — so the full AST & Call-Graph Exoskeleton works seamlessly even on legacy systems.
-
-### 2. Authenticate with Imperal Cloud (for Cloud Memory & Apps)
-
-```bash
+# 2. Sign in to Imperal Cloud (memory, the kernel's frame, apps)
 imperal-mcp login
+
+# 3. Wire every shell found on this machine: server + hooks + protocol
+imperal-mcp setup            # Claude Code, Codex, Antigravity CLI, Gemini CLI
 ```
 
-This starts a browser-based **OAuth 2.0 Device Authorization + PKCE** flow against Imperal Cloud (`api` / `gateway`) and stores your credentials in `~/.config/imperal/credentials.json` with `0600` permissions. (Local code intelligence tools work offline even before you log in.)
+That's it. From the next prompt on, your agent starts each step from the kernel's frame, remembers across sessions and
+gets its final answer checked.
 
-### 3. Connect Your LLM Client
+<details>
+<summary><b>Other ways to connect</b></summary>
 
-#### Option A: One-Command Setup for Claude Code (Recommended)
-
-Run inside your project repository:
+**Claude Code only, in this project:**
 
 ```bash
 imperal-mcp claude-setup --with-hooks
 ```
 
-What this does safely and idempotently:
-- Adds the `imperal` server to `.mcp.json` (preserving any existing `mcpServers` entries and refusing to overwrite malformed JSON files).
-- Appends the `IMPERAL-MCP-EXOSKELETON` operating section to `CLAUDE.md` (preserving all existing project instructions).
-- Installs a `PostToolUse` hook in `.claude/settings.local.json` using the exact Python environment binary that ran `claude-setup`. After `Edit`, `MultiEdit`, or `Write`, the hook runs `check_syntax` and reports any syntax errors to `stderr` with exit code `2` so Claude Code sees and fixes broken syntax immediately.
+Adds the `imperal` server to `.mcp.json` (keeps your entries, refuses to overwrite malformed JSON), appends the
+exoskeleton protocol to `CLAUDE.md`, and installs a `PostToolUse` hook that syntax-checks every `Edit`/`Write`.
 
-#### Option B: Claude Code CLI
+**Claude Code CLI:**
 
 ```bash
 claude mcp add imperal -- imperal-mcp
 ```
 
-#### Option C: Cursor / Claude Desktop / Windsurf / Cline (`.mcp.json` or `claude_desktop_config.json`)
+**Cursor / Claude Desktop / Windsurf / Cline** (`.mcp.json` or `claude_desktop_config.json`):
 
 ```json
 {
@@ -200,53 +157,216 @@ claude mcp add imperal -- imperal-mcp
     "imperal": {
       "command": "imperal-mcp",
       "args": [],
-      "env": {
-        "IMPERAL_WORKSPACE": "/absolute/path/to/your/repo"
-      }
+      "env": { "IMPERAL_WORKSPACE": "/absolute/path/to/your/repo" }
     }
   }
 }
 ```
 
-#### Option D: OpenAI Codex / Gemini CLI / Goose
+**Any other MCP stdio client:** run `imperal-mcp` with `IMPERAL_WORKSPACE` set to your repository root.
 
-Point any MCP-compatible stdio client at the `imperal-mcp` executable with `IMPERAL_WORKSPACE` set to your repository root.
+</details>
+
+> **Pricing:** one `frame` costs credits on Imperal Cloud; every other tool is free. Local code tools work offline,
+> even before you sign in.
 
 ---
 
-## CLI Reference
+## For the geeks: how it works
+
+### The loop
+
+1. **`frame`** - at the start and after each change. The kernel's step frame: the task and plan with what is proven,
+   the code around the focus from the exact graph, what the change reaches, the machines and repos, the path so far,
+   and a **DECISION** section to act on first. With `imperal-mcp setup`, the shell's prompt hook puts it in context
+   automatically.
+2. **`task(goal, items)`** - declare the request and the plan; an item closes only by a proof the kernel saw. An item
+   that cannot be finished is marked blocked with the reason.
+3. **Code** - `orient` -> `outline` -> `read_symbol`; `search_code` / `grep_code` for exact text;
+   `impact_of_change` **before** editing a shared symbol. The same tools reach a server's repo with
+   `target="host:<alias>"` or `target="ssh:<connection_id>"`.
+4. **Safety** - `checkpoint` before risky edits, `checkpoint_diff`, `checkpoint_rollback`; `check_syntax` after.
+5. **Memory** - every call, thought and answer is written to the vault by the shell's hooks; look back with `recall`,
+   `search_history`, `state_lens`, `vault_log_read`.
+6. **The final check** - the stop hook sends the final answer to the kernel: an answer that names a file, symbol or
+   size the task never read is handed back to the agent, and open plan items are listed to you.
+
+### Hooks (installed by `imperal-mcp setup`)
+
+| Event | What happens |
+| :--- | :--- |
+| `session-start` | The session is bound to its kernel state; a missing install is reported |
+| `prompt` | Your request is recorded; the kernel's frame for this step is put in context |
+| `post-tool` | Every call and its result go to the vault; edits are syntax-checked |
+| `stop` | The final answer is checked against the facts; open plan items are named |
+
+### Tool catalog (34 tools, 4 resources, 1 prompt)
+
+**Kernel & task** (Imperal Cloud)
+
+| Tool | What it does |
+| :--- | :--- |
+| `frame(root?, target?)` | The kernel's step frame - task, proofs, code around the focus, reach of the change, world, path |
+| `task(goal, items?)` | Declare the request and the plan; items close only by a measured proof |
+| `state_lens(section?, focus?, conversation?)` | What the kernel holds, by section (law, plan, reality, memory, conversation, path) - yours or another live session's |
+| `vault_log_read(ref, offset?, limit?, grep?)` | An output the kernel kept in the vault (`vault://logs/...`), paged or grepped |
+
+**Memory & other sessions** (Imperal Cloud)
+
+| Tool | What it does |
+| :--- | :--- |
+| `recall(ref, offset?, n?, conversation?)` | A past request or answer whole - of this session or another of yours |
+| `search_history(query, limit?)` | Your past conversations that hold a text - Webbee, the panel, Telegram, other shells |
+| `live_sessions(minutes?, limit?)` | Your other sessions working now, with their newest steps |
+| `message_session(conversation, text)` | Write to another live session as an agent; its answer comes back in your frame |
+| `recall_context(query, limit?)` | Standing rules, preferences and repo notes, with PII scrubbed |
+| `remember_fact(fact, category?, tags?)` | Keep a durable fact or rule across every surface |
+| `save_repo_note(note, repo?, citations?)` | Keep a citation-backed note about a repository |
+
+**Code map** (`imperal-mcp[code]`, local or on a server via `target`)
+
+| Tool | What it does |
+| :--- | :--- |
+| `orient(query, k?)` | One-call orientation: repo profile + top-ranked symbols and matches for the task |
+| `repo_profile()` | Languages, file counts, entry points, test hints, git ref |
+| `search_code(query, k?, path_glob?, kind?)` | Hybrid symbol + semantic + lexical search |
+| `grep_code(pattern, path_glob?, regex?)` | An exact text or regex inside the code |
+| `outline(path)` | A file's structure with exact line ranges, without its body |
+| `read_symbol(path, name)` | Only one function, class, method or line range (`L120-180`) |
+| `graph_slice(symbols, depth?)` | Definitions, signatures, callers and callees |
+| `contract_slice(symbols)` | Signatures, returns, raises and real call-site argument shapes |
+| `impact_of_change(symbols, full?)` | Every file and call site that depends on what you plan to change |
+| `check_syntax(path)` | Tree-sitter (and Python `ast` / JSON) syntax check after an edit |
+| `coding_context()` | Project tree and git status snapshot |
+| `token_savings()` | Measured characters and lines returned vs. the real files on disk |
+
+**Safety net** (local)
+
+| Tool | What it does |
+| :--- | :--- |
+| `checkpoint(label?)` | An invisible ShadowGit snapshot - your `.git` history untouched |
+| `checkpoint_diff(target?, paths?)` | Diff of the workspace against a checkpoint |
+| `checkpoint_rollback(target?)` | Restore a checkpoint (a safety snapshot is taken first; marked destructive, so your client asks) |
+
+**Apps on Imperal Cloud** (ICNLI)
+
+| Tool | What it does |
+| :--- | :--- |
+| `validate_ir(app_ir)` | Validate an `app.ir.json` locally - the envelope and every declarative step |
+| `smoke_ir(app_ir, function, args?)` | Dry-run a handler in an isolated sandbox: `{ok, result, trace}` |
+| `deploy_ir(app_ir, app_id)` | Deploy the app to your Imperal Cloud account |
+| `list_apps()` / `get_app(app_id)` | Your apps, their manifests, tool schemas and action types |
+| `run_read_tool(app_id, function, args?)` | Run a read tool; PII scrubbed from the answer |
+| `run_write_tool(app_id, function, args?)` | Run a write tool; destructive ones ask you first, money ones need panel approval |
+| `upload_file(path, name?)` | Upload a file to your cloud storage, get a `storage://` URI |
+
+**Resources & prompt:** `imperal://exoskeleton-protocol` (the operating discipline), `imperal://ir-spec`,
+`imperal://ui-catalog`, `imperal://examples`, and the `build_imperal_app` prompt for designing, validating,
+smoke-testing and deploying an app.
+
+### CLI
 
 ```bash
 imperal-mcp                  # Start the MCP server over stdio
-imperal-mcp login            # Sign in via browser (Device Code + PKCE); supports --no-browser
-imperal-mcp logout           # Revoke refresh token and delete local credentials
-imperal-mcp claude-setup     # Configure .mcp.json and CLAUDE.md (--workspace, --with-hooks)
-imperal-mcp install-hooks    # Install PostToolUse syntax-check hook in .claude/settings.local.json
-imperal-mcp hook             # Run a Claude Code hook event handler (post-tool-use)
-imperal-mcp status           # Print JSON readiness and repository profile for --workspace
+imperal-mcp login            # Sign in via browser (device code + PKCE); --no-browser prints the URL
+imperal-mcp logout           # Revoke the refresh token and delete local credentials
+imperal-mcp setup [shells]   # Wire claude | codex | antigravity | gemini (default: the ones found); --remove undoes it
+imperal-mcp claude-setup     # Configure .mcp.json and CLAUDE.md for one project (--workspace, --with-hooks)
+imperal-mcp install-hooks    # Install the Claude Code PostToolUse syntax-check hook
+imperal-mcp hook <event>     # Run a hook event: session-start | prompt | post-tool | stop (JSON on stdin)
+imperal-mcp status           # Workspace readiness and index profile
+imperal-mcp watch            # Messages from your other agents, one line each, as they arrive (for a shell monitor)
 ```
 
----
+### Privacy
 
-## Architecture & Security Guarantees
+See [PRIVACY.md](PRIVACY.md) for every data flow in detail.
 
-1. **Public Cloud Topology (`api`, `gateway`, `worker`)**:
-   All cloud requests communicate over HTTPS with Imperal Cloud's `api` and `gateway` endpoints, dispatching isolated app executions and sandbox smoke runs to `worker` runtimes.
-2. **Strict Workspace Confinement**:
-   Every local tool resolves paths and `root` overrides via `os.path.realpath` and verifies `os.path.commonpath([workspace_root, candidate]) == workspace_root`. Attempts to read outside the workspace raise `OutsideWorkspaceError`.
-3. **Config File Integrity**:
-   `claude-setup` and `install-hooks` parse existing `.mcp.json` and `.claude/settings.local.json` strictly — if a user file has a JSON syntax error, the CLI refuses to overwrite it rather than wiping existing settings.
-4. **Defensive PII Scrubbing**:
-   All cloud read and memory payloads pass through `defensive_scrub`, redacting emails, phone numbers, SSNs, payment cards, JWTs, API keys, and IBANs before entering the model context.
+### Python 3.7 - 3.14
+
+On Python 3.10+ `imperal-mcp` runs natively. On older system Pythons (3.7 - 3.9) a zero-dependency launcher provisions
+an isolated Python 3.12 runtime via `uv` on first launch - the full code map works even on legacy systems.
 
 ---
 
-## License, Protocol & Trademarks
+## Built like a vault
 
-- **Code License**: Licensed under the **[GNU General Public License v3.0 (GPL-3.0-only)](LICENSE)**.
-- **Protocol Specification**: Powered by **[ICNLI (Infrastructure Contextual Natural Language Interface)](https://icnli.org)**, an open specification licensed under **[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)**.
-- **Privacy Policy**: See **[PRIVACY.md](PRIVACY.md)** for details on local execution, credential storage, and PII redaction.
-- **Trademarks & Attribution**:
-  `Imperal`, `Imperal Cloud`, `Webbee`, and `ICNLI` are trademarks of **Imperal, Inc.**
-  `Claude`, `Claude Code`, `Claude Desktop`, and `Anthropic` are trademarks of Anthropic, PBC. `Cursor` is a trademark of Anysphere, Inc. `OpenAI` and `Codex` are trademarks of OpenAI, Inc. `Windsurf` is a trademark of Exafunction, Inc. (Codeium). `Gemini` is a trademark of Google LLC. All third-party product and company names are used solely to indicate MCP interoperability and compatibility; no endorsement or affiliation is implied.
+Your agent's memory is your work - your code, your decisions, your mistakes. So it's guarded like one.
 
+### What leaves your machine
+
+| Stays on your machine | Goes to your private space in Imperal Cloud |
+| :--- | :--- |
+| Your code map, symbol reads, syntax checks and checkpoints - **all local tools work offline** | The steps of a session the shell's hooks record: requests, calls and their results, thoughts and answers - that's your agent's memory |
+| Your credentials (`~/.imperal/credentials.json`, `0600`) | Facts and repo notes you choose to keep |
+| **Secrets and personal data** - removed *before* anything is sent | Apps you deploy |
+
+**Scrubbed on your machine, before sending.** Private keys, passwords, tokens, JWTs, API keys, authorization headers,
+credentials in URLs, emails, phone numbers, payment cards and SSNs are masked locally by `imperal-mcp` itself - before
+a single byte leaves your machine.
+
+### How it's locked down
+
+- **Your own sealed space.** Every user's memory lives in its own isolated space, in a private storage network that is
+  never exposed to the internet. Each internal service holds its own narrow key and reaches only what it needs.
+- **Secrets sealed with keys that can't be taken out.** Your connected accounts' tokens and credentials are encrypted
+  in Vault with non-exportable keys - a full copy of the database reveals nothing.
+- **Zero keys on disk.** No platform secret is ever written to a server's disk: every service gets its keys from
+  Vault at start, bound to that one machine.
+- **Distributed infrastructure.** Isolated environments across independent data centers and providers - no single
+  provider holds the whole platform.
+- **Durable by design.** Every agent turn runs as a durable workflow: a restart or an outage costs time, never your
+  work.
+- **Encrypted in transit.** Everything between your machine and the platform goes over HTTPS; you sign in with OAuth
+  2.0 device code + PKCE, and no password ever passes through `imperal-mcp`.
+
+### And on your machine
+
+- **Workspace confinement.** Local tools resolve every path and refuse anything outside your workspace root.
+- **Your config files are safe.** `setup`, `claude-setup` and `install-hooks` refuse to overwrite a JSON file they
+  cannot parse; `setup --remove` takes away exactly what it added.
+- **You stay in charge.** Destructive actions ask you first; money moves only with your approval in the panel. A
+  message from another agent informs - it approves nothing.
+- **Your memory, your call.** See everything your agents remember and delete any of it - or all of it - from the
+  Imperal panel. Delete your account and your space goes with it.
+
+---
+
+## FAQ
+
+**Does it replace Claude Code / Cursor / Codex?**
+No. It's an exoskeleton, not a new agent: you keep your tool and your model - the exoskeleton makes them remember,
+see, check and prove.
+
+**Which model does it use?**
+Yours. The kernel does the bookkeeping - measuring, remembering, checking - and your agent's model does the thinking.
+
+**What does it cost?**
+One `frame` (the kernel's step frame) costs credits on Imperal Cloud. Every other tool - the code map, checkpoints,
+memory, history, messaging - is free.
+
+**Does it work without the cloud?**
+The code map, symbol reads, blast radius, syntax checks and checkpoints run fully offline. Memory across sessions,
+the kernel's frame and the hallucination check need your Imperal Cloud account.
+
+**How is this different from an MCP server that searches code?**
+Search tells your agent where things are. The exoskeleton also remembers what it did, knows what a change will break,
+holds it to its plan and checks every claim against what really happened - under one protocol, ICNLI.
+
+**Can I remove it?**
+`imperal-mcp setup --remove` takes away exactly what setup added. `imperal-mcp logout` revokes the sign-in and deletes
+the local credentials.
+
+---
+
+## License, protocol & trademarks
+
+- **Code:** [GNU General Public License v3.0 (GPL-3.0-only)](LICENSE).
+- **Protocol:** [ICNLI](https://icnli.org), an open specification under
+  [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+- **Privacy:** see [PRIVACY.md](PRIVACY.md) - local execution, credential storage and PII redaction.
+- **Trademarks:** `Imperal`, `Imperal Cloud`, `Webbee` and `ICNLI` are trademarks of **Imperal, Inc.** `Claude`,
+  `Claude Code`, `Claude Desktop` and `Anthropic` are trademarks of Anthropic, PBC. `Cursor` is a trademark of
+  Anysphere, Inc. `OpenAI` and `Codex` are trademarks of OpenAI, Inc. `Windsurf` is a trademark of Exafunction, Inc.
+  (Codeium). `Gemini` is a trademark of Google LLC. All third-party names indicate MCP interoperability only; no
+  endorsement or affiliation is implied.

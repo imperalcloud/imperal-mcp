@@ -2,10 +2,11 @@
 name = "imperal-mcp"
 version = "0.8.10"
 readme = "README.md"
-description = "MCP server for building Imperal apps from any LLM/agent"
+description = "The exoskeleton for your AI coding agent: memory across sessions, a live code map, undo for every change and a hallucination check. MCP server for Claude Code, Cursor, Codex, Gemini CLI."
 requires-python = ">=3.7"
 license = { text = "GPL-3.0-only" }
 authors = [{ name = "Imperal, Inc." }]
+keywords = ["mcp", "mcp-server", "model-context-protocol", "claude-code", "cursor", "codex", "gemini-cli", "ai-agents", "coding-agent", "ai-memory", "agent-memory", "hallucination", "code-graph", "tree-sitter", "context-engineering", "llm", "developer-tools", "icnli"]
 classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3.7",
@@ -15,6 +16,12 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 # Every dependency needs Python 3.10+ (the MCP SDK, pydantic 2). On 3.7-3.9 pip installs none of
 # them, and the `imperal-mcp` command (imperal_mcp/_launch.py) runs this same release on a Python
@@ -29,6 +36,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://imperal.io"
 Repository = "https://github.com/imperalcloud/imperal-mcp"
+Documentation = "https://github.com/imperalcloud/imperal-mcp#readme"
+Protocol = "https://icnli.org"
 
 [project.scripts]
 imperal-mcp = "imperal_mcp._launch:main"
