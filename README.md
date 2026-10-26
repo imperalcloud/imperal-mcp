@@ -18,7 +18,8 @@ pip install "imperal-mcp[code]" && imperal-mcp login && imperal-mcp setup
 ```
 
 The code tools work offline, no account needed. Memory across sessions, the kernel's frame and the hallucination
-check run on an [Imperal Cloud](https://panel.imperal.io) account (`imperal-mcp login`).
+check run on an [Imperal Cloud](https://panel.imperal.io) account (`imperal-mcp login`): sign-up is free, the
+first 30 days are free with 10,000 credits to start.
 
 ---
 
@@ -173,8 +174,8 @@ claude mcp add imperal -- imperal-mcp
 
 </details>
 
-> **Pricing:** one `frame` costs credits on Imperal Cloud; every other tool is free. Local code tools work offline,
-> even before you sign in.
+> **Pricing:** free sign-up, the first 30 days free with 10,000 credits, then $29/month with 30,000 credits included.
+> In imperal-mcp only `frame` spends credits; every other tool is free, and the local code tools work offline.
 
 ---
 
@@ -348,8 +349,10 @@ see, check and prove.
 Yours. The kernel does the bookkeeping - measuring, remembering, checking - and your agent's model does the thinking.
 
 **What does it cost?**
-One `frame` (the kernel's step frame) costs credits on Imperal Cloud. Every other tool - the code map, checkpoints,
-memory, history, messaging - is free.
+Sign-up is free, and so are the first 30 days - with 10,000 credits to start. After that the Imperal platform
+is $29/month with 30,000 credits included every month; top up anytime if you need more. In imperal-mcp only
+`frame` (the kernel's step frame) spends credits; every other tool - the code map, checkpoints, memory, history,
+messaging - is free. Prices may change; the current ones are always in the [Imperal panel](https://panel.imperal.io).
 
 **Does it work without the cloud?**
 The code map, symbol reads, blast radius, syntax checks and checkpoints run fully offline. Memory across sessions,
