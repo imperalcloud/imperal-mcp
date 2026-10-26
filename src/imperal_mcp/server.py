@@ -452,10 +452,14 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
                                regex=regex)
 
     @mcp.tool(title="State Lens", annotations=ToolAnnotations(readOnlyHint=True))
-    async def state_lens(section: str = "all", focus: str = "", offset: int = 0) -> dict:
+    async def state_lens(section: str = "all", focus: str = "", offset: int = 0, conversation: str = "") -> dict:
         """What the kernel holds for your session, by section (law, plan, reality, memory, conversation, path) -- where
-        the frame's counted lines point."""
-        return await _exo_call(exo.lens, tool="state_lens", args={"section": section, "focus": focus, "offset": offset})
+        the frame's counted lines point. ``conversation``: another session of yours working now (an id live_sessions
+        names, e.g. Webbee's) -- its state, its running turn's steps included."""
+        args: dict = {"section": section, "focus": focus, "offset": offset}
+        if conversation:
+            args["conversation"] = conversation
+        return await _exo_call(exo.lens, tool="state_lens", args=args)
 
     @mcp.tool(title="Recall", annotations=ToolAnnotations(readOnlyHint=True))
     async def recall(ref: str, offset: int = 0, n: int = 1, conversation: str = "") -> dict:
@@ -477,8 +481,9 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
     async def live_sessions(minutes: int = 120, limit: int = 8) -> dict:
         """The user's OTHER sessions active in the last ``minutes`` -- Webbee in a terminal, another shell through
         imperal-mcp, the panel, Telegram: each with its surface, when it last moved, and its last request, steps and
-        answer; recall(ref, conversation=...) opens any message whole. Read-only, on request: nothing of another
-        session enters your frame by itself."""
+        answer, and the newest steps of a turn still running; recall(ref, conversation=...) opens any message whole,
+        state_lens(conversation=...) its state. Read-only, on request: nothing of another session enters your frame by
+        itself."""
         return await _exo_call(exo.lens, tool="live_sessions", args={"minutes": minutes, "limit": limit})
 
     @mcp.tool(title="Message Session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))

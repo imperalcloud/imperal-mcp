@@ -78,3 +78,21 @@ def test_run_refuses_a_session_of_another_user(capsys):
             return "imp_u_a"
     assert w.run(_C(), conversation="mcp-imp_u_b-x", once=True) == 2
     assert "not a session of yours" in capsys.readouterr().err
+
+
+async def test_state_lens_names_another_session_of_yours(tmp_path, monkeypatch):
+    """Owner 2026-10-26: see Webbee's running turn -- the conversation reaches the kernel (it used to be dropped)."""
+    from imperal_mcp.exoskeleton import ExoskeletonRuntime
+    from imperal_mcp.server import build_server
+    from tests.test_exoskeleton import MemoryFakeClient
+    seen = []
+    def lens(self, tool, args=None, root=None):
+        seen.append((tool, args))
+        return {"ok": True}
+    monkeypatch.setattr(ExoskeletonRuntime, "lens", lens)
+    srv = build_server(MemoryFakeClient(), workspace=str(tmp_path))
+    await srv.call_tool("state_lens", {"section": "path", "conversation": "marathon-imp_u_a-r8ff6-sac6b46"})
+    await srv.call_tool("state_lens", {"section": "all"})
+    assert seen[0] == ("state_lens", {"section": "path", "focus": "", "offset": 0,
+                                      "conversation": "marathon-imp_u_a-r8ff6-sac6b46"})
+    assert "conversation" not in seen[1][1]
