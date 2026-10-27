@@ -325,6 +325,11 @@ THE LOOP (every task):
    nothing); an answer shows in your frame as an AGENT MESSAGE. The frame's pointers `state_lens` and `vault_log_read` open what it counted or offloaded. Keep
    what lasts with `remember_fact` and `save_repo_note`.
 6. Never state a code name, file or size you did not read in this task: the kernel checks every step and the final.
+7. Your thought for each step -- the same lines as Webbee's marathon: after a result its first line is
+   `learned: <what the previous result showed -- one sentence, a fact>`, one line `expect: <exit 0 | exit nonzero |
+   "text" the output shows | reach: files a change affects>` (the kernel tells you MATCH or MISMATCH), and when your
+   next step needs something you do not see, one line `need: <it, in plain words -- a symbol of a file, the deploy's
+   last errors, what the user said about X>` (the next frame answers it). Never secrets or raw file contents in them.
 
 APPS: `list_apps`, `get_app`, `run_read_tool`, `run_write_tool` (money tools need panel approval), `upload_file`;
 build one with `validate_ir` → `smoke_ir` → `deploy_ir`.

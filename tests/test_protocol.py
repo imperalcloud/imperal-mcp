@@ -25,3 +25,10 @@ def test_the_protocol_is_for_any_shell_and_puts_the_frame_first():
     from imperal_mcp.exoskeleton import EXOSKELETON_INSTRUCTIONS as P
     assert "Claude Code" not in P and "any shell" in P
     assert P.index("`frame`") < P.index("`orient") and "blocked_on" in P and "first" in P.lower()
+
+
+def test_the_step_lines_are_the_marathons_own():
+    """frame-by-need goal 6: one mechanism on every surface -- learned: / expect: / need: as Webbee's marathon has."""
+    from imperal_mcp.exoskeleton import EXOSKELETON_INSTRUCTIONS
+    for label in ("`learned:", "`expect:", "`need:"):
+        assert label in EXOSKELETON_INSTRUCTIONS

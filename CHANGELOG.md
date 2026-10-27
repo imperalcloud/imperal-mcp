@@ -7,6 +7,13 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.8.11 — 2026-10-27
+
+### Added
+- The instructions carry the step lines Webbee's marathon has: `learned:` / `expect:` / `need:` in each step's thought
+  (frame-by-need goal 6 -- one mechanism on every surface): the kernel keeps `learned:` on its object, checks
+  `expect:` (MATCH / MISMATCH) and answers `need:` in the next frame.
+
 ## 0.8.10 — 2026-10-26
 
 ### Added
