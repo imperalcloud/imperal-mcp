@@ -474,3 +474,22 @@ def test_a_subagent_hand_back_is_an_observation_never_a_user_request(spool):
     items, memory = H.Spool("s1").drain()
     assert out is None and gw.calls == [] and memory == []
     assert items[0]["tool"] == "agent_report" and "ledger_fold" in items[0]["text"]
+
+
+def test_a_name_not_in_the_code_is_named_never_held(spool):
+    """10-28: the kernel names the answer's names that the code map does not find in the work's repos."""
+    class _Unfound(_Gateway):
+        def final(self, body):
+            self._go("final", body)
+            return {"hold": False, "open": [], "unfound": ["admin_only", "allowed_roles"]}
+    out = H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "done"},
+                     gateway=_Unfound(hold=False))
+    assert out == {"systemMessage": "Imperal: not in the code -- `admin_only`, `allowed_roles`"}
+
+    class _Both(_Gateway):
+        def final(self, body):
+            self._go("final", body)
+            return {"hold": False, "open": ["b"], "unfound": ["x_y"]}
+    out = H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "done"},
+                     gateway=_Both(hold=False))
+    assert out == {"systemMessage": "Imperal: still open -- b · not in the code -- `x_y`"}

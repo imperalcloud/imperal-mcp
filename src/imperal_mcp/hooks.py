@@ -588,8 +588,12 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
         if (got or {}).get("hold") and str(got.get("reason") or "").strip():
             return block_output(payload, str(got["reason"]))
         opened = [str(x) for x in (got or {}).get("open") or [] if str(x).strip()]
-        if opened and _shell(payload) in ("claude", "gemini"):   # past the holds: what is open is named (I6)
-            return {"systemMessage": "Imperal: still open -- " + "; ".join(o[:160] for o in opened[:8])}
+        # 2026-10-28: a name the answer gives that the code map does not find in the work's repos -- named, never held
+        unfound = [str(x) for x in (got or {}).get("unfound") or [] if str(x).strip()]
+        said = (["still open -- " + "; ".join(o[:160] for o in opened[:8])] if opened else []) + \
+            (["not in the code -- " + ", ".join(f"`{n[:80]}`" for n in unfound[:6])] if unfound else [])
+        if said and _shell(payload) in ("claude", "gemini"):   # past the holds: what is open is named (I6)
+            return {"systemMessage": "Imperal: " + " · ".join(said)}
         return None
     return None
 
