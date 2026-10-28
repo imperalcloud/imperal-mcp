@@ -156,3 +156,36 @@ def test_a_final_names_its_step(spool, tmp_path, monkeypatch):
     H.run_hook("stop", {"session_id": "s5", "cwd": str(tmp_path), "hook_event_name": "Stop",
                         "last_assistant_message": "Done."}, gateway=gw)
     assert gw.calls[0]["step"] == 7
+
+
+def test_a_message_to_another_session_first_writes_the_reads_of_this_turn(tmp_path: Path):
+    """10-28: a message naming two files read a step before was held "this task never read it" -- the reads were still
+    in the spool; the kernel now gets them first (the stop hook's record), the message after."""
+    from tests.test_exoskeleton import _Cloud
+    cloud = _Cloud({"/v1/auth/me": {"imperal_id": "imp_u_ME"},
+                    "/v1/memory/frame/record": {"ok": True}, "/v1/memory/frame/lens": {"ok": True}})
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+    exo.record_call("read_symbol", {"path": "src/x/extension.py", "name": "L380-395"}, True, "def tool(...)")
+    exo.lens("message_session", {"conversation": "marathon-imp_u_ME-rab-s1", "text": "extension.py:384 ..."})
+    paths = [c[1] for c in cloud.calls if c[1].startswith("/v1/memory/frame/")]
+    assert paths == ["/v1/memory/frame/record", "/v1/memory/frame/lens"]
+    rec = [c[3] for c in cloud.calls if c[1] == "/v1/memory/frame/record"][0]
+    assert [i["tool"] for i in rec["exchange"]] == ["read_symbol"] and rec["session_id"].startswith("mcp-imp_u_ME")
+    exo.lens("recall", {"ref": "A1"})                                     # an unchecked lens writes nothing
+    assert [c[1] for c in cloud.calls].count("/v1/memory/frame/record") == 1
+
+
+def test_a_failed_write_keeps_the_calls_for_the_next_frame(tmp_path: Path):
+    from tests.test_exoskeleton import _Cloud
+
+    class _Flaky(_Cloud):
+        async def _request(self, method, path, *, json=None, params=None, timeout=60):
+            if path == "/v1/memory/frame/record":
+                self.calls.append((method, path, params, json))
+                raise RuntimeError("gateway down")
+            return await super()._request(method, path, json=json, params=params, timeout=timeout)
+    cloud = _Flaky({"/v1/auth/me": {"imperal_id": "imp_u_ME"}, "/v1/memory/frame/lens": {"ok": True}})
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+    exo.record_call("grep_code", {"pattern": "x"}, True, "hit")
+    out = exo.lens("message_session", {"conversation": "c", "text": "t"})
+    assert out == {"ok": True} and [i["tool"] for i in exo._exchange] == ["grep_code"]   # sent, and nothing lost

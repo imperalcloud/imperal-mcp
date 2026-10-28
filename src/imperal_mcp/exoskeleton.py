@@ -735,13 +735,52 @@ class ExoskeletonRuntime:
             self._own_repo = session_repo(ws)
         return self._own_repo
 
+    # the lens tools whose answer the kernel checks against what this session saw (the truth door)
+    _CHECKED_LENS = frozenset({"message_session"})
+
+    def _flush_calls(self, ws: str) -> None:
+        """This turn's calls so far -- the shell's spooled ones and this server's own -- written to the kernel now, as
+        the stop hook writes them before a final (2026-10-28: a message naming two files read a step before was held
+        "this task never read it": the reads still sat in the spool). Nothing is lost: a failed write puts them back."""
+        from .hooks import _bounded_items
+        spool = self._shell_spool(ws)
+        hooked, memory = spool.drain() if spool is not None else ([], [])
+        own, self._exchange = self._exchange, []
+        allq = hooked + own
+        pending = _bounded_items(allq)
+        late = allq[:len(allq) - len(pending)]
+        if not (pending or memory):
+            return
+        st = spool.state() if spool is not None else {}
+        body = {"session_id": self._session(ws), "step": int(st.get("step") or self._frame_step), "exchange": pending,
+                "memory": memory[-20:], "repo_key": str(st.get("repo_key") or ""),
+                "session_repo": self._session_repo(ws)}
+        try:
+            self._vault("POST", "/v1/memory/frame/record", body=body)
+        except Exception:
+            if spool is not None:
+                spool.restore(hooked, memory)
+            self._exchange = (own + self._exchange)[-_EXCHANGE_MAX:]
+            return
+        if late:
+            if spool is not None:
+                spool.restore(late, [])
+            else:
+                self._exchange = (late + self._exchange)[-_EXCHANGE_MAX:]
+
     def lens(self, tool: str, args: dict | None = None, root: str | None = None) -> dict[str, Any]:
         """A pointer the frame gave (state_lens / recall / vault_log_read) or a search of past conversations
-        (search_history), answered by the kernel for this session."""
+        (search_history), answered by the kernel for this session. A checked one (``message_session``) first writes
+        this turn's calls, so the check sees what was read."""
         try:
             if self._client is None:
                 raise RuntimeError("no Imperal client")
             ws = self.resolve_workspace(root)
+            if str(tool) in self._CHECKED_LENS:
+                try:
+                    self._flush_calls(ws)
+                except Exception:      # the message still goes: the kernel checks what it holds
+                    pass
             body = {"session_id": self._session(ws), "tool": str(tool), "args": dict(args or {}),
                     "session_repo": self._session_repo(ws)}
             return self._vault("POST", "/v1/memory/frame/lens", body=body) or {}
