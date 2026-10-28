@@ -1,6 +1,6 @@
 [project]
 name = "imperal-mcp"
-version = "0.8.11"
+version = "0.8.12"
 readme = "README.md"
 description = "The exoskeleton for your AI coding agent: memory across sessions, a live code map, undo for every change and a hallucination check. MCP server for Claude Code, Cursor, Codex, Gemini CLI."
 requires-python = ">=3.7"

@@ -7,6 +7,16 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.8.12 — 2026-10-28
+
+### Fixed
+- `message_session` first writes this turn's calls to the kernel (as the stop hook does before a final): the truth
+  door no longer holds a message that names files the turn has just read (their reads still sat in the spool).
+
+### Added
+- The stop hook names the answer's names that the code map does not find in the work's repos
+  (`Imperal: not in the code -- ...`) -- shown, never a hold. Needs kernel 26dee3f1.
+
 ## 0.8.11 — 2026-10-27
 
 ### Added
