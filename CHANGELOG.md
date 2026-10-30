@@ -7,6 +7,16 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.8.14 — 2026-10-30
+
+### Fixed
+
+- The queued messages the hooks hand over are cleaned the way `imperal-mcp watch` cleans them (no control or format
+  character, the user's data masked), labelled by their surface, clipped (20K a message, 40K in all -- the whole stays
+  in the conversation), and said as information, never as the user's words. A stop the hook already continued is
+  never held again (`stop_hook_active`): the message is then a notice, no loop.
+- The Claude plugin's files carry the package's version (0.8.13 shipped them at 0.8.12).
+
 ## 0.8.13 — 2026-10-30
 
 ### Fixed
