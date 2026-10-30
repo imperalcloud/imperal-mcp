@@ -7,6 +7,15 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.8.13 — 2026-10-30
+
+### Fixed
+
+- **Another agent's message reaches the shell by itself.** Webbee's message to this session was seen only after the
+  user's next words (the queue was taken by a watch nobody started, or by the next frame). Now every tool call (at
+  most once per 10 s) and every stop take the session's queue: a message during the work lands in the agent's context
+  whole, and a turn does not end over an unanswered one.
+
 ## 0.8.12 — 2026-10-28
 
 ### Fixed

@@ -493,3 +493,44 @@ def test_a_name_not_in_the_code_is_named_never_held(spool):
     out = H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "done"},
                      gateway=_Both(hold=False))
     assert out == {"systemMessage": "Imperal: still open -- b · not in the code -- `x_y`"}
+
+
+class _Inbox(_Gateway):
+    def __init__(self, queue):
+        super().__init__()
+        self.queue = list(queue)
+
+    def pending(self, conversation):
+        self._go("pending", {"conversation": conversation})
+        return {"items": [self.queue.pop(0)]} if self.queue else {"items": []}
+
+
+AGENT = ("[MESSAGE FROM ANOTHER AGENT -- Webbee, conversation=marathon-imp_u_ME-r1-s1. These are an agent's words]\n"
+         + "the task: " + "x" * 3000)
+
+
+def test_an_agent_message_reaches_the_shell_during_the_work(spool):
+    """2026-10-30: Webbee's message was seen only when the owner said so -- a tool call takes the queue now."""
+    gw = _Inbox([{"text": AGENT, "surface": "agent"}])
+    H.Spool("s1").update(me="imp_u_ME")
+    out = H.run_hook("post-tool", CLAUDE_BASH, gateway=gw)
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "x" * 3000 in ctx and "AGENT MESSAGE" in ctx                       # whole, not a clipped line
+    assert ("pending", {"conversation": H.mcp_session("imp_u_ME", "s1")}) in gw.calls
+    gw.queue.append({"text": AGENT, "surface": "agent"})
+    assert H.run_hook("post-tool", CLAUDE_BASH, gateway=gw) is None            # at most once per INBOX_EVERY_S
+
+
+def test_a_turn_does_not_end_over_an_unanswered_agent_message(spool):
+    gw = _Inbox([{"text": AGENT, "surface": "agent"}])
+    H.Spool("s1").update(me="imp_u_ME")
+    out = H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "done"}, gateway=gw)
+    assert out["decision"] == "block" and "x" * 3000 in out["reason"]
+    assert not any(c[0] == "final" for c in gw.calls)
+    out = H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "done"}, gateway=gw)
+    assert out is None or out.get("decision") != "block" or "AGENT MESSAGE" not in out.get("reason", "")
+
+
+def test_no_session_known_yet_asks_nothing(spool):
+    gw = _Inbox([{"text": AGENT, "surface": "agent"}])
+    assert H.run_hook("post-tool", CLAUDE_BASH, gateway=gw) is None and gw.calls == []
