@@ -1083,3 +1083,24 @@ def test_a_long_running_index_catches_up_with_files_written_since(sample_workspa
     (sample_workspace / "pkg" / "late.py").write_text("def late():\n    pass\n")
     exo._get_indexer()
     assert not any("late.py" in p for p in svc.index.files)
+
+
+def test_a_file_that_becomes_gitignored_leaves_the_index_unread(sample_workspace: Path, monkeypatch):
+    """security review 2026-11-03: a file gone from the listing but still on disk (just added to .gitignore, maybe
+    holding keys) must not be read again -- apply_changes would read it and send it to the vault."""
+    exo = ExoskeletonRuntime(workspace=str(sample_workspace))
+    _, svc, _ = exo._get_indexer()
+    secret = sample_workspace / "pkg" / "local_keys.py"
+    secret.write_text("API_KEY = 'x'\n")
+    exo._refreshed_at.clear()
+    exo._get_indexer()
+    assert any("local_keys.py" in p for p in svc.index.files)
+
+    (sample_workspace / ".gitignore").write_text("pkg/local_keys.py\n")
+    read = []
+    real = svc.apply_changes
+    monkeypatch.setattr(svc, "apply_changes", lambda rels: (read.extend(rels), real(rels))[1])
+    exo._refreshed_at.clear()
+    exo._get_indexer()
+    assert not any("local_keys.py" in p for p in svc.index.files)
+    assert not any("local_keys.py" in r for r in read)                       # out of the index, never re-read

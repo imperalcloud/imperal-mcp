@@ -942,10 +942,26 @@ class ExoskeletonRuntime:
             known = dict(getattr(svc, "_stats", None) or {})
             changed = [rel for rel, st in now_stats.items() if known.get(rel) != st]
             gone = [rel for rel in known if rel not in now_stats]
-            if changed or gone:
-                svc.apply_changes(changed + gone)
+            deleted = [rel for rel in gone if not os.path.lexists(os.path.join(ws, rel))]
+            # a file that left the listing but is still on disk (now .gitignore'd, now named like a secret) is never
+            # read again: it leaves the index here unread -- apply_changes would read it and send it to the vault
+            unlisted = [rel for rel in gone if rel not in set(deleted)]
+            if unlisted:
+                self._evict_unread(svc, unlisted)
+            if changed or deleted:
+                svc.apply_changes(changed + deleted)
         except Exception as exc:          # a refresh that fails leaves the index as it was -- and says why once
             self._last_miss = f"the local index could not check its files: {type(exc).__name__}: {str(exc)[:200]}"
+
+    @staticmethod
+    def _evict_unread(svc: Any, rels: list) -> None:
+        """Files out of the index without a read (the index's own lock and graph rebuild, as apply_changes does)."""
+        from webbee.intel.graph import CodeGraph
+        with svc._lock:
+            for rel in rels:
+                svc.index.files.pop(rel, None)
+                svc._stats.pop(rel, None)
+            svc.graph = CodeGraph(svc.index)
 
     def _get_shadow(self, root: str | None = None) -> tuple[str, Any]:
         _ensure_webbee_importable()
