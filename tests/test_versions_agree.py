@@ -32,7 +32,8 @@ def test_claude_plugin_files_match_pyproject():
 
 
 def test_the_pins_carry_what_the_frame_needs():
-    """Final review I6: SECRET_PATTERNS is in imperal-sdk 6.2.0+, the snapshot's changed paths in webbee 0.5.9+."""
+    """Final review I6: SECRET_PATTERNS is in imperal-sdk 6.2.0+, the snapshot's changed paths in webbee 0.5.9+;
+    2026-11-04: the string-aware tsconfig reader and the parallel SFTP sync are in imperal-sdk 6.3.8+."""
     from pathlib import Path
     text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
-    assert "imperal-sdk>=6.2.0" in text and "webbee>=0.5.11" in text
+    assert "imperal-sdk>=6.3.8" in text and "webbee>=0.5.11" in text

@@ -7,6 +7,18 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.8.15 — 2026-11-04
+
+### Fixed
+
+- The local index catches up with the files before it answers: a stat listing (no read) at most once per 5 s, only
+  changed files parsed. A server running for hours had answered `search_code` from its first snapshot -- files written
+  since were missing and config files ranked first.
+- A file that leaves the listing but stays on disk (just added to `.gitignore`, maybe holding keys) leaves the index
+  without being read again; before, it could be re-read and sent to the vault.
+- Needs `imperal-sdk` 6.3.8: a Next.js `tsconfig`'s `@/` paths survive (the vault graph links every `@/` import again)
+  and a server repo syncs 7-20x faster (SFTP requests in parallel).
+
 ## 0.8.14 — 2026-10-30
 
 ### Fixed

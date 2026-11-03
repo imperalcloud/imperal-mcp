@@ -1,6 +1,6 @@
 [project]
 name = "imperal-mcp"
-version = "0.8.14"
+version = "0.8.15"
 readme = "README.md"
 description = "The exoskeleton for your AI coding agent: memory across sessions, a live code map, undo for every change and a hallucination check. MCP server for Claude Code, Cursor, Codex, Gemini CLI."
 requires-python = ">=3.7"
@@ -28,7 +28,7 @@ classifiers = [
 # 3.12 it sets up once with uv -- `uv` comes as a wheel on 3.8+, 3.7 downloads uv's release build.
 dependencies = [
     'mcp>=1.2.0,<2; python_version >= "3.10"',
-    'imperal-sdk>=6.2.0; python_version >= "3.10"',
+    'imperal-sdk>=6.3.8; python_version >= "3.10"',
     'httpx>=0.27; python_version >= "3.10"',
     'uv>=0.4; python_version >= "3.8" and python_version < "3.10"',
 ]
