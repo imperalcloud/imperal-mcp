@@ -1056,3 +1056,30 @@ def test_the_only_copy_of_a_path_answers_for_a_host_named_otherwise(tmp_path: Pa
     monkeypatch.setattr(wt, "remote_head", _head(why="nope: OSError: Name or service not known"))
     exo2 = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud({"/v1/memory/code/repos": cat}))
     assert exo2._repo_key("/opt/imperal-auth-gateway", "host:nope") == ""
+
+
+def test_a_long_running_index_catches_up_with_files_written_since(sample_workspace: Path):
+    """live 2026-11-03: a server running for hours answered search_code from its first snapshot -- a file written
+    since was missing and config files ranked first. Before it answers, the index checks the files (stat only)."""
+    import time as _time
+
+    exo = ExoskeletonRuntime(workspace=str(sample_workspace))
+    _, svc, _ = exo._get_indexer()
+    svc.vectors = None
+    assert not any("ledger.py" in p for p in svc.index.files)
+
+    (sample_workspace / "pkg" / "ledger.py").write_text("def settle_invoice(amount):\n    return amount\n")
+    exo._refreshed_at.clear()                       # the refresh window has passed
+    srch = exo.search_code("settle_invoice")
+    assert any("ledger.py" in (m.get("path") or m.get("file") or "") for m in srch.get("matches", []))
+
+    (sample_workspace / "pkg" / "ledger.py").unlink()
+    exo._refreshed_at.clear()
+    exo._get_indexer()
+    assert not any("ledger.py" in p for p in svc.index.files)
+
+    # inside the window no listing is taken: a burst of questions costs one stat pass
+    exo._refreshed_at[str(sample_workspace)] = _time.monotonic()
+    (sample_workspace / "pkg" / "late.py").write_text("def late():\n    pass\n")
+    exo._get_indexer()
+    assert not any("late.py" in p for p in svc.index.files)

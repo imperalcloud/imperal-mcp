@@ -60,6 +60,7 @@ class TokenSavingsTracker:
 
 COARSE = "vault graph unavailable: links by name"
 _SYNC_REUSE_S = 3.0      # one tool call's questions share one sync of the workspace
+_LOCAL_REFRESH_S = 5.0   # the local index checks the files (stat only) at most this often before it answers
 _PROFILE_KEYS = ("repo_key", "file_count", "def_count", "languages", "top_symbols")
 
 
@@ -606,6 +607,7 @@ class ExoskeletonRuntime:
         self._synced_at: dict[str, float] = {}
         self.tracker = TokenSavingsTracker()
         self._indexers: dict[str, Any] = {}
+        self._refreshed_at: dict[str, float] = {}
         self._index_locks: dict[str, threading.Lock] = {}
         self._embed_threads: dict[str, threading.Thread] = {}
         self._shadows: dict[str, Any] = {}
@@ -917,9 +919,33 @@ class ExoskeletonRuntime:
                 self._indexers[ws] = svc
             elif not getattr(svc, "ready", False):
                 self._build_fast_index(svc)
+            else:
+                self._refresh_if_due(ws, svc)
             if self._client is not None and getattr(svc, "vault_client_factory", None) is None:
                 svc.vault_client_factory = lambda: self._client     # synced on demand (sync_now), not in the background
         return ws, svc, svc.index
+
+    def _refresh_if_due(self, ws: str, svc: Any) -> None:
+        """The local index catches up with the files before it answers (live 2026-11-03: a server running for hours
+        answered search_code from its first snapshot -- files written since were missing and config files ranked
+        first). A stat listing, no read, at most once per ``_LOCAL_REFRESH_S``; only changed files are parsed (the
+        index's own ``apply_changes``, which also sends them to the vault)."""
+        now = time.monotonic()
+        if now - self._refreshed_at.get(ws, 0.0) < _LOCAL_REFRESH_S:
+            return
+        self._refreshed_at[ws] = now
+        try:
+            from webbee.intel import service as intel_service
+            files, _capped = intel_service._code_files(ws)
+            rels = [f.replace(os.sep, "/") for f in files]
+            now_stats = intel_service._stats_of(ws, rels)
+            known = dict(getattr(svc, "_stats", None) or {})
+            changed = [rel for rel, st in now_stats.items() if known.get(rel) != st]
+            gone = [rel for rel in known if rel not in now_stats]
+            if changed or gone:
+                svc.apply_changes(changed + gone)
+        except Exception as exc:          # a refresh that fails leaves the index as it was -- and says why once
+            self._last_miss = f"the local index could not check its files: {type(exc).__name__}: {str(exc)[:200]}"
 
     def _get_shadow(self, root: str | None = None) -> tuple[str, Any]:
         _ensure_webbee_importable()
