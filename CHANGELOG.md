@@ -33,6 +33,14 @@ background is proven by the read of its log, WORLD takes the code map's commit, 
 - Needs `imperal-sdk` 6.4.0 and, for the code map, `webbee` 0.7.0 (the `code` extra pulls both in with the
   `universal-index` readers).
 
+### Changed
+
+- **The vault holds the code index, never the code** (owner 2026-11-04). On a server (`target="host:<alias>"`),
+  `read_symbol` takes WHERE a definition is from the code map and its lines from the server itself; `grep_code` runs
+  there (`git grep`). `outline` shows each definition's description. A panel connection (`ssh:`) answers where a
+  definition is, with its signature and description - Webbee's tools read it there.
+- README and PRIVACY name the code index among what reaches your private space, and that a file's text never does.
+
 ### Fixed
 
 - Units see new, changed and deleted files: each built unit is refreshed before it answers (a repository through git

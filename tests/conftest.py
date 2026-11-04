@@ -56,3 +56,16 @@ def _private_index_cache(tmp_path_factory, monkeypatch):
     """The local index caches every unit (a folder without git too, since 0.9.0) under ``~/.cache/webbee`` -- a
     test's caches go to its own home (outside the test's workspace), never the real one."""
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home-auto")))
+
+
+@pytest.fixture(autouse=True)
+def _never_a_real_server(monkeypatch):
+    """A test never reaches a real server over ssh (2026-11-04: a host test ran git grep on whm-jump)."""
+    try:
+        import webbee.tools as wt
+    except Exception:
+        return
+
+    async def refuse(host, argv, timeout=0, cap=0):
+        return -1, b"", f"tests never reach a server ({host})"
+    monkeypatch.setattr(wt, "remote_run", refuse, raising=False)

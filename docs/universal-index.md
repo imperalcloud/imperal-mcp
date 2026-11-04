@@ -59,10 +59,17 @@ file is still read by lines: `read_symbol(path, "L<a>-<b>")` streams them.
 
 ## What leaves your machine
 
-Only code and resolution configs reach your code map in the vault, as before. Documents, sheets, slides, mail and
-image metadata stay in the local index on your machine. The next step keeps the index of every folder in your vault -
-its tree, each file's size, time, checksum, kind and headings, what appeared, changed or went and when - never the
-files' contents.
+Your code map in the vault is an **index, never the code**. For each code file it holds: every definition's name,
+signature, line range and description (its docstring or the comment above it), imports, calls and links, routes, the
+file's identifiers (so "is this name in the code" is answered without the code), its line count and line hashes (so a
+quoted line can be checked), and vectors computed on your machine. A config is sent as its resolution keys
+(`baseUrl`, `paths`, package name and entry). A file's text and a function's body never leave the machine: `read_symbol`
+reads them where the file lives - your machine, or a server through your own ssh (`target="host:<alias>"`), and
+`grep_code` on a server searches there.
+
+Documents, sheets, slides, mail and image metadata stay in the local index on your machine. The next step keeps the
+index of every folder in your vault - its tree, each file's size, time, checksum, kind and headings, what appeared,
+changed or went and when - never the files' contents.
 
 What your agent reads with a tool - a section of a contract through `read_symbol`, like a file through `cat` - is a
 step of the session, and the shell's hooks record steps in your private space (masked for secrets and personal data

@@ -1864,34 +1864,28 @@ class ExoskeletonRuntime:
     def grep_code(self, pattern: str, root: str | None = None, target: str | None = None, path_glob: str | None = None,
                   k: int = 50, regex: bool = False) -> dict[str, Any]:
         """An exact text (or a regex) inside the code -- what the symbol search does not index (a string inside a
-        function body). A server's repo: the vault's synced text; a local repo: its indexable files (never a secret,
-        never a dependency tree)."""
+        function body). A server's repo: searched on the server itself (the vault holds the index, never the code); a
+        local repo: its indexable files (never a secret, never a dependency tree)."""
         k = max(1, min(int(k or 50), 500))
         if regex and _NESTED_QUANTIFIER.search(str(pattern or "")):
             return {"status": "error", "error": "a nested quantifier (a repeated group around a repeated piece) can "
                                                 "run without end -- use a literal or a simpler pattern"}
         if target and target != "local":
-            words = [str(pattern or "")]
-            if regex:
-                # the vault is shared: literal only (a backtracking pattern cannot be told by its text) -- an
-                # alternation of plain texts ("def a|def b") is several exact searches, merged
-                words = str(pattern or "").split("|")
-                if any(w == "" or re.search(r"[.^$*+?{}\[\]\\()]", w) for w in words):
-                    return {"status": "error", "error": "a server's repo is searched by exact texts only -- pass "
-                                                        "the literal text, or literal texts joined by | with regex=true"}
-            matches, total, truncated, ans = [], 0, False, None
-            for w in words[:8]:
-                params = {"q": w, "k": k}
-                if path_glob:
-                    params["path_glob"] = path_glob
-                ans = self._ask("GET", "/v1/memory/code/grep", root, target, params=params)
-                if ans is None:
-                    return self._remote_unavailable(target, root)
-                matches += [m for m in ans.get("items") or [] if m not in matches]
-                total += int(ans.get("total") or 0)
-                truncated = truncated or bool(ans.get("truncated"))
-            out = {"status": "ok", "workspace": root, "pattern": pattern, "matches": matches[:k], "total": total,
-                   "truncated": truncated or len(matches) > k, **self._vault_meta(ans or {})}
+            # the code is searched where it lives: the vault holds its index, never its text (owner 2026-11-04)
+            if not target.startswith("host:") or not root:
+                return {"status": "error", "error": "an exact text is searched on the machine itself: pass "
+                                                    "target=host:<alias> and root=<the repo there> (a panel "
+                                                    "connection's files are searched by Webbee's tools there)"}
+            _ensure_webbee_importable()
+            from webbee import tools as wt
+            import asyncio
+            got = _off_thread(lambda: asyncio.run(wt.remote_grep(target[5:], str(root), str(pattern or ""), k,
+                                                                 path_glob or "", bool(regex)))) or {}
+            if got.get("why"):
+                return {"status": "error", "workspace": root, "error": str(got["why"])}
+            out = {"status": "ok", "workspace": root, "pattern": pattern, "matches": got.get("matches") or [],
+                   "total": int(got.get("total") or 0), "truncated": bool(got.get("truncated")),
+                   "source": f"{target} (searched there)"}
             return self._grep_out(out, pattern, regex)
         import fnmatch
         ws = self.resolve_workspace(root)
@@ -1950,35 +1944,51 @@ class ExoskeletonRuntime:
             return self._remote_unavailable(target, root)
         nodes = list((ans.get("data") or {}).get("items") or ans.get("nodes") or [])
         rendered = f"OUTLINE of {path} (from the code graph):\n" + "\n".join(
-            f"{n.get('start')}-{n.get('end')} {n.get('kind')} {n.get('name')}" for n in nodes if isinstance(n, dict))
+            f"{n.get('start')}-{n.get('end')} {n.get('kind')} {n.get('name')}"
+            + (f" -- {n['doc']}" if n.get("doc") else "") for n in nodes if isinstance(n, dict))
         return {"status": "ok", "workspace": root, "path": path, "symbol_count": len(nodes), "symbols": nodes,
                 "rendered": rendered, **self._vault_meta(ans)}
 
     def _remote_read_symbol(self, path: str, name: str, root: str | None, target: str) -> dict[str, Any]:
+        """A server file's definition or line range: WHERE from the code map (it holds the index, never the code --
+        owner 2026-11-04), the LINES from the machine itself (``host:``, the user's own ssh). A panel connection
+        (``ssh:``) only Webbee's tools reach: its answer is where the definition is, its signature and description."""
         m = re.fullmatch(r"L?(\d+)-(\d+)", str(name or ""))
-        if m:                                 # a line range: from the synced file's text (phase C)
+        where: dict = {}
+        if m:
             lo, hi = int(m.group(1)), int(m.group(2))
-            ans = self._ask("GET", "/v1/memory/code/file", root, target, params={"path": path, "max_chars": 2_000_000})
-            if ans is None:
-                return self._remote_unavailable(target, root)
-            lines = str(ans.get("text") or "").splitlines()
-            hi = min(hi, len(lines))
-            body = "\n".join(lines[lo - 1:hi])
-            return {"status": "ok", "workspace": root, "path": ans.get("path") or path, "symbol": name,
+        else:
+            ans = self._ask("POST", "/v1/memory/code/slice", root, target, body={"symbols": [f"{path}::{name}"],
+                                                                                 "depth": 1})
+            items = [i for i in ((ans or {}).get("data") or {}).get("items") or [] if isinstance(i, dict)]
+            if not items:
+                return self._remote_unavailable(target, root) if ans is None else {
+                    "status": "error", "path": path, "symbol": name, "error": f"{name} is not in the code graph of {path}"}
+            where = items[0]
+            path = str(where.get("path") or path)
+            lo, hi = int(where.get("start_line") or 1), int(where.get("end_line") or 1)
+        head = (f"{where.get('signature') or ''}\n{where.get('doc') or ''}".strip() + "\n") if where else ""
+        if not target.startswith("host:") or not root:
+            return {"status": "ok", "workspace": root, "path": path, "symbol": where.get("qualname") or name,
                     "start_line": lo, "end_line": hi,
-                    "rendered": f"[{ans.get('path') or path} lines {lo}-{hi} of {ans.get('total_lines')}, from the synced "
-                                f"file]\n{body}", **self._vault_meta(ans)}
-        ans = self._ask("POST", "/v1/memory/code/slice", root, target, body={"symbols": [f"{path}::{name}"], "depth": 1})
-        items = [i for i in ((ans or {}).get("data") or {}).get("items") or [] if isinstance(i, dict) and i.get("text")]
-        if not items:
-            return self._remote_unavailable(target, root) if ans is None else {
-                "status": "error", "path": path, "symbol": name, "error": f"{name} is not in the code graph of {path}"}
-        it = items[0]
-        rendered = (f"[{it.get('path')} lines {it.get('start_line')}-{it.get('end_line')}, from the code graph]\n"
-                    f"{it.get('text')}")
-        return {"status": "ok", "workspace": root, "path": it.get("path"), "symbol": it.get("qualname") or name,
-                "start_line": it.get("start_line"), "end_line": it.get("end_line"), "rendered": rendered,
-                **self._vault_meta(ans)}
+                    "rendered": f"[{path} lines {lo}-{hi}, from the code map: where it is, not its text]\n{head}"
+                                f"(read these lines with Webbee's tools on {target})"}
+        _ensure_webbee_importable()
+        from webbee import tools as wt
+        import asyncio
+        got = _off_thread(lambda: asyncio.run(wt.remote_read(target[5:], str(root), path))) or {}
+        if got.get("why"):
+            return {"status": "error", "workspace": root, "path": path, "symbol": name, "error": str(got["why"])}
+        lines = str(got.get("text") or "").split("\n")
+        hi = min(hi, len(lines))
+        if lo > hi:
+            return {"status": "error", "workspace": root, "path": path, "symbol": name,
+                    "error": f"lines {lo}-{hi}: past the end of {path} ({len(lines)} lines)"}
+        rendered = f"[{path} lines {lo}-{hi} of {len(lines)}, read on {target}]\n" + "\n".join(lines[lo - 1:hi])
+        self.tracker.record("read_symbol", returned_chars=len(rendered), baseline_chars=len(got.get("text") or ""),
+                            returned_lines=hi - lo + 2, baseline_lines=len(lines), baseline_files=1)
+        return {"status": "ok", "workspace": root, "path": path, "symbol": where.get("qualname") or name,
+                "start_line": lo, "end_line": hi, "rendered": rendered, "source": f"{target} (read there)"}
 
     def outline(self, path: str, root: str | None = None, target: str | None = None) -> dict[str, Any]:
         if target and target != "local":

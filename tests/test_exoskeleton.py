@@ -772,23 +772,32 @@ def test_frame_takes_the_repo_of_its_target(tmp_path: Path, monkeypatch):
 
 
 def test_outline_and_read_symbol_of_a_host_target_read_the_graph(tmp_path: Path, monkeypatch):
+    """Owner 2026-11-04: the code map says WHERE a definition is (it holds the index, never the code); its lines are
+    read on the server itself."""
     import webbee.tools as wt
 
     async def fake_remote_sync(client, host, root, paths):
         return {"repo_key": "rk_remote"}
+
+    async def fake_remote_read(host, root, rel, cap=0):
+        assert (host, root, rel) == ("whm-jump", "/home/ipw-repo", "a.py")
+        return {"text": "\n\ndef run():\n    return 1\n", "why": ""}
     monkeypatch.setattr(wt, "remote_sync", fake_remote_sync)
+    monkeypatch.setattr(wt, "remote_read", fake_remote_read)
     cloud = _Cloud({"/v1/memory/code/outline": {"ok": True, "data": {"items": [
-                        {"name": "run", "kind": "function", "start": 3, "end": 9, "depth": 0}]}, "synced_at": 1.0},
+                        {"name": "run", "kind": "function", "start": 3, "end": 4, "depth": 0, "doc": "Runs it."}]},
+                        "synced_at": 1.0},
                     "/v1/memory/code/slice": {"ok": True, "data": {"items": [
-                        {"path": "a.py", "qualname": "run", "start_line": 3, "end_line": 9,
-                         "text": "def run():\n    return 1\n"}]}, "synced_at": 1.0}})
+                        {"path": "a.py", "qualname": "run", "start_line": 3, "end_line": 4, "signature": "def run():",
+                         "doc": "Runs it."}]}, "synced_at": 1.0}})
     exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
     ol = exo.outline("a.py", root="/home/ipw-repo", target="host:whm-jump")
-    assert ol["symbols"][0]["name"] == "run" and ol["source"] == "vault graph"
+    assert ol["symbols"][0]["name"] == "run" and ol["source"] == "vault graph" and "Runs it." in ol["rendered"]
     rs = exo.read_symbol("a.py", "run", root="/home/ipw-repo", target="host:whm-jump")
-    assert "def run()" in rs["rendered"] and rs["start_line"] == 3 and rs["source"] == "vault graph"
+    assert "def run():\n    return 1" in rs["rendered"] and rs["start_line"] == 3 and "read there" in rs["source"]
     slice_call = [c for c in cloud.calls if c[1] == "/v1/memory/code/slice"][-1]
     assert slice_call[3]["symbols"] == ["a.py::run"]
+    assert not any(c[1] in ("/v1/memory/code/file", "/v1/memory/code/grep") for c in cloud.calls)
 
 
 def test_a_server_call_is_recorded_with_its_full_path(tmp_path: Path):
@@ -827,16 +836,19 @@ def test_impact_shows_users_by_name(sample_workspace: Path):
 # ── frame phase C Task 5: an exact text and a server's line range ──
 
 def test_grep_code_on_a_server_and_locally(tmp_path: Path, monkeypatch):
+    """A server's repo is searched ON the server (the vault holds no code text since 2026-11-04)."""
     import webbee.tools as wt
+    asked = []
 
-    async def fake_remote_sync(client, host, root, paths):
-        return {"repo_key": "rk_remote"}
-    monkeypatch.setattr(wt, "remote_sync", fake_remote_sync)
-    cloud = _Cloud({"/v1/memory/code/grep": {"ok": True, "items": [{"path": "core/n.py", "line": 3, "text": "x"}],
-                                             "total": 1, "truncated": False, "synced_at": 1.0}})
+    async def fake_remote_grep(host, root, pattern, k=50, path_glob="", regex=False):
+        asked.append((host, root, pattern, regex))
+        return {"matches": [{"path": "core/n.py", "line": 3, "text": "x"}], "total": 1, "truncated": False, "why": ""}
+    monkeypatch.setattr(wt, "remote_grep", fake_remote_grep)
+    cloud = _Cloud()
     exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
     out = exo.grep_code("UNEXPECTED EFFECT", root="/home/ipw-repo", target="host:whm-jump")
-    assert out["matches"] == [{"path": "core/n.py", "line": 3, "text": "x"}] and out["source"] == "vault graph"
+    assert out["matches"] == [{"path": "core/n.py", "line": 3, "text": "x"}] and "searched there" in out["source"]
+    assert asked == [("whm-jump", "/home/ipw-repo", "UNEXPECTED EFFECT", False)] and not cloud.calls
     repo = tmp_path / "r"
     (repo / ".git").mkdir(parents=True)
     (repo / "a.py").write_text("def f():\n    return f\"UNEXPECTED EFFECT: {1}\"\n")
@@ -847,15 +859,14 @@ def test_grep_code_on_a_server_and_locally(tmp_path: Path, monkeypatch):
     assert bad["status"] == "error" and "nested" in bad["error"]
 
 
-def test_a_server_line_range_is_read_from_the_file_text(tmp_path: Path, monkeypatch):
+def test_a_server_line_range_is_read_on_the_server(tmp_path: Path, monkeypatch):
     import webbee.tools as wt
-
-    async def fake_remote_sync(client, host, root, paths):
-        return {"repo_key": "rk_remote"}
-    monkeypatch.setattr(wt, "remote_sync", fake_remote_sync)
     text = "".join(f"line {i}\n" for i in range(1, 21))
-    cloud = _Cloud({"/v1/memory/code/file": {"ok": True, "path": "a.py", "total_lines": 20, "text": text}})
-    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+
+    async def fake_remote_read(host, root, rel, cap=0):
+        return {"text": text, "why": ""}
+    monkeypatch.setattr(wt, "remote_read", fake_remote_read)
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud())
     out = exo.read_symbol("a.py", "L5-7", root="/home/ipw-repo", target="host:whm-jump")
     assert out["status"] == "ok" and out["start_line"] == 5 and out["end_line"] == 7
     assert "line 5\nline 6\nline 7" in out["rendered"] and "line 8" not in out["rendered"]
@@ -873,10 +884,10 @@ def test_local_grep_never_follows_a_link_out_of_the_repo(tmp_path: Path):
     assert out["matches"] == []
 
 
-def test_a_server_grep_is_literal_only(tmp_path: Path):
-    out = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud()).grep_code("a.*b", root="/r", target="host:h",
-                                                                                 regex=True)
-    assert out["status"] == "error" and "exact text" in out["error"]
+def test_a_panel_connection_is_never_searched_from_here(tmp_path: Path):
+    """A panel connection's files only Webbee's tools reach; the vault holds no text to search."""
+    out = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud()).grep_code("x", root="/r", target="ssh:c9")
+    assert out["status"] == "error" and "host:" in out["error"]
 
 
 # ── 2026-10-25 MCP audit: a server's copy is checked against its HEAD; an unknown host or a missing folder says so ──
@@ -966,17 +977,17 @@ def test_a_folder_inside_a_repository_narrows_the_search(tmp_path: Path):
     assert [m["path"] for m in out["matches"]] == ["src/a.py"]
 
 
-def test_a_servers_repo_takes_literal_alternatives(tmp_path: Path, monkeypatch):
-    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud())
-    asked = []
+def test_a_servers_repo_takes_a_regex_searched_there(tmp_path: Path, monkeypatch):
+    import webbee.tools as wt
+    seen = {}
 
-    def ask(method, path, root, target, params=None, body=None):
-        asked.append(params["q"])
-        return {"items": [{"path": "k.py", "line": len(asked), "text": params["q"]}], "total": 1, "repo_key": "rk"}
-    monkeypatch.setattr(exo, "_ask", ask)
-    out = exo.grep_code("def a|def b", root="/r", target="host:h", regex=True)
-    assert asked == ["def a", "def b"] and out["total"] == 2
-    assert exo.grep_code("de.f", root="/r", target="host:h", regex=True)["status"] == "error"
+    async def fake_remote_grep(host, root, pattern, k=50, path_glob="", regex=False):
+        seen.update(pattern=pattern, regex=regex, glob=path_glob)
+        return {"matches": [], "total": 0, "truncated": False, "why": ""}
+    monkeypatch.setattr(wt, "remote_grep", fake_remote_grep)
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud())
+    exo.grep_code("def a|def b", root="/r", target="host:h", regex=True, path_glob="*.py")
+    assert seen == {"pattern": "def a|def b", "regex": True, "glob": "*.py"}
 
 
 def test_graph_slice_names_a_symbol_it_does_not_hold(tmp_path: Path, monkeypatch):
@@ -1010,10 +1021,14 @@ def test_get_app_names_its_callable_tools_never_a_skeleton_entry():
 
 def test_an_unknown_hosts_reason_reaches_the_answer(tmp_path: Path, monkeypatch):
     import webbee.tools as wt
-    monkeypatch.setattr(wt, "remote_head", _head(why="no-such-host: OSError: Name or service not known"))
+
+    async def fake_remote_grep(host, root, pattern, k=50, path_glob="", regex=False):
+        return {"matches": [], "total": 0, "truncated": False,
+                "why": "ssh: Could not resolve hostname no-such-host: Name or service not known"}
+    monkeypatch.setattr(wt, "remote_grep", fake_remote_grep)
     exo = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud({"/v1/memory/code/repos": {"repos": []}}))
     out = exo.grep_code("x", root="/home/ipw-repo", target="host:no-such-host")
-    assert out["status"] == "unavailable" and "Name or service not known" in out["content"]
+    assert out["status"] == "error" and "Name or service not known" in out["error"]
 
 
 def test_freshness_belongs_to_the_call_that_asked(tmp_path: Path):

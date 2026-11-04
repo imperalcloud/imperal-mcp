@@ -20,6 +20,7 @@ your Imperal Cloud account.
 |------|--------------|------|
 | Your Imperal credentials | Stored locally in `~/.imperal/credentials.json` (mode 0600) | On `imperal-mcp login` |
 | Your code, as read by the local code tools | Stays on your machine | Always - local tools send nothing |
+| The index of your code: each definition's name, signature, line range and description, imports, calls and links, routes, each file's identifiers, line count and line hashes, resolution keys of `tsconfig`/`package.json`/`pyproject.toml`, vectors computed on your machine | Your private space in Imperal Cloud - the code map the kernel answers from | When a repository is synced (before a code question, after an edit). **Never a file's text or a function's body**: those are read on the machine that holds the file - yours, or a server through your own ssh |
 | Checkpoints | A shadow store on your machine, outside your `.git` | When you call `checkpoint` |
 | Session steps: your requests, the agent's calls and their results, its thoughts and answers | Your private space in Imperal Cloud - your agent's memory | When the shell hooks installed by `imperal-mcp setup` (or `claude-setup --with-hooks`) are active, and when you call `frame`, `task` or the memory tools |
 | Facts and repo notes | Your private space in Imperal Cloud | When you call `remember_fact` or `save_repo_note` |
