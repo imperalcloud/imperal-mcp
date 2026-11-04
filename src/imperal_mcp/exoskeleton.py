@@ -20,7 +20,7 @@ class MissingCodeDependencyError(ImportError, RuntimeError):
 
 MISSING_CODE_DEPENDENCY_MESSAGE = (
     "Code intelligence tools require the optional 'webbee' dependency. "
-    "Install it with: pip install 'imperal-mcp[code]' (or: pip install webbee)"
+    "Install it with: pipx install --force 'imperal-mcp[code]' (or: uv tool install --force 'imperal-mcp[code]')"
 )
 
 

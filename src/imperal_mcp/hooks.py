@@ -429,7 +429,7 @@ def code_tools_missing() -> str:
         return ""
     return ("IMPERAL: the local code tools are OFF in this install (the 'code' extra is missing: no webbee) -- orient, "
             "outline, read_symbol, grep_code on this machine and checkpoint fail until it is reinstalled: "
-            "uv tool install --force 'imperal-mcp[code]'  (or: pip install 'imperal-mcp[code]').")
+            "uv tool install --force 'imperal-mcp[code]'  (or: pipx install --force 'imperal-mcp[code]').")
 
 
 def context_output(payload: dict, text: str) -> dict:

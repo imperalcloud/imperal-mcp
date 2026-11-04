@@ -14,8 +14,11 @@ change and can't fake a result - or hallucinate one past you. Fewer wasted token
 Windsurf, Claude Desktop, Cline and Goose**.
 
 ```bash
-pip install "imperal-mcp[code]" && imperal-mcp login && imperal-mcp setup
+pipx install "imperal-mcp[code]" && imperal-mcp login && imperal-mcp setup
 ```
+
+Keep the quotes: zsh (the macOS default) reads `[code]` as a file pattern without them. No pipx yet? `uv tool install
+"imperal-mcp[code]"` does the same, or see [Quick start](#quick-start).
 
 The code tools work offline, no account needed. Memory across sessions, the kernel's frame and the hallucination
 check run on an [Imperal Cloud](https://panel.imperal.io) account (`imperal-mcp login`) - sign-up is free, plans
@@ -128,8 +131,12 @@ MCP is how your agent talks to the exoskeleton. **ICNLI is how the exoskeleton t
 ## Quick start
 
 ```bash
-# 1. Install (Python 3.7 - 3.14; the code map included)
-pip install "imperal-mcp[code]"
+# 1. Install (Python 3.7 - 3.14; the code map included) -- quotes required in zsh
+pipx install "imperal-mcp[code]"
+#    or:  uv tool install "imperal-mcp[code]"
+#    or:  pip install "imperal-mcp[code]"   only INSIDE a virtual environment: a bare `pip install` into the system
+#         Python is refused on Debian 12+/Ubuntu 23.04+/Homebrew (error: externally-managed-environment)
+#    no pipx?  macOS: brew install pipx · Debian/Ubuntu: sudo apt install pipx · then: pipx ensurepath
 
 # 2. Sign in to Imperal Cloud (memory, the kernel's frame, apps)
 imperal-mcp login
