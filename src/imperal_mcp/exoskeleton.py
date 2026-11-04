@@ -229,6 +229,11 @@ def _normalize_search_matches(
     return normalized[:k]
 
 
+def _coarse(out: dict) -> dict:
+    """A local answer marked as the coarse fallback -- except a units answer, which says its own source."""
+    return out if "units" in out else {**out, "coarse": COARSE}
+
+
 class NotARepositoryError(ValueError):
     """The folder asked about is no repository (no .git, no project manifest): never indexed or synced whole."""
 
@@ -244,6 +249,69 @@ def _is_repository(path: str) -> bool:
             return False
         return ".git" in names or bool(names & {"pyproject.toml", "setup.cfg", "jsconfig.json", "package.json",
                                                   "setup.py", "requirements.txt", "tsconfig.json"})
+
+
+# ---- any folder is a workspace (universal index phase 2, owner 2026-11-03; replaces the 2026-10-25 refusal) ----
+_UNIT_SKIP_TOP = frozenset({"Library", "Applications", "System", "Volumes", "private", "cores", "dev"})
+_ICLOUD_DRIVE = "Library/Mobile Documents/com~apple~CloudDocs"
+_REPO_DEPTH = 4               # repositories are looked for this deep (~/Projects/<org>/<repo>)
+
+
+def _repo_above(path: str) -> bool:
+    up = os.path.dirname(path)
+    while up and up != os.path.dirname(up):
+        if _is_repository(up):
+            return True
+        up = os.path.dirname(up)
+    return False
+
+
+def _find_repos(ws: str, depth: int = _REPO_DEPTH) -> list[str]:
+    """The repositories (a folder holding ``.git``) inside ``ws``, as ws-relative paths; never under a skipped,
+    hidden or linked folder, never inside another repository."""
+    from webbee.intel.service import skipped_dir
+    out: list[str] = []
+    frontier = [""]
+    for _ in range(depth):
+        nxt: list[str] = []
+        for rel in frontier:
+            here = os.path.join(ws, rel) if rel else ws
+            try:
+                names = sorted(os.listdir(here))
+            except OSError:
+                continue
+            for name in names:
+                full = os.path.join(here, name)
+                if (not rel and name in _UNIT_SKIP_TOP) or os.path.islink(full) or not os.path.isdir(full) \
+                        or skipped_dir(here, name):
+                    continue
+                child = f"{rel}/{name}" if rel else name
+                (out if os.path.isdir(os.path.join(full, ".git")) else nxt).append(child)
+        frontier = nxt
+    return out
+
+
+def _plan_units(ws: str) -> list[dict]:
+    """A folder that is no repository as index units: each repository in it; each other top-level folder a
+    collection (without the repositories inside it); the loose files at the top; iCloud Drive."""
+    from webbee.intel.service import skipped_dir
+    repos = _find_repos(ws)
+    units = [{"root": r, "kind": "repo", "exclude": ()} for r in repos]
+    try:
+        names = sorted(os.listdir(ws))
+    except OSError:
+        names = []
+    tops = [n for n in names if os.path.isdir(os.path.join(ws, n)) and not os.path.islink(os.path.join(ws, n))]
+    for top in tops:
+        if top in repos or top in _UNIT_SKIP_TOP or skipped_dir(ws, top):
+            continue
+        units.append({"root": top, "kind": "collection",
+                      "exclude": tuple(r[len(top) + 1:] for r in repos if r.startswith(top + "/"))})
+    if any(os.path.isfile(os.path.join(ws, n)) for n in names):
+        units.append({"root": ".", "kind": "collection", "exclude": tuple(tops)})
+    if os.path.isdir(os.path.join(ws, _ICLOUD_DRIVE)):
+        units.append({"root": _ICLOUD_DRIVE, "kind": "collection", "exclude": ()})
+    return units
 
 
 class OutsideWorkspaceError(ValueError):
@@ -607,6 +675,7 @@ class ExoskeletonRuntime:
         self._synced_at: dict[str, float] = {}
         self.tracker = TokenSavingsTracker()
         self._indexers: dict[str, Any] = {}
+        self._units: dict[str, list] = {}     # a non-repository workspace -> [(unit, IntelService)]
         self._refreshed_at: dict[str, float] = {}
         self._index_locks: dict[str, threading.Lock] = {}
         self._embed_threads: dict[str, threading.Thread] = {}
@@ -871,7 +940,17 @@ class ExoskeletonRuntime:
         svc.git_ref = _git_ref(svc.root)
         idx = store.load(svc.cache_dir, svc.repo_key, svc.git_ref) if svc.git_ref else None
         if idx is None:
-            idx = indexer.build_index(svc.root, _walk(svc.root))
+            if hasattr(svc, "_build_progressive"):
+                # every file kind, the focus first, published in steps (universal index phase 2)
+                from webbee.intel.service import _index_walk
+                walked, skipped = _index_walk(svc.root, getattr(svc, "focus", None),
+                                              exclude=getattr(svc, "exclude", ()))
+                svc._progress = {"indexed": 0, "total": len(walked), "focus_done": False,
+                                 "skipped": {**skipped, "unread": 0}}
+                idx = svc._build_progressive(walked)
+                svc._progress.update(indexed=len(walked), focus_done=True)
+            else:
+                idx = indexer.build_index(svc.root, _walk(svc.root))
             idx.git_ref = svc.git_ref
             if svc.git_ref:
                 try:
@@ -962,6 +1041,105 @@ class ExoskeletonRuntime:
                 svc.index.files.pop(rel, None)
                 svc._stats.pop(rel, None)
             svc.graph = CodeGraph(svc.index)
+
+    # ---- units: a workspace that is no repository (a home folder) ----
+
+    def _is_units_workspace(self, ws: str) -> bool:
+        return not _is_repository(ws) and not _repo_above(ws)
+
+    def _unit_services(self, ws: str) -> list:
+        """The workspace's units with their indexes; the first call plans them and starts one background builder
+        that indexes them one after another (the answers never wait for it)."""
+        with self._guard_lock:
+            got = self._units.get(ws)
+            if got is not None:
+                return got
+            _ensure_webbee_importable()
+            from webbee.intel.service import IntelService
+            from webbee.repo import compute_repo_key
+            got = []
+            for u in _plan_units(ws):
+                abs_root = os.path.realpath(os.path.join(ws, u["root"]))
+                svc = IntelService(abs_root, compute_repo_key(abs_root), exclude=u["exclude"])
+                svc._unit_done = False
+                got.append((u, svc))
+            self._units[ws] = got
+        threading.Thread(target=self._build_units, args=(got,), daemon=True, name="imperal-mcp-units").start()
+        return got
+
+    def _build_units(self, units: list) -> None:
+        for _u, svc in units:
+            try:
+                self._build_fast_index(svc)
+            except Exception as exc:          # one unit's failure is said in its progress, never the others' end
+                svc.stale_reason = f"index failed: {type(exc).__name__}: {str(exc)[:200]}"
+            svc._unit_done = True
+
+    def units_progress(self, root: str | None = None) -> list[dict]:
+        """How far each unit of a non-repository workspace is: ``[{root, kind, indexed, total, done}]``."""
+        ws = self.resolve_workspace(root)
+        out = []
+        for u, svc in self._units.get(ws, []):
+            prog = svc.progress() if hasattr(svc, "progress") else {}
+            out.append({"root": u["root"], "kind": u["kind"], "indexed": int(prog.get("indexed") or 0),
+                        "total": prog.get("total") if getattr(svc, "index", None) is not None or prog.get("total")
+                        else None, "done": bool(getattr(svc, "_unit_done", False)),
+                        **({"note": svc.stale_reason} if getattr(svc, "stale_reason", "") else {})})
+        return out
+
+    @staticmethod
+    def _in_unit(u: dict, rel: str) -> str:
+        return rel if u["root"] == "." else f"{u['root']}/{rel}"
+
+    def _units_search(self, ws: str, query: str, k: int, kind: str | None, path_glob: str | None) -> dict:
+        import fnmatch
+        from webbee.intel.query import search_code as _search_code
+        merged: list = []
+        for u, svc in self._unit_services(ws):
+            if getattr(svc, "index", None) is None:
+                continue
+            res = _search_code(svc, query, k=k, kind=kind)
+            for m in _normalize_search_matches((res.get("data") or {}).get("items", []), svc.root, query, k=k,
+                                               kind=kind):
+                m = dict(m)
+                m["path"] = self._in_unit(u, str(m.get("path") or m.get("file") or ""))
+                if path_glob and not fnmatch.fnmatch(m["path"], path_glob):
+                    continue
+                merged.append(m)
+        merged.sort(key=lambda m: -float(m.get("score") or 0))
+        matches = merged[:k]
+        self._record_read("search_code", returned_text=json.dumps(matches, ensure_ascii=False))
+        return {"status": "ok", "workspace": ws, "query": query, "matches": matches, "total": len(matches),
+                "units": self.units_progress(ws), "source": "local index (units)"}
+
+    def _units_profile(self, ws: str) -> dict:
+        files = 0
+        other: dict = {}
+        for _u, svc in self._unit_services(ws):
+            if getattr(svc, "index", None) is None:
+                continue
+            prof = svc.repo_profile()
+            files += int(prof.get("file_count") or 0)
+            for k2, v in (prof.get("other_kinds") or {}).items():
+                other[k2] = other.get(k2, 0) + int(v)
+        return {"status": "ok", "workspace": ws, "profile": {"code_files": files, "other_kinds": other},
+                "units": self.units_progress(ws), "source": "local index (units)"}
+
+    def _units_impact(self, ws: str, sym_list: list) -> dict:
+        from webbee.intel.query import impact_of_change as _impact_of_change
+        items: list = []
+        for u, svc in self._unit_services(ws):
+            if getattr(svc, "index", None) is None:
+                continue
+            for it in (_impact_of_change(svc, sym_list).get("data") or {}).get("items", []):
+                it = dict(it)
+                for key in ("id", "title"):
+                    if it.get(key):
+                        it[key] = self._in_unit(u, str(it[key]))
+                items.append(it)
+        return {"status": "ok", "workspace": ws, "queried_symbols": sym_list,
+                "dependent_files": [it.get("title") or it.get("id") for it in items], "items": items,
+                "units": self.units_progress(ws), "source": "local index (units)"}
 
     def _get_shadow(self, root: str | None = None) -> tuple[str, Any]:
         _ensure_webbee_importable()
@@ -1243,9 +1421,11 @@ class ExoskeletonRuntime:
         if prof is not None:
             return {"status": "ok", "workspace": self.resolve_workspace(root) if not target else root,
                     "profile": prof, "source": "vault graph"}
-        return self._remote_unavailable(target, root) or {**self._local_repo_profile(root), "coarse": COARSE}
+        return self._remote_unavailable(target, root) or _coarse(self._local_repo_profile(root))
 
     def _local_repo_profile(self, root: str | None = None) -> dict[str, Any]:
+        if self._is_units_workspace(self.resolve_workspace(root)):
+            return self._units_profile(self.resolve_workspace(root))
         ws, svc, _ = self._get_indexer(root)
         prof = svc.repo_profile()
         return {"status": "ok", "workspace": ws, "profile": prof}
@@ -1281,9 +1461,12 @@ class ExoskeletonRuntime:
                    "semantic": ans.get("semantic"), "best_match": ans.get("best_match"), **self._vault_meta(ans)}
             self._record_read("orient", returned_text=json.dumps(out, ensure_ascii=False))
             return out
-        return self._remote_unavailable(target, root) or {**self._local_orient(query, k, root), "coarse": COARSE}
+        return self._remote_unavailable(target, root) or _coarse(self._local_orient(query, k, root))
 
     def _local_orient(self, query: str, k: int = 8, root: str | None = None) -> dict[str, Any]:
+        if self._is_units_workspace(self.resolve_workspace(root)):
+            ws = self.resolve_workspace(root)
+            return {**self._units_search(ws, query, k, None, None), "profile": self._units_profile(ws)["profile"]}
         ws, svc, _ = self._get_indexer(root)
         from webbee.intel.query import search_code as _search_code
 
@@ -1325,11 +1508,13 @@ class ExoskeletonRuntime:
             return {"status": "ok", "workspace": root if target else self.resolve_workspace(root), "query": query,
                     "matches": matches, "total": len(matches), "semantic": ans.get("semantic"),
                     "best_match": ans.get("best_match"), **self._vault_meta(ans)}
-        return self._remote_unavailable(target, root) or {
-            **self._local_search_code(query, k=k, kind=kind, path_glob=path_glob, root=root), "coarse": COARSE}
+        return self._remote_unavailable(target, root) or _coarse(
+            self._local_search_code(query, k=k, kind=kind, path_glob=path_glob, root=root))
 
     def _local_search_code(self, query: str, k: int = 10, kind: str | None = None, path_glob: str | None = None,
                            root: str | None = None) -> dict[str, Any]:
+        if self._is_units_workspace(self.resolve_workspace(root)):
+            return self._units_search(self.resolve_workspace(root), query, k, kind, path_glob)
         ws, svc, _ = self._get_indexer(root)
         from webbee.intel.query import search_code as _search_code
 
@@ -1428,9 +1613,12 @@ class ExoskeletonRuntime:
             if "resolved" in ans and not ans.get("resolved"):
                 out["note"] = f"{', '.join(sym_list)}: not a definition in the graph"     # not "0 dependents"
             return out
-        return self._remote_unavailable(target, root) or {**self._local_impact_of_change(symbols, root), "coarse": COARSE}
+        return self._remote_unavailable(target, root) or _coarse(self._local_impact_of_change(symbols, root))
 
     def _local_impact_of_change(self, symbols: list[str] | str, root: str | None = None) -> dict[str, Any]:
+        if self._is_units_workspace(self.resolve_workspace(root)):
+            return self._units_impact(self.resolve_workspace(root),
+                                      [symbols] if isinstance(symbols, str) else list(symbols or []))
         ws, svc, _ = self._get_indexer(root)
         from webbee.intel.query import impact_of_change as _impact_of_change
 

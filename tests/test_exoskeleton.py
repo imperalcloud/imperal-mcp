@@ -749,15 +749,13 @@ def test_a_host_repo_in_the_catalog_never_waits_for_its_first_sync_here(tmp_path
 
 # ── owner 2026-10-25: a folder that is no repository is never indexed whole; frame and file reads follow the target ──
 
-def test_a_folder_that_is_no_repository_is_never_indexed(tmp_path: Path):
-    import pytest
-    from imperal_mcp.exoskeleton import NotARepositoryError
+def test_a_folder_that_is_no_repository_is_indexed_by_units(tmp_path: Path):
+    """owner 2026-11-03 replaces the 2026-10-25 refusal: a folder of no repository is indexed, as units."""
     (tmp_path / "Photos").mkdir()
     (tmp_path / "Photos" / "gallery.js").write_text("function show() {}\n")
     exo = ExoskeletonRuntime(workspace=str(tmp_path))
-    with pytest.raises(NotARepositoryError) as e:
-        exo.search_code("show")
-    assert "not a repository" in str(e.value) and "root=" in str(e.value) and exo._indexers == {}
+    out = exo.search_code("show")
+    assert out["status"] == "ok" and [u["root"] for u in out["units"]] == ["Photos"]
 
 
 def test_frame_takes_the_repo_of_its_target(tmp_path: Path, monkeypatch):
