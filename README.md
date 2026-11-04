@@ -307,7 +307,7 @@ Your agent's memory is your work - your code, your decisions, your mistakes. So 
 
 | Stays on your machine | Goes to your private space in Imperal Cloud |
 | :--- | :--- |
-| Your code map, symbol reads, syntax checks and checkpoints - **all local tools work offline** | The steps of a session the shell's hooks record: requests, calls and their results, thoughts and answers - that's your agent's memory |
+| Your code map, symbol reads, syntax checks and checkpoints - **all local tools work offline**; documents, sheets and mail in the local index ([universal index](docs/universal-index.md)) | The steps of a session the shell's hooks record: requests, calls and their results, thoughts and answers - that's your agent's memory |
 | Your credentials (`~/.imperal/credentials.json`, `0600`) | Facts and repo notes you choose to keep |
 | **Secrets and personal data** - removed *before* anything is sent | Apps you deploy |
 

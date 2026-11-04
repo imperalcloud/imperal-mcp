@@ -7,6 +7,28 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.0 - 2026-11-04
+
+### Added
+
+- **Any folder, every file kind.** Start the server in a home folder, a folder of contracts or a mobile app: the
+  workspace no longer has to be a repository. It is split into units - each repository (to depth 4), each top-level
+  folder as a collection, the root files, and iCloud Drive - built in the background; the first answer comes from what
+  is ready, and `search_code` says how far the build is.
+- `outline` and `read_symbol` on documents, sheets, slides and mail: a DOCX's headings, a PDF's pages and bookmarks,
+  a sheet's tabs, a message per mail; `read_symbol(path, "3.2 Payment terms")` (any case) or `"L120-180"`.
+- `outline` of code in 20+ languages (Kotlin, Go, Swift, Rust, C#, ...).
+- `search_code(query, kind="document" | "data" | "mail" | "image" | "code" | "config")` keeps one kind of file.
+- `docs/universal-index.md`: what is indexed, what is never read, what never leaves the machine.
+
+### Security
+
+- Only code and resolution configs ever reach the vault, as before; documents, mail and sheets stay in the local
+  index. Secrets by name, keychains, `.gnupg`, browser profiles, wallets, credential files, iCloud placeholders and app
+  packages are never read; a unit that resolves outside the workspace through a link is never indexed.
+- Needs `imperal-sdk` 6.4.0 and, for the code map, `webbee` 0.7.0 (the `code` extra pulls both in with the
+  `universal-index` readers).
+
 ## 0.8.15 — 2026-11-04
 
 ### Fixed
