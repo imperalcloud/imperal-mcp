@@ -229,6 +229,65 @@ def _normalize_search_matches(
     return normalized[:k]
 
 
+_FILE_KINDS = frozenset({"code", "config", "document", "data", "mail", "image"})
+
+
+def _view_for(ws: str, rel: str) -> dict | None:
+    """``{text, nodes, skipped}`` for a file the code outline does not read: a document, sheet, message, HTML page
+    or image through its view (universal index), code in a language webbee's outline does not parse through the
+    SDK's symbols. None: the code outline reads it as before."""
+    try:
+        from imperal_sdk.universal.kinds import kind_of
+        from imperal_sdk.universal.view import _READERS
+    except ImportError:                       # an SDK before 6.4: code only, as before
+        return None
+    try:
+        from webbee.intel.outline import lang_of
+    except ImportError:
+        def lang_of(_p):
+            return ""
+    kind = kind_of(rel)
+    ext = os.path.splitext(rel)[1].lower()
+    if kind is None or kind == "config" or (kind == "code" and lang_of(rel)):
+        return None                           # resolution configs and webbee's own languages: the outline as before
+    if kind == "code" and ext not in _READERS:
+        from imperal_sdk.code_index import parse_file
+        try:
+            with open(os.path.join(ws, rel), "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError as exc:
+            return {"text": "", "nodes": [], "skipped": str(exc)}
+        fi = parse_file(rel, text)
+        nodes = [{"name": s.name, "kind": s.kind, "start": s.start_line, "end": s.end_line, "depth": 0}
+                 for s in (fi.symbols if fi else [])]
+        return {"text": text, "nodes": sorted(nodes, key=lambda n: (n["start"], -n["end"])), "skipped": ""}
+    from imperal_sdk.universal.index import read_view
+    view = read_view(ws, rel)
+    if view is None:
+        return {"text": "", "nodes": [], "skipped": "this file is never read (a secret or outside the folder)"}
+    nodes = [{"name": s.title, "kind": s.kind, "start": s.start_line, "end": s.end_line,
+              "depth": max(0, min(int(s.level), 4) - 1)} for s in view.sections]
+    return {"text": view.text, "nodes": nodes, "skipped": view.skipped}
+
+
+def _view_hit(text: str, nodes: list, name: str) -> dict | None:
+    """One section of a view by its title (exact, then case-insensitive) or a line span ``L<a>-<b>``."""
+    lines = text.split("\n")
+    want = str(name or "").strip()
+    span = re.fullmatch(r"L(\d+)-(\d+)", want)                    # the tool's own span syntax (mechanical)
+    if span:
+        a, b = max(1, int(span.group(1))), min(len(lines), int(span.group(2)))
+        if a <= b:
+            return {"name": want, "kind": "lines", "start": a, "end": b, "body": "\n".join(lines[a - 1:b])}
+        return None
+    for same in (lambda n: n["name"] == want, lambda n: n["name"].casefold() == want.casefold()):
+        for n in nodes:
+            if same(n):
+                return {"name": n["name"], "kind": n["kind"], "start": n["start"], "end": n["end"],
+                        "body": "\n".join(lines[n["start"] - 1:n["end"]])}
+    return None
+
+
 def _coarse(out: dict) -> dict:
     """A local answer marked as the coarse fallback -- except a units answer, which says its own source."""
     return out if "units" in out else {**out, "coarse": COARSE}
@@ -309,8 +368,10 @@ def _plan_units(ws: str) -> list[dict]:
                       "exclude": tuple(r[len(top) + 1:] for r in repos if r.startswith(top + "/"))})
     if any(os.path.isfile(os.path.join(ws, n)) for n in names):
         units.append({"root": ".", "kind": "collection", "exclude": tuple(tops)})
-    if os.path.isdir(os.path.join(ws, _ICLOUD_DRIVE)):
-        units.append({"root": _ICLOUD_DRIVE, "kind": "collection", "exclude": ()})
+    parts = _ICLOUD_DRIVE.split("/")
+    if os.path.isdir(os.path.join(ws, _ICLOUD_DRIVE)) and \
+            not any(os.path.islink(os.path.join(ws, *parts[:i])) for i in range(1, len(parts) + 1)):
+        units.append({"root": _ICLOUD_DRIVE, "kind": "collection", "exclude": ()})   # never through a link
     return units
 
 
@@ -1058,8 +1119,11 @@ class ExoskeletonRuntime:
             from webbee.intel.service import IntelService
             from webbee.repo import compute_repo_key
             got = []
+            ws_real = os.path.realpath(ws)
             for u in _plan_units(ws):
                 abs_root = os.path.realpath(os.path.join(ws, u["root"]))
+                if abs_root != ws_real and not abs_root.startswith(ws_real + os.sep):
+                    continue                  # a unit that resolves outside the workspace is never indexed
                 svc = IntelService(abs_root, compute_repo_key(abs_root), exclude=u["exclude"])
                 svc._unit_done = False
                 got.append((u, svc))
@@ -1501,6 +1565,19 @@ class ExoskeletonRuntime:
         root: str | None = None,
         target: str | None = None,
     ) -> dict[str, Any]:
+        """``kind``: a file kind (document | code | data | mail | image | config) filters by what the file is;
+        any other value is a symbol kind, as before."""
+        if kind not in _FILE_KINDS:
+            return self._search_code_any(query, k, kind, path_glob, root, target)
+        from imperal_sdk.universal.kinds import kind_of
+        out = self._search_code_any(query, k * 4, None, path_glob, root, target)
+        out["matches"] = [m for m in out.get("matches") or []
+                          if kind_of(str(m.get("path") or m.get("file") or "")) == kind][:k]
+        out["total"] = len(out["matches"])
+        return out
+
+    def _search_code_any(self, query: str, k: int, kind: str | None, path_glob: str | None, root: str | None,
+                         target: str | None) -> dict[str, Any]:
         ans = self._vault_search(query, k, kind, path_glob, root, target)
         if ans is not None:
             matches = list((ans.get("data") or {}).get("items") or [])[:k]
@@ -1837,14 +1914,20 @@ class ExoskeletonRuntime:
         full, rel = _resolve_in_workspace(ws, path)
         if not os.path.isfile(full):
             return {"status": "error", "workspace": ws, "path": rel, "error": f"File not found: {rel}"}
-        try:
-            with open(full, "r", encoding="utf-8", errors="replace") as f:
-                source = f.read()
-        except OSError as exc:
-            return {"status": "error", "workspace": ws, "path": rel, "error": str(exc)}
+        alt = _view_for(ws, rel)
+        if alt is not None and alt["skipped"]:
+            return {"status": "error", "workspace": ws, "path": rel, "error": f"{rel}: {alt['skipped']}"}
+        if alt is not None:
+            source = alt["text"]
+        else:
+            try:
+                with open(full, "r", encoding="utf-8", errors="replace") as f:
+                    source = f.read()
+            except OSError as exc:
+                return {"status": "error", "workspace": ws, "path": rel, "error": str(exc)}
 
         total_lines = max(1, source.count("\n") + 1)
-        nodes = _outline(rel, source) or []
+        nodes = alt["nodes"] if alt is not None else (_outline(rel, source) or [])
         rendered = render_outline(rel, nodes, total_lines)
         self.tracker.record(
             "outline",
@@ -1879,16 +1962,22 @@ class ExoskeletonRuntime:
         full, rel = _resolve_in_workspace(ws, path)
         if not os.path.isfile(full):
             return {"status": "error", "workspace": ws, "path": rel, "error": f"File not found: {rel}"}
-        try:
-            with open(full, "r", encoding="utf-8", errors="replace") as f:
-                source = f.read()
-        except OSError as exc:
-            return {"status": "error", "workspace": ws, "path": rel, "error": str(exc)}
+        alt = _view_for(ws, rel)
+        if alt is not None and alt["skipped"]:
+            return {"status": "error", "workspace": ws, "path": rel, "error": f"{rel}: {alt['skipped']}"}
+        if alt is not None:
+            source = alt["text"]
+        else:
+            try:
+                with open(full, "r", encoding="utf-8", errors="replace") as f:
+                    source = f.read()
+            except OSError as exc:
+                return {"status": "error", "workspace": ws, "path": rel, "error": str(exc)}
 
         total_lines = max(1, source.count("\n") + 1)
-        hit = _read_symbol(rel, source, name)
+        hit = _view_hit(source, alt["nodes"], name) if alt is not None else _read_symbol(rel, source, name)
         if hit is None:
-            nodes = _outline(rel, source) or []
+            nodes = alt["nodes"] if alt is not None else (_outline(rel, source) or [])
             return {
                 "status": "error",
                 "workspace": ws,

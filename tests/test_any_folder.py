@@ -70,3 +70,17 @@ def test_when_built_every_unit_answers_with_its_own_paths(home):
     assert any(m["path"] == "Documents/NDA.docx" for m in docs["matches"])
     prof = exo.repo_profile()
     assert prof["status"] == "ok" and {u["root"] for u in prof["units"]} >= {"Projects/app", "Documents"}
+
+
+def test_an_icloud_path_through_a_link_is_never_a_unit(tmp_path: Path):
+    outside = tmp_path / "outside"
+    (outside / "com~apple~CloudDocs").mkdir(parents=True)
+    (outside / "com~apple~CloudDocs" / "x.md").write_text("# x\n")
+    h = tmp_path / "home"
+    (h / "Library").mkdir(parents=True)
+    import os
+    os.symlink(outside, h / "Library" / "Mobile Documents")
+    (h / "Documents").mkdir()
+    exo = ExoskeletonRuntime(workspace=str(h))
+    roots = [u["root"] for u in exo.search_code("x")["units"]]
+    assert roots == ["Documents"]
