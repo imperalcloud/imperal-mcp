@@ -30,7 +30,7 @@ background is proven by the read of its log, WORLD takes the code map's commit, 
   reads), nor one inside a workspace that is itself a secret store, nor a FIFO, socket or cloud placeholder.
 - Code is parsed up to 1 MB; a bigger file (a log, a dump) is read by lines with `read_symbol(path, "L<a>-<b>")`,
   streamed, never held whole.
-- Needs `imperal-sdk` 6.4.0 and, for the code map, `webbee` 0.7.0 (the `code` extra pulls both in with the
+- Needs `imperal-sdk` 6.4.1 and, for the code map, `webbee` 0.7.0 (the `code` extra pulls both in with the
   `universal-index` readers).
 
 ### Changed
