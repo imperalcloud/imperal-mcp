@@ -7,6 +7,14 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.1 - 2026-11-04
+
+### Fixed
+
+- Install commands that work everywhere: `pipx install "imperal-mcp[code]"` (or `uv tool install "imperal-mcp[code]"`)
+  in the README and in the hints the package prints. A bare `pip install` into the system Python is refused on Debian
+  12+, Ubuntu 23.04+ and Homebrew (`externally-managed-environment`); zsh needs the quotes around `[code]`.
+
 ## 0.9.0 - 2026-11-04
 
 ### Added
