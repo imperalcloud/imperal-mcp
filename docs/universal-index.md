@@ -16,7 +16,18 @@ The workspace is split into units, each built in the background and refreshed on
 
 Inside a unit the folder you work in is indexed first, then what changed in the last 30 days, then the rest. The first
 answer comes from what is ready; `search_code` reports the build's progress until it is done. A unit that resolves
-outside the workspace is never indexed.
+outside the workspace is never indexed. In a repository a `.gitignore`'d file is never read.
+
+## Changes: checksums, not rescans
+
+Every unit keeps a checksum tree: one hash per directory over the size and modification time of what is inside it.
+Before a unit answers, its tree is compared with the disk from the top down - an unchanged directory is skipped whole,
+and only new or changed files are read again; deleted ones leave the index. A repository is checked through git (HEAD,
+`git status` and the stats of the files it names) with no walk at all, every 5 s; a folder without git at most once a
+minute. A restart starts from the cache on disk and reads only what changed while the server was off.
+
+A file that is still being read after its time (a broken PDF, a stuck extractor) is skipped, counted as `timeout`;
+the rest of the build goes on.
 
 ## File kinds
 
@@ -34,19 +45,24 @@ outside the workspace is never indexed.
 
 ## Never read
 
-These are never opened, whatever asks for them: secrets by name (`.env*`, `id_*`, `*.pem`, `*.key`, `credentials*`,
+These are never opened, whatever asks for them - the index, `outline` and `read_symbol` alike: secrets by name (`.env*`, `id_*`, `*.pem`, `*.key`, `credentials*`,
 `*.tfstate`, `.netrc`, ...), `.ssh`, `.aws`, `.gnupg`, keychains, browser profiles, password stores (`*.kdbx`,
 `.password-store`), `wallet.dat`, VPN profiles, cloud and tool credential files; iCloud placeholders (opening one would download it); app packages
-(`.app`, `.photoslibrary`, ...). The check ignores case and trailing dots and follows links to where they lead.
+(`.app`, `.photoslibrary`, ...); cloud files not on this computer (iCloud, OneDrive); FIFOs, sockets and devices.
+The check ignores case and trailing dots, follows links to where they lead, and takes the file's real path - a folder
+that is itself a secret store (`~/secrets`, `~/.aws`) is never read, whatever folder you start in.
 
 Untrusted files are read inside budgets: XML never expands entities, an Office file stays inside a document-wide budget
-(200 MB unpacked), a view keeps at most 2 million characters, and a file over its kind's cap (10 MB code, 100 MB
-otherwise) is listed as skipped with the reason.
+(200 MB unpacked), a view keeps at most 2 million characters, and a file over its kind's cap (1 MB code and configs -
+parsing holds ~100-300x the file in memory - 100 MB otherwise) is listed as skipped with the reason. A bigger text
+file is still read by lines: `read_symbol(path, "L<a>-<b>")` streams them.
 
 ## What leaves your machine
 
 Only code and resolution configs reach your code map in the vault, as before. Documents, sheets, slides, mail and
-image metadata stay in the local index on your machine.
+image metadata stay in the local index on your machine. The next step keeps the index of every folder in your vault -
+its tree, each file's size, time, checksum, kind and headings, what appeared, changed or went and when - never the
+files' contents.
 
 What your agent reads with a tool - a section of a contract through `read_symbol`, like a file through `cat` - is a
 step of the session, and the shell's hooks record steps in your private space (masked for secrets and personal data

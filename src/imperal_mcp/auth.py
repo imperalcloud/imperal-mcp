@@ -186,6 +186,15 @@ def _default_prompt(user_code: str, verification_uri: str, verification_uri_comp
     print()
 
 
+def _json_or_none(resp) -> dict | None:
+    """The answer's JSON object, or None when the body is empty, not JSON or not an object."""
+    try:
+        data = resp.json() if resp.content else None
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 async def login_device(cfg, *, on_prompt=None, open_browser: bool = True) -> str:
     """Log in via the device-authorization grant; returns the logged-in email.
 
@@ -202,9 +211,9 @@ async def login_device(cfg, *, on_prompt=None, open_browser: bool = True) -> str
             f"{cfg.api_url}/v1/auth/cli/device/authorize",
             json={"code_challenge": challenge, "code_challenge_method": "S256"},
         )
-        if resp.status_code != 200:
-            raise RuntimeError(f"could not start login: {resp.status_code} {resp.text[:200]}")
-        start = resp.json()
+        start = _json_or_none(resp) if resp.status_code == 200 else None
+        if not start or "device_code" not in start:
+            raise RuntimeError(f"could not start login: {resp.status_code} {resp.text[:200]} -- try again in a minute")
 
         device_code = start["device_code"]
         verification_uri = start["verification_uri"]
@@ -222,11 +231,20 @@ async def login_device(cfg, *, on_prompt=None, open_browser: bool = True) -> str
         while True:
             if time.monotonic() >= deadline:
                 raise RuntimeError("login timed out — re-run the command to try again.")
-            poll = await cli.post(
-                f"{cfg.api_url}/v1/auth/cli/device/token",
-                json={"device_code": device_code, "code_verifier": verifier},
-            )
-            data = poll.json() if poll.content else {}
+            try:
+                poll = await cli.post(
+                    f"{cfg.api_url}/v1/auth/cli/device/token",
+                    json={"device_code": device_code, "code_verifier": verifier},
+                )
+            except httpx.HTTPError:
+                await asyncio.sleep(interval)       # the network blinked: the code is still valid, ask again
+                continue
+            data = _json_or_none(poll)
+            if data is None or poll.status_code == 429 or poll.status_code >= 500:
+                # a balancer's HTML page, an empty body, a restart (live 2026-11-04: an HTML answer crashed the
+                # login with JSONDecodeError): not the server's verdict -- keep polling until the deadline
+                await asyncio.sleep(interval)
+                continue
             if poll.status_code == 200 and data.get("access_token"):
                 tok = data
                 break
@@ -237,7 +255,7 @@ async def login_device(cfg, *, on_prompt=None, open_browser: bool = True) -> str
                 await asyncio.sleep(interval)
                 continue
             # Terminal error (4xx): stop polling.
-            err = data.get("error", f"http {poll.status_code}")
+            err = data.get("error") or data.get("detail") or f"http {poll.status_code}"     # the gateway says "detail"
             if err == "access_denied":
                 raise RuntimeError("login was declined in the browser.")
             if err == "expired_token":

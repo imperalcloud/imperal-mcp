@@ -268,3 +268,47 @@ async def test_logout_wipes_local_creds_even_when_server_errors(tmp_path, monkey
     respx.post("http://gw/v1/auth/logout").mock(return_value=httpx.Response(500, text="internal error"))
     await auth.logout(Config(api_url="http://gw", token=None))
     assert auth.load_creds() is None  # local creds wiped despite server error
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_device_login_survives_a_non_json_poll_answer(tmp_path, monkeypatch):
+    """Live 2026-11-04: the token poll got a body that was not JSON (a balancer's page) and the login crashed with
+    JSONDecodeError -- a non-JSON, empty, 5xx or 429 answer or a network error is not a verdict: polling goes on."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    async def _no_sleep(_):
+        return None
+    monkeypatch.setattr(auth.asyncio, "sleep", _no_sleep)
+    respx.post("http://gw/v1/auth/cli/device/authorize").mock(return_value=httpx.Response(200, json={
+        "device_code": "d", "user_code": "U", "verification_uri": "http://gw/d", "interval": 1, "expires_in": 60}))
+    respx.post("http://gw/v1/auth/cli/device/token").mock(side_effect=[
+        httpx.Response(502, text="<html>Bad Gateway</html>"),
+        httpx.Response(200, content=b""),
+        httpx.ConnectError("blink"),
+        httpx.Response(200, text="not json"),
+        httpx.Response(200, json={"error": "authorization_pending"}),
+        httpx.Response(200, json={"access_token": "a", "refresh_token": "r", "expires_in": 900}),
+    ])
+    respx.get("http://gw/v1/auth/me").mock(return_value=httpx.Response(200, json={"email": "me@x.io"}))
+    email = await auth.login_device(Config(api_url="http://gw", token=None), on_prompt=lambda *a: None,
+                                    open_browser=False)
+    assert email == "me@x.io" and auth.load_creds()["refresh_token"] == "r"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_device_login_reads_the_gateways_detail_verdict(tmp_path, monkeypatch):
+    """The gateway answers ``{"detail": "expired_token"}`` (measured 2026-11-04), not ``{"error": ...}``."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    async def _no_sleep(_):
+        return None
+    monkeypatch.setattr(auth.asyncio, "sleep", _no_sleep)
+    respx.post("http://gw/v1/auth/cli/device/authorize").mock(return_value=httpx.Response(200, json={
+        "device_code": "d", "user_code": "U", "verification_uri": "http://gw/d", "interval": 1, "expires_in": 60}))
+    respx.post("http://gw/v1/auth/cli/device/token").mock(
+        return_value=httpx.Response(400, json={"detail": "expired_token"}))
+    with pytest.raises(RuntimeError, match="expired"):
+        await auth.login_device(Config(api_url="http://gw", token=None), on_prompt=lambda *a: None,
+                                open_browser=False)

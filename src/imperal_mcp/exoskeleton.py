@@ -61,6 +61,9 @@ class TokenSavingsTracker:
 COARSE = "vault graph unavailable: links by name"
 _SYNC_REUSE_S = 3.0      # one tool call's questions share one sync of the workspace
 _LOCAL_REFRESH_S = 5.0   # the local index checks the files (stat only) at most this often before it answers
+# a collection (a folder without git: Documents, Downloads) is checked by a walk -- at most once a minute; a repository
+# answers through git (no walk) every _LOCAL_REFRESH_S
+_UNIT_REFRESH_S = 60.0
 _PROFILE_KEYS = ("repo_key", "file_count", "def_count", "languages", "top_symbols")
 
 
@@ -253,6 +256,9 @@ def _view_for(ws: str, rel: str) -> dict | None:
     if kind == "code" and ext not in _READERS:
         from imperal_sdk.code_index import parse_file
         try:
+            if os.path.getsize(os.path.join(ws, rel)) > _PARSE_CAP:
+                return {"text": "", "nodes": [], "skipped": f"over {_PARSE_CAP // 1048576} MB -- read it by lines: "
+                                                            "read_symbol(path, \"L<a>-<b>\")"}
             with open(os.path.join(ws, rel), "r", encoding="utf-8", errors="replace") as f:
                 text = f.read()
         except OSError as exc:
@@ -268,6 +274,43 @@ def _view_for(ws: str, rel: str) -> dict | None:
     nodes = [{"name": s.title, "kind": s.kind, "start": s.start_line, "end": s.end_line,
               "depth": max(0, min(int(s.level), 4) - 1)} for s in view.sections]
     return {"text": view.text, "nodes": nodes, "skipped": view.skipped}
+
+
+_PARSE_CAP = 1024 * 1024       # outline/read_symbol parse a file whole up to this (imperal_sdk RAW_CAP for code)
+
+
+def _refused(ws: str, rel: str, full: str) -> str:
+    """Why outline / read_symbol never open this file, or "": a secret by its name, by its real path (the workspace
+    itself a secret store, a link into one), anything but a regular file (final review 2026-11-04: the tools read
+    ``.env`` and ``~/.aws/credentials`` the index never reads)."""
+    from imperal_sdk.universal.kinds import never_read_at
+    if never_read_at(ws, rel):
+        return f"{rel}: this file is never read (a secret by its name or where it lies)"
+    try:
+        st = os.stat(full)
+    except OSError as exc:
+        return f"{rel}: {exc}"
+    import stat as _stat
+    if not _stat.S_ISREG(st.st_mode):
+        return f"{rel}: not a regular file"
+    try:
+        from imperal_sdk.universal.index import is_placeholder
+        if is_placeholder(rel, st):
+            return f"{rel}: a cloud placeholder (reading it would download it)"
+    except ImportError:
+        pass
+    return ""
+
+
+def _lines_of(full: str, a: int, b: int) -> tuple[str, int]:
+    """Lines ``a..b`` of a big file read as a stream, and the file's line count -- never the whole file in memory."""
+    out: list = []
+    n = 0
+    with open(full, "r", encoding="utf-8", errors="replace") as f:
+        for n, line in enumerate(f, 1):
+            if a <= n <= b:
+                out.append(line.rstrip("\n"))
+    return "\n".join(out), max(1, n)
 
 
 def _view_hit(text: str, nodes: list, name: str) -> dict | None:
@@ -998,6 +1041,14 @@ class ExoskeletonRuntime:
         from webbee.intel.graph import CodeGraph
         from webbee.intel.service import _git_ref, _walk
 
+        if hasattr(svc, "load_or_build"):
+            # webbee >= 0.7: the cache checked against the disk by its checksum tree (new, changed and deleted files
+            # caught, a folder without git cached too), else the build -- every file kind, the focus first
+            _touched, rebuilt = svc.load_or_build()
+            if rebuilt:
+                svc._save_cache()
+            self._start_embed(svc)
+            return
         svc.git_ref = _git_ref(svc.root)
         idx = store.load(svc.cache_dir, svc.repo_key, svc.git_ref) if svc.git_ref else None
         if idx is None:
@@ -1021,7 +1072,11 @@ class ExoskeletonRuntime:
         svc.index = idx
         svc.graph = CodeGraph(idx)
         svc.fresh = True
+        self._start_embed(svc)
 
+    def _start_embed(self, svc: Any) -> None:
+        """Vectors for the index in the background (one thread per folder)."""
+        idx = svc.index
         ws = svc.root
         existing_thread = self._embed_threads.get(ws)
         if existing_thread is None or not existing_thread.is_alive():
@@ -1065,15 +1120,23 @@ class ExoskeletonRuntime:
                 svc.vault_client_factory = lambda: self._client     # synced on demand (sync_now), not in the background
         return ws, svc, svc.index
 
-    def _refresh_if_due(self, ws: str, svc: Any) -> None:
+    def _refresh_if_due(self, ws: str, svc: Any, every: float = _LOCAL_REFRESH_S) -> None:
         """The local index catches up with the files before it answers (live 2026-11-03: a server running for hours
         answered search_code from its first snapshot -- files written since were missing and config files ranked
         first). A stat listing, no read, at most once per ``_LOCAL_REFRESH_S``; only changed files are parsed (the
         index's own ``apply_changes``, which also sends them to the vault)."""
         now = time.monotonic()
-        if now - self._refreshed_at.get(ws, 0.0) < _LOCAL_REFRESH_S:
+        if now - self._refreshed_at.get(ws, 0.0) < every:
             return
         self._refreshed_at[ws] = now
+        if hasattr(svc, "refresh"):
+            # webbee >= 0.7: one listing for build and refresh (every file kind, .gitignore honoured), a git
+            # repository unchanged answers with no walk, a folder by its checksum tree
+            try:
+                svc.refresh()
+            except Exception as exc:      # a refresh that fails leaves the index as it was -- and says why once
+                self._last_miss = f"the local index could not check its files: {type(exc).__name__}: {str(exc)[:200]}"
+            return
         try:
             from webbee.intel import service as intel_service
             files, _capped = intel_service._code_files(ws)
@@ -1111,6 +1174,14 @@ class ExoskeletonRuntime:
     def _unit_services(self, ws: str) -> list:
         """The workspace's units with their indexes; the first call plans them and starts one background builder
         that indexes them one after another (the answers never wait for it)."""
+        with self._guard_lock:
+            got = self._units.get(ws)
+        if got is not None:
+            for u, svc in got:                # built units catch up with the disk (new, changed, deleted files)
+                if getattr(svc, "_unit_done", False) and getattr(svc, "index", None) is not None:
+                    self._refresh_if_due(svc.root, svc,
+                                         _LOCAL_REFRESH_S if u["kind"] == "repo" else _UNIT_REFRESH_S)
+            return got
         with self._guard_lock:
             got = self._units.get(ws)
             if got is not None:
@@ -1570,7 +1641,12 @@ class ExoskeletonRuntime:
         if kind not in _FILE_KINDS:
             return self._search_code_any(query, k, kind, path_glob, root, target)
         from imperal_sdk.universal.kinds import kind_of
-        out = self._search_code_any(query, k * 4, None, path_glob, root, target)
+        if kind not in ("code", "config") and not (target and target != "local"):
+            # documents, sheets, mail and images live only in the local index (the vault's code map never holds
+            # them): asking the vault first answered an empty list (final review 2026-11-04)
+            out = self._local_search_code(query, k=k * 4, kind=None, path_glob=path_glob, root=root)
+        else:
+            out = self._search_code_any(query, k * 4, None, path_glob, root, target)
         out["matches"] = [m for m in out.get("matches") or []
                           if kind_of(str(m.get("path") or m.get("file") or "")) == kind][:k]
         out["total"] = len(out["matches"])
@@ -1912,14 +1988,21 @@ class ExoskeletonRuntime:
 
         ws = self.resolve_workspace(root)
         full, rel = _resolve_in_workspace(ws, path)
-        if not os.path.isfile(full):
+        if not os.path.lexists(full):
             return {"status": "error", "workspace": ws, "path": rel, "error": f"File not found: {rel}"}
+        refused = _refused(ws, rel, full)
+        if refused:
+            return {"status": "error", "workspace": ws, "path": rel, "error": refused}
         alt = _view_for(ws, rel)
         if alt is not None and alt["skipped"]:
             return {"status": "error", "workspace": ws, "path": rel, "error": f"{rel}: {alt['skipped']}"}
         if alt is not None:
             source = alt["text"]
         else:
+            if os.path.getsize(full) > _PARSE_CAP:
+                return {"status": "error", "workspace": ws, "path": rel,
+                        "error": f"{rel}: over {_PARSE_CAP // 1048576} MB -- read it by lines: read_symbol(path, "
+                                 "\"L<a>-<b>\")"}
             try:
                 with open(full, "r", encoding="utf-8", errors="replace") as f:
                     source = f.read()
@@ -1960,14 +2043,39 @@ class ExoskeletonRuntime:
 
         ws = self.resolve_workspace(root)
         full, rel = _resolve_in_workspace(ws, path)
-        if not os.path.isfile(full):
+        if not os.path.lexists(full):
             return {"status": "error", "workspace": ws, "path": rel, "error": f"File not found: {rel}"}
+        refused = _refused(ws, rel, full)
+        if refused:
+            return {"status": "error", "workspace": ws, "path": rel, "error": refused}
+        span = re.fullmatch(r"L(\d+)-(\d+)", str(name or "").strip())
         alt = _view_for(ws, rel)
+        if span and os.path.getsize(full) > _PARSE_CAP and (alt is None or "over" in alt["skipped"]):
+            # a big text file (a log, a dump) by lines: streamed, never parsed or held whole
+            a, b = max(1, int(span.group(1))), int(span.group(2))
+            try:
+                body, total = _lines_of(full, a, b)
+            except OSError as exc:
+                return {"status": "error", "workspace": ws, "path": rel, "error": str(exc)}
+            b = min(b, total)
+            if a > b:
+                return {"status": "error", "workspace": ws, "path": rel, "symbol": name,
+                        "error": f"Span '{name}' is past the end of {rel} ({total} lines)"}
+            rendered = read_card(rel, total, a, b, body)
+            self.tracker.record("read_symbol", returned_chars=len(rendered), baseline_chars=os.path.getsize(full),
+                                returned_lines=max(1, rendered.count("\n") + 1), baseline_lines=total,
+                                baseline_files=1)
+            return {"status": "ok", "workspace": ws, "path": rel, "symbol": f"L{a}-{b}", "kind": "lines",
+                    "start_line": a, "end_line": b, "rendered": rendered}
         if alt is not None and alt["skipped"]:
             return {"status": "error", "workspace": ws, "path": rel, "error": f"{rel}: {alt['skipped']}"}
         if alt is not None:
             source = alt["text"]
         else:
+            if os.path.getsize(full) > _PARSE_CAP:
+                return {"status": "error", "workspace": ws, "path": rel,
+                        "error": f"{rel}: over {_PARSE_CAP // 1048576} MB -- read it by lines: read_symbol(path, "
+                                 "\"L<a>-<b>\")"}
             try:
                 with open(full, "r", encoding="utf-8", errors="replace") as f:
                     source = f.read()

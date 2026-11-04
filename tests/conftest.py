@@ -49,3 +49,10 @@ def _no_real_server_head(monkeypatch):
         return {"commit": "", "branch": "", "root": root, "why": ""}
     if hasattr(wt, "remote_head"):
         monkeypatch.setattr(wt, "remote_head", unknown)
+
+
+@pytest.fixture(autouse=True)
+def _private_index_cache(tmp_path_factory, monkeypatch):
+    """The local index caches every unit (a folder without git too, since 0.9.0) under ``~/.cache/webbee`` -- a
+    test's caches go to its own home (outside the test's workspace), never the real one."""
+    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home-auto")))

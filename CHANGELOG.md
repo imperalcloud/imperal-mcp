@@ -26,8 +26,25 @@ background is proven by the read of its log, WORLD takes the code map's commit, 
 - Only code and resolution configs ever reach the vault, as before; documents, mail and sheets stay in the local
   index. Secrets by name, keychains, `.gnupg`, browser profiles, wallets, credential files, iCloud placeholders and app
   packages are never read; a unit that resolves outside the workspace through a link is never indexed.
+- `outline` and `read_symbol` never open a never-read file (they read `.env` and `~/.aws/credentials` the index never
+  reads), nor one inside a workspace that is itself a secret store, nor a FIFO, socket or cloud placeholder.
+- Code is parsed up to 1 MB; a bigger file (a log, a dump) is read by lines with `read_symbol(path, "L<a>-<b>")`,
+  streamed, never held whole.
 - Needs `imperal-sdk` 6.4.0 and, for the code map, `webbee` 0.7.0 (the `code` extra pulls both in with the
   `universal-index` readers).
+
+### Fixed
+
+- Units see new, changed and deleted files: each built unit is refreshed before it answers (a repository through git
+  every 5 s, a folder through its checksum tree at most once a minute). A start from the cache is checked against the
+  disk the same way, a folder without git is cached, and a document stays a document after a restart.
+- In a repository the refresh listed only code, so it evicted every document from the index at its first check; it now
+  uses the index's own listing.
+- `search_code(kind="document" | "data" | "mail" | "image")` answers from the local index: the vault's code map never
+  holds these kinds, and asking it first answered an empty list.
+- Login: a token poll answered with a body that is not JSON (a balancer's page during a restart) crashed the login with
+  `JSONDecodeError`; an empty, non-JSON, 5xx or 429 answer or a network error now keeps polling until the code expires.
+  The gateway's verdict is read from `detail` as well as `error` (an expired code had shown as `http 400`).
 
 ## 0.8.15 — 2026-11-04
 
