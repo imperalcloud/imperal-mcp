@@ -1036,6 +1036,18 @@ def test_contract_slice_reaches_an_endpoint_whose_handler_calls_the_symbol(tmp_p
         ("/v1/terminal/tickets", "caller", "mint_terminal_ticket -> session_for_sid")]
 
 
+def test_a_folder_merge_orders_by_score_and_keeps_changed_together():
+    """06.11 #3 live: orient from a folder came 0.0448, 0.0333, 0.0474 (repos in turn); impact's co-changed list read []."""
+    from imperal_mcp.exoskeleton import _merge_folder_answers
+    a = {"data": {"items": [{"id": "x", "title": "x", "score": 0.03, "match": "weak"}]},
+         "changed_together": [{"path": "c.py", "confidence": 0.4}], "changed_together_count": 7}
+    b = {"data": {"items": [{"id": "y", "title": "y", "score": 0.05, "match": "strong"},
+                            {"id": "q", "title": "q", "score": 1.02, "match": "exact"}]}}
+    out = _merge_folder_answers([("ra", a), ("rb", b)], query="q")
+    assert [i["title"] for i in out["data"]["items"]] == ["q", "y", "x"]
+    assert out["changed_together"] == [{"path": "ra/c.py", "confidence": 0.4}] and out["changed_together_count"] == 7
+
+
 def test_get_app_names_its_callable_tools_never_a_skeleton_entry():
     import json as _j
     from imperal_mcp.exoskeleton import app_summary

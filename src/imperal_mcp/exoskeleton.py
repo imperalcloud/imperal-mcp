@@ -496,6 +496,12 @@ def _merge_folder_answers(answers: list, query: str = "", k: int = 0, units_by_k
         items = list(exact)
         for i in range(max((len(r) for r in rest), default=0)):
             items += [r[i] for r in rest if i < len(r)]
+        # one order over the repositories: an exact name, then the vault's own ``score`` (the fused rank its order
+        # follows, comparable between repos) -- the repos taken in turn put one repo's 5th above another's 1st (field
+        # report 06.11 #3); an answer without scores (an older vault) keeps the turns
+        if any(isinstance(x, dict) and isinstance(x.get("score"), (int, float)) for x in items):
+            items = sorted(items, key=lambda x: (not (isinstance(x, dict) and (x in exact or x.get("match") == "exact")),
+                                                 -(float(x.get("score") or 0) if isinstance(x, dict) else 0)))
         if k:
             items = items[:max(k, len(exact))]
     else:
@@ -512,6 +518,13 @@ def _merge_folder_answers(answers: list, query: str = "", k: int = 0, units_by_k
             out[key] = vals
     if any("by_name_count" in a for _u, a in ok):
         out["by_name_count"] = sum(int(a.get("by_name_count") or 0) for _u, a in ok)
+    # files that only changed together, kept apart and named from the folder (06.11 #3: lost in the merge, the summary
+    # counted 7 and the list read [])
+    together = [{**c, "path": f"{u}/{c['path']}" if u not in ("", ".") and c.get("path") else c.get("path")}
+                for u, a in ok for c in (a.get("changed_together") or []) if isinstance(c, dict)]
+    if together:
+        out["changed_together"] = sorted(together, key=lambda c: -float(c.get("confidence") or 0))[:30]
+        out["changed_together_count"] = sum(int(a.get("changed_together_count") or 0) for _u, a in ok) or len(together)
     if any("resolved" in a for _u, a in ok):
         out["resolved"] = [f"{u}/{r}" if u not in ("", ".") else r for u, a in ok
                            for r in (a.get("resolved") if isinstance(a.get("resolved"), list) else [])] \
