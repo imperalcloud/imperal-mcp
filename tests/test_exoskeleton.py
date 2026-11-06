@@ -756,7 +756,8 @@ def test_a_folder_that_is_no_repository_is_indexed_by_units(tmp_path: Path):
     (tmp_path / "Photos" / "gallery.js").write_text("function show() {}\n")
     exo = ExoskeletonRuntime(workspace=str(tmp_path))
     out = exo.search_code("show")
-    assert out["status"] == "ok" and [u["root"] for u in out["units"]] == ["Photos"]
+    assert out["status"] in ("ok", "partial") and [u["root"] for u in out["units"]] == ["Photos"]
+    assert (out["status"] == "partial") == bool(out.get("not_ready"))
 
 
 def test_frame_takes_the_repo_of_its_target(tmp_path: Path, monkeypatch):

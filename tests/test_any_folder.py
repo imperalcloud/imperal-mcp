@@ -57,7 +57,9 @@ def test_a_home_folder_is_units_and_answers_before_it_is_complete(home, monkeypa
     roots = {u["root"]: u["kind"] for u in out["units"]}
     assert roots == {"Projects/app": "repo", "Projects": "collection", "Documents": "collection",
                      "Desktop": "collection", ".": "collection"}     # Projects: its loose files, not the repo in it
-    assert out["status"] == "ok" and not all(u["done"] for u in out["units"])   # partial, and said so
+    # partial, and said so: "partial" names the units still indexing (2026-11-06: never an empty "ok")
+    assert out["status"] in ("ok", "partial") and (out["status"] == "partial") == bool(out.get("not_ready"))
+    assert not all(u["done"] for u in out["units"])
 
 
 def test_when_built_every_unit_answers_with_its_own_paths(home):
