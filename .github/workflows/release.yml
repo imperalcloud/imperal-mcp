@@ -103,6 +103,19 @@ jobs:
           git tag "$TAG" -m "Release $TAG"
           git push origin "$TAG"
 
+      # The `stable` branch is what every install from git names (webbee autoupdate, `pipx reinstall`, `uv tool
+      # upgrade`): moved here to the release just published -- only forward, a re-run of an older tag leaves it.
+      - name: Move the stable branch to this release
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          if git ls-remote --exit-code origin refs/heads/stable >/dev/null; then
+            git fetch -q origin stable
+            if git merge-base --is-ancestor HEAD FETCH_HEAD; then
+              echo "stable is already at or past this release"; exit 0
+            fi
+          fi
+          git push origin "HEAD:refs/heads/stable"
+
       # ── 6b. GitHub Release for the tag (notes = this version's CHANGELOG section) ──
       #  Until 0.5.5 only the tag was pushed, so the repo's Releases page stayed empty
       #  while PyPI had every version.
