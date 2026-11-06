@@ -7,6 +7,18 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.2 - 2026-11-06
+
+### Fixed (06.11 report)
+
+- A folder of repositories is answered per repository. The vault is asked for each one and the answers are merged,
+  with paths given from the folder and exact names first. While some repositories are still indexing, the answer is
+  `partial` and names them; it is never an empty `ok`.
+- `impact_of_change` gives resolved users (line, user, depth through the enclosing definition), using the same
+  resolver as the vault (`imperal_sdk.code_links`). Files that only share a name are listed apart under `by_name`
+  and marked; the answer is `coarse` only when it actually contains such matches.
+- Go, Rust, Java, Kotlin, C#, PHP, Ruby, Vue, Svelte, Astro and TS monorepos are linked (imperal-sdk 6.5.0).
+
 ## 0.9.1 - 2026-11-04
 
 ### Fixed
