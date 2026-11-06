@@ -1930,7 +1930,63 @@ class ExoskeletonRuntime:
             return out
         return self._remote_unavailable(target, root) or {**self._local_graph_slice(symbols, depth, root), "coarse": COARSE}
 
+    def _units_graph_slice(self, ws: str, sym_list: list, depth: int = 1) -> dict:
+        """graph_slice over each repository of a folder (field report 06.11 #3: at a folder root it raised "is not a
+        repository ... pass root=" while impact and search answered)."""
+        from webbee.intel.query import graph_slice as _graph_slice
+        items: list = []
+        waiting = []
+        for u, svc in self._unit_services(ws):
+            if getattr(svc, "index", None) is None:
+                waiting.append(u["root"])
+                continue
+            res = _graph_slice(svc, sym_list, depth)
+            items += [_in_folder(dict(it), u["root"]) for it in (res.get("data") or {}).get("items", [])]
+        out = {**self._units_status(waiting), "workspace": ws, "symbols": items, "units": self.units_progress(ws),
+               "source": "local index (units)"}
+        found = {str(i.get("qualname") or i.get("title") or "").rsplit(".", 1)[-1] for i in items}
+        missing = [s for s in sym_list if s.split("::")[-1].rsplit(".", 1)[-1] not in found]
+        if missing and not waiting:
+            out["not_found"], out["note"] = missing, f"{', '.join(missing)}: not a definition in any repository here"
+        return out
+
+    def _units_contract_slice(self, ws: str, symbols, query: str = "", kind: str = "all", k: int = 50) -> dict:
+        """contract_slice over each repository of a folder: their endpoints, the symbols' slices, and the endpoints the
+        symbols reach through their callers."""
+        from imperal_sdk.code_links import contracts_reached
+        from webbee.intel.query import contract_slice as _contract_slice
+        sym_list = [symbols] if isinstance(symbols, str) else list(symbols or [])
+        sl = self._units_graph_slice(ws, sym_list) if sym_list else {"symbols": []}
+        endpoints, matched, waiting = [], [], []
+        q = (query or (sym_list[0] if len(sym_list) == 1 else "")).lower()
+        for u, svc in self._unit_services(ws):
+            if getattr(svc, "index", None) is None:
+                waiting.append(u["root"])
+                continue
+            all_eps = [_in_folder(dict(it), u["root"]) for it in
+                       ((_contract_slice(svc, query="", kind=kind, k=500).get("data") or {}).get("items") or [])]
+            endpoints += [e for e in all_eps if e.get("kind") == "endpoint"]
+            matched += [e for e in all_eps if q and q in json.dumps(e).lower()]
+
+        def callers_of(names):
+            got = sl if list(names) == sym_list else self._units_graph_slice(ws, list(names))
+            out: dict = {}
+            for it in got.get("symbols") or []:
+                name = str(it.get("qualname") or it.get("title") or "").rsplit(".", 1)[-1]
+                out.setdefault(name, []).extend(
+                    (c.get("user") if isinstance(c, dict) else str(c)) for c in it.get("callers") or []
+                    if c and (not isinstance(c, dict) or c.get("user") not in ("", None, "(module)")))
+            return out
+        reached = contracts_reached(sym_list, endpoints, callers_of) if sym_list else []
+        ids = {e.get("id") for e in reached}
+        return {**self._units_status(waiting), "workspace": ws,
+                "contracts": (reached + [e for e in matched if e.get("id") not in ids])[:k],
+                "symbols": sl.get("symbols") or [], "source": "local index (units)"}
+
     def _local_graph_slice(self, symbols: list[str] | str, depth: int = 1, root: str | None = None) -> dict[str, Any]:
+        if self._is_units_workspace(self.resolve_workspace(root)):
+            return self._units_graph_slice(self.resolve_workspace(root),
+                                           [symbols] if isinstance(symbols, str) else list(symbols or []), depth)
         ws, svc, _ = self._get_indexer(root)
         from webbee.intel.query import graph_slice as _graph_slice
 
@@ -1966,6 +2022,10 @@ class ExoskeletonRuntime:
                                and str(it.get("origin") or "") == "changed together"),
                               key=lambda it: -float(it.get("confidence") or 0))
             items = [it for it in items if it not in together]
+            # a vault since 06.11 #3 names them itself, apart from the items ({path, confidence}), with their count
+            together += [{"title": c.get("path"), "confidence": c.get("confidence")}
+                         for c in ans.get("changed_together") or [] if isinstance(c, dict)]
+            together_count = max(len(together), int(ans.get("changed_together_count") or 0))
             # a user two steps away is one only through a user one step away -- never through a file that merely
             # changed together (MCP audit 2026-10-25: four tests "depended" on a private method via such files)
             near = {str(it.get("id") or "") for it in items if int(it.get("depth") or 1) <= 1}
@@ -1978,7 +2038,8 @@ class ExoskeletonRuntime:
                    "queried_symbols": sym_list, "dependent_files": files, "items": items,
                    "changed_together": [f"{it.get('title') or it.get('id')} ({float(it.get('confidence') or 0):.1f})"
                                         for it in together[:_TOGETHER_SHOWN]]
-                   + ([f"+{len(together) - _TOGETHER_SHOWN} more"] if len(together) > _TOGETHER_SHOWN else []),
+                   + ([f"+{together_count - min(len(together), _TOGETHER_SHOWN)} more"]
+                      if together_count > min(len(together), _TOGETHER_SHOWN) else []),
                    "same_file": ans.get("same_file") or [], "by_name_count": ans.get("by_name_count"),
                    "by_name": ans.get("by_name") or [],      # found only by name (an instance's method), marked
                    **({"summary": ans["summary"]} if ans.get("summary") else {}),
@@ -2039,9 +2100,16 @@ class ExoskeletonRuntime:
             try:
                 cat = self._vault("GET", "/v1/memory/code/contracts") or {}
                 q = (query or (sym_list[0] if len(sym_list) == 1 else "")).lower()
-                eps = _one_per_contract([e for e in cat.get("endpoints") or []
-                                         if not q or q in json.dumps(e).lower()])[:k]
                 sl = self.graph_slice(sym_list, root=root, target=target) if sym_list else {"symbols": []}
+                # the endpoints the asked symbols reach: a handler that is one, or calls one through its callers
+                # (field report 06.11 #3: session_for_sid answered nothing -- the endpoint's handler calls it)
+                reached = self._contracts_reached(sym_list, cat.get("endpoints") or [], sl, root, target)
+                seen = {(e.get("repo"), e.get("method"), e.get("route"), e.get("handler")) for e in reached}
+                eps = reached + _one_per_contract([e for e in cat.get("endpoints") or []
+                                                   if (not q or q in json.dumps(e).lower())
+                                                   and (e.get("repo"), e.get("method"), e.get("route"),
+                                                        e.get("handler")) not in seen])
+                eps = eps[:k]
                 names = [s.split("::")[-1].rsplit(".", 1)[-1].lower() for s in sym_list] + ([q] if q else [])
                 # only the links that touch what was asked (MCP audit 2026-10-25: an unknown symbol got every link)
                 links = _one_per_contract([ln for ln in cat.get("links") or [] if not names
@@ -2058,8 +2126,27 @@ class ExoskeletonRuntime:
         return self._remote_unavailable(target, root) or {
             **self._local_contract_slice(symbols, query=query, kind=kind, k=k, root=root), "coarse": COARSE}
 
+    def _contracts_reached(self, sym_list: list, endpoints: list, first_slice: dict, root, target) -> list:
+        """``imperal_sdk.code_links.contracts_reached`` over the vault graph: callers asked by graph_slice."""
+        if not sym_list or not endpoints:
+            return []
+        from imperal_sdk.code_links import contracts_reached
+
+        def callers_of(names):
+            got = first_slice if list(names) == list(sym_list) else self.graph_slice(list(names), root=root,
+                                                                                       target=target)
+            out: dict = {}
+            for it in got.get("symbols") or []:
+                name = str(it.get("qualname") or it.get("title") or "").rsplit(".", 1)[-1]
+                users = [c.get("user") for c in it.get("callers_detail") or [] if isinstance(c, dict) and c.get("user")]
+                out.setdefault(name, []).extend(users or [c for c in it.get("callers") or [] if isinstance(c, str)])
+            return out
+        return contracts_reached(sym_list, endpoints, callers_of)
+
     def _local_contract_slice(self, symbols: list[str] | str | None = None, query: str = "", kind: str = "all",
                               k: int = 50, root: str | None = None) -> dict[str, Any]:
+        if self._is_units_workspace(self.resolve_workspace(root)):
+            return self._units_contract_slice(self.resolve_workspace(root), symbols, query=query, kind=kind, k=k)
         ws, svc, _ = self._get_indexer(root)
         from webbee.intel.query import contract_slice as _contract_slice, graph_slice as _graph_slice
         sym_list = [symbols] if isinstance(symbols, str) else list(symbols or [])

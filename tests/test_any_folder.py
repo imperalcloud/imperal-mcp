@@ -86,3 +86,28 @@ def test_an_icloud_path_through_a_link_is_never_a_unit(tmp_path: Path):
     exo = ExoskeletonRuntime(workspace=str(h))
     roots = [u["root"] for u in exo.search_code("x")["units"]]
     assert roots == ["Documents"]
+
+
+def test_graph_slice_and_contract_slice_answer_at_a_folder_of_repositories(tmp_path: Path):
+    """Field report 06.11 #3: at a folder root graph_slice and contract_slice raised "is not a repository ... pass
+    root=" while impact and search answered; contract_slice now reaches an endpoint through its handler's calls."""
+    gw = tmp_path / "ws" / "gateway"
+    (gw / ".git").mkdir(parents=True)
+    (gw / "app").mkdir()
+    (gw / "app" / "__init__.py").write_text("")
+    (gw / "app" / "session.py").write_text("def session_for_sid(sid):\n    return sid\n")
+    (gw / "app" / "terminal.py").write_text(
+        "from fastapi import APIRouter\nfrom app.session import session_for_sid\n\nrouter = APIRouter()\n\n\n"
+        "@router.post(\"/terminal/tickets\")\nasync def mint_terminal_ticket(sid: str):\n    return session_for_sid(sid)\n")
+    ui = tmp_path / "ws" / "ui"
+    (ui / ".git").mkdir(parents=True)
+    (ui / "x.py").write_text("def other():\n    return 1\n")
+    exo = ExoskeletonRuntime(workspace=str(tmp_path / "ws"))
+    exo.search_code("session")                       # the first question starts the units' indexing
+    _wait(exo, tmp_path / "ws")
+    sl = exo.graph_slice(["session_for_sid"])
+    assert [s["title"] for s in sl["symbols"]] == ["session_for_sid"]
+    assert any(c.get("user") == "mint_terminal_ticket" for c in sl["symbols"][0]["callers"])
+    out = exo.contract_slice(["session_for_sid"])
+    got = [(c.get("route"), c.get("via"), c.get("chain")) for c in out["contracts"]]
+    assert ("/terminal/tickets", "caller", "mint_terminal_ticket -> session_for_sid") in got

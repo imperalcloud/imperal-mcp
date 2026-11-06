@@ -1008,6 +1008,34 @@ def test_impact_names_changed_together_files_apart(tmp_path: Path, monkeypatch):
     assert out["dependent_files"] == ["a.py"] and out["changed_together"] == ["b.py (0.2)"]
 
 
+def test_impact_reads_the_vault_s_own_changed_together_and_its_count(tmp_path: Path, monkeypatch):
+    """06.11 #3: the vault names co-changed files apart from the users ({path, confidence}) with their whole count."""
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud())
+    ans = {"data": {"items": [{"id": "t.py", "title": "t.py", "via": "scope", "origin": "binding"}]}, "repo_key": "rk",
+           "changed_together": [{"path": "b.py", "confidence": 0.6}, {"path": "c.py", "confidence": 0.2}],
+           "changed_together_count": 40}
+    monkeypatch.setattr(exo, "_ask", lambda *a, **k: ans)
+    out = exo.impact_of_change(["f"], root="/r", target="host:h")
+    assert out["dependent_files"] == ["t.py"]
+    assert out["changed_together"][:2] == ["b.py (0.6)", "c.py (0.2)"] and out["changed_together"][-1] == "+38 more"
+
+
+def test_contract_slice_reaches_an_endpoint_whose_handler_calls_the_symbol(tmp_path: Path, monkeypatch):
+    """06.11 #3: contract_slice(session_for_sid) gave contracts [] -- mint_terminal_ticket's endpoint CALLS it."""
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=_Cloud())
+    eps = [{"repo": "gw", "method": "POST", "route": "/v1/terminal/tickets", "handler": "mint_terminal_ticket"},
+           {"repo": "gw", "method": "GET", "route": "/v1/health", "handler": "health"}]
+    monkeypatch.setattr(exo, "_vault", lambda *a, **k: {"endpoints": eps, "links": []})
+    slices = {"session_for_sid": [{"qualname": "session_for_sid", "callers_detail": [
+        {"user": "mint_terminal_ticket", "path": "app/routers/terminal.py", "line": 33}]}],
+              "mint_terminal_ticket": [{"qualname": "mint_terminal_ticket", "callers_detail": []}]}
+    monkeypatch.setattr(exo, "graph_slice", lambda names, root=None, target=None: {
+        "symbols": [x for n in names for x in slices.get(n, [])]})
+    out = exo.contract_slice(["session_for_sid"], root="/r", target="host:h")
+    assert [(c["route"], c["via"], c["chain"]) for c in out["contracts"]] == [
+        ("/v1/terminal/tickets", "caller", "mint_terminal_ticket -> session_for_sid")]
+
+
 def test_get_app_names_its_callable_tools_never_a_skeleton_entry():
     import json as _j
     from imperal_mcp.exoskeleton import app_summary
