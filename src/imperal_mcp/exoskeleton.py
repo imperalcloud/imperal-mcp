@@ -60,6 +60,7 @@ class TokenSavingsTracker:
 
 COARSE = "vault graph unavailable: links by name"
 _SYNC_REUSE_S = 3.0      # one tool call's questions share one sync of the workspace
+_FOLDER_ASK_THREADS = 8  # a folder's repositories asked at once (each: its sync check + its question)
 _LOCAL_REFRESH_S = 5.0   # the local index checks the files (stat only) at most this often before it answers
 # a collection (a folder without git: Documents, Downloads) is checked by a walk -- at most once a minute; a repository
 # answers through git (no walk) every _LOCAL_REFRESH_S
@@ -1693,13 +1694,21 @@ class ExoskeletonRuntime:
             self._last_miss = f"{ws} holds no repository the vault graph could answer for"
             return None
         answers, misses, units_by_key = [], [], {}
-        for rel in repos:
+
+        def one(rel: str):
+            # each repository on its own thread: its sync check and its question (live 2026-11-06: 21 repositories
+            # one after another took 78 s); the per-call state (_last_miss) is thread-local
             ans = self._ask(method, path, os.path.join(ws, rel), "local", params=params, body=body)
+            return rel, ans, (self._last_miss if ans is None else "")
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(_FOLDER_ASK_THREADS, len(repos))) as pool:
+            got = list(pool.map(one, repos))
+        for rel, ans, miss in got:
             answers.append((rel, ans))
             if isinstance(ans, dict) and ans.get("repo_key"):
                 units_by_key[str(ans["repo_key"])] = rel
             if ans is None:
-                misses.append(f"{rel}: {self._last_miss}")
+                misses.append(f"{rel}: {miss}")
         for rel in repos:                 # the keys of repositories that did not answer this question too
             try:
                 key = self._repo_keys.get(os.path.join(ws, rel)) if isinstance(self._repo_keys, dict) else None
@@ -1720,6 +1729,10 @@ class ExoskeletonRuntime:
         """Where an answer comes from -- and, for a server's repo, how fresh its copy is: the server's HEAD and the
         copy's commit, and why it is old when it is (never a silent "0 matches" from an old copy)."""
         meta = {"source": "vault graph", "repo_key": ans.get("repo_key"), "synced_at": ans.get("synced_at")}
+        if ans.get("partial"):
+            # a folder: the repositories that did not answer, and why -- an answer from the others is never complete
+            # (live 2026-11-06: the SDK's 502 vanished and the answer said "not a definition in the graph")
+            meta["partial"] = list(ans["partial"])
         fresh = getattr(self, "_fresh", None) or {}
         if fresh and fresh.get("server") and str(ans.get("repo_key") or "") in ("", *self._repo_keys.values()):
             meta["freshness"] = dict(fresh)
@@ -1911,7 +1924,9 @@ class ExoskeletonRuntime:
                        not in found]
             if missing:      # an empty slice is "not in the graph", never a silent ok (MCP audit 2026-10-25)
                 out["not_found"] = missing
-                out["note"] = f"{', '.join(missing)}: not a definition in the code graph of this repo"
+                out["note"] = (f"{', '.join(missing)}: not a definition in the repositories that answered -- "
+                               f"{len(ans['partial'])} did not answer (see partial)" if ans.get("partial") else
+                               f"{', '.join(missing)}: not a definition in the code graph of this repo")
             return out
         return self._remote_unavailable(target, root) or {**self._local_graph_slice(symbols, depth, root), "coarse": COARSE}
 
@@ -1969,7 +1984,10 @@ class ExoskeletonRuntime:
                    **({"summary": ans["summary"]} if ans.get("summary") else {}),
                    **self._vault_meta(ans)}
             if "resolved" in ans and not ans.get("resolved"):
-                out["note"] = f"{', '.join(sym_list)}: not a definition in the graph"     # not "0 dependents"
+                out["note"] = (f"{', '.join(sym_list)}: not a definition in the repositories that answered -- "
+                               f"{len(ans['partial'])} did not answer (see partial): it may be defined there"
+                               if ans.get("partial") else
+                               f"{', '.join(sym_list)}: not a definition in the graph")     # not "0 dependents"
             return out
         return self._remote_unavailable(target, root) or _coarse(self._local_impact_of_change(symbols, root))
 

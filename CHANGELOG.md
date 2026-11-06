@@ -7,6 +7,15 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.5 - 2026-11-06
+
+### Fixed (live check after 0.9.4)
+- A question from a folder asks its repositories at once, eight at a time. With 21 repositories it took 78 s; now
+  about 18 s the first time and about 3 s after.
+- A repository that did not answer is always named (`partial`, with the reason), and its silence is never read as
+  "not a definition". The SDK's timeout had vanished, and the answer said "impact_summary: not a definition in the
+  graph".
+
 ## 0.9.4 - 2026-11-06
 
 ### Fixed

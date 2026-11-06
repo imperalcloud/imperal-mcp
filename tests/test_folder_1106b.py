@@ -52,3 +52,14 @@ def test_grep_from_a_folder_of_repositories(tmp_path: Path):
     out = ExoskeletonRuntime(workspace=str(tmp_path)).grep_code("NEEDLE")
     assert out["status"] == "ok" and sorted(m["path"] for m in out["matches"]) == ["core/sdk/a.py",
                                                                                    "modules/tickets/b.py"]
+
+
+
+def test_a_repository_that_did_not_answer_is_said_and_never_read_as_not_defined(tmp_path: Path, monkeypatch):
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=object())
+    ans = {"ok": True, "repo_key": "a,b", "resolved": False, "data": {"items": []},
+           "partial": ["imperal-sdk: the vault graph could not be asked: 502 memory store unavailable"]}
+    monkeypatch.setattr(exo, "_ask", lambda *a, **k: ans)
+    out = exo.impact_of_change(["impact_summary"])
+    assert out["partial"] == ans["partial"]
+    assert "did not answer" in out["note"] and "not a definition in the graph" not in out["note"]
