@@ -370,28 +370,11 @@ def _repo_above(path: str) -> bool:
 
 
 def _find_repos(ws: str, depth: int = _REPO_DEPTH) -> list[str]:
-    """The repositories (a folder holding ``.git``) inside ``ws``, as ws-relative paths; never under a skipped,
-    hidden or linked folder, never inside another repository."""
-    from webbee.intel.service import skipped_dir
-    out: list[str] = []
-    frontier = [""]
-    for _ in range(depth):
-        nxt: list[str] = []
-        for rel in frontier:
-            here = os.path.join(ws, rel) if rel else ws
-            try:
-                names = sorted(os.listdir(here))
-            except OSError:
-                continue
-            for name in names:
-                full = os.path.join(here, name)
-                if (not rel and name in _UNIT_SKIP_TOP) or os.path.islink(full) or not os.path.isdir(full) \
-                        or skipped_dir(here, name):
-                    continue
-                child = f"{rel}/{name}" if rel else name
-                (out if os.path.isdir(os.path.join(full, ".git")) else nxt).append(child)
-        frontier = nxt
-    return out
+    """The repositories (a folder holding ``.git``) inside ``ws``, as ws-relative paths -- Webbee's one rule
+    (``webbee.intel.service.find_repositories``): never under a skipped, hidden or linked folder, never inside
+    another repository."""
+    from webbee.intel.service import find_repositories
+    return list(find_repositories(ws, depth))
 
 
 def _plan_units(ws: str) -> list[dict]:
@@ -451,13 +434,39 @@ def _in_folder(item, unit: str):
     return it
 
 
-def _merge_folder_answers(answers: list, query: str = "", k: int = 0) -> dict | None:
+def _cross_in_folder(item, unit: str, units_by_key: dict):
+    """A user found in ANOTHER repository through this one's package (the vault's ``origin: package``): its path
+    named from the folder by the repository it lies in; one outside this folder keeps the repository's name."""
+    it = _in_folder(item, unit)               # targets: the answering repository's definitions
+    home = units_by_key.get(str(item.get("repo") or ""))
+    path = str(item.get("path") or "")
+    name = f"{home}/{path}" if home not in (None, "", ".") else (path if home is not None else
+                                                                 f"{item.get('repo_name') or item.get('repo')}/{path}")
+    it.update(id=name, title=name, path=name, repo=home if home is not None else str(item.get("repo_name") or ""))
+    if home is None:
+        it["outside_folder"] = True
+    return it
+
+
+def _merge_folder_answers(answers: list, query: str = "", k: int = 0, units_by_key: dict | None = None) -> dict | None:
     """The vault's answers for each repository of a folder as one answer, or None when none answered.
     A search (``query``) puts exact-name hits first, then takes each repo's ranked list in turn."""
     ok = [(u, a) for u, a in answers if isinstance(a, dict) and a.get("ok", True) is not False]
     if not ok:
         return None
-    lists = [[_in_folder(x, u) for x in ((a.get("data") or {}).get("items") or [])] for u, a in ok]
+    keys = units_by_key or {}
+    lists = []
+    for u, a in ok:
+        lst, seen = [], set()
+        for x in ((a.get("data") or {}).get("items") or []):
+            y = _cross_in_folder(x, u, keys) if isinstance(x, dict) and x.get("origin") == "package" \
+                else _in_folder(x, u)
+            ident = (y.get("id"), y.get("title")) if isinstance(y, dict) else id(y)
+            if ident in seen:
+                continue
+            seen.add(ident)
+            lst.append(y)
+        lists.append(lst)
     if query:
         exact = [x for lst in lists for x in lst if isinstance(x, dict) and str(x.get("title") or "") == query]
         rest = [[x for x in lst if x not in exact] for lst in lists]
@@ -481,7 +490,46 @@ def _merge_folder_answers(answers: list, query: str = "", k: int = 0) -> dict | 
     if any("by_name_count" in a for _u, a in ok):
         out["by_name_count"] = sum(int(a.get("by_name_count") or 0) for _u, a in ok)
     if any("resolved" in a for _u, a in ok):
-        out["resolved"] = any(a.get("resolved") for _u, a in ok)
+        out["resolved"] = [f"{u}/{r}" if u not in ("", ".") else r for u, a in ok
+                           for r in (a.get("resolved") if isinstance(a.get("resolved"), list) else [])] \
+            or any(a.get("resolved") for _u, a in ok)
+    # what each repository's answer says about itself, kept (report 06.11 #2: from the folder root the semantic
+    # arm read null although each repository's search used it)
+    sem = [a.get("semantic") for _u, a in ok if a.get("semantic") is not None]
+    if sem:
+        out["semantic"] = next((x for x in sem if x), sem[0])
+    if query:
+        best = next((x for x in out["data"]["items"] if isinstance(x, dict)), None)
+        if best is not None:
+            out["best_match"] = best.get("title") or best.get("id")
+    sums = [f"{u}: {a['summary']}" for u, a in ok if a.get("summary") and (
+        (a.get("data") or {}).get("items") or a.get("by_name_count") or a.get("resolved"))]
+    if sums:
+        out["summary"] = " | ".join(sums)[:1200]
+    return out
+
+
+_REPO_ID_KEYS = ("repo_key", "repo", "repository", "provider_repo", "user_repo", "src_repo", "dst_repo", "source_id",
+                 "subject_id", "id")
+
+
+def _one_per_contract(entries: list) -> list:
+    """The account's contract catalog names a repository once per key that synced it (the folder synced whole, each
+    repository on its own, an older sync): one entry per contract, the keys that hold it listed (report 06.11 #2:
+    the same pair of endpoints four times, under four keys)."""
+    out, at = [], {}
+    for e in entries or []:
+        if not isinstance(e, dict):
+            continue
+        ident = json.dumps({k: v for k, v in e.items() if k not in _REPO_ID_KEYS and not str(k).endswith("_repo")
+                            and not str(k).endswith("repo_key")}, sort_keys=True, default=str)
+        keys = [str(e.get(k)) for k in ("repo_key", "repo", "provider_repo", "user_repo") if e.get(k)]
+        if ident in at:
+            held = out[at[ident]].setdefault("held_by", [])
+            held += [x for x in keys if x not in held]
+            continue
+        at[ident] = len(out)
+        out.append({**e, **({"held_by": keys} if keys else {})})
     return out
 
 
@@ -1622,14 +1670,24 @@ class ExoskeletonRuntime:
         if not repos:
             self._last_miss = f"{ws} holds no repository the vault graph could answer for"
             return None
-        answers, misses = [], []
+        answers, misses, units_by_key = [], [], {}
         for rel in repos:
             ans = self._ask(method, path, os.path.join(ws, rel), "local", params=params, body=body)
             answers.append((rel, ans))
+            if isinstance(ans, dict) and ans.get("repo_key"):
+                units_by_key[str(ans["repo_key"])] = rel
             if ans is None:
                 misses.append(f"{rel}: {self._last_miss}")
+        for rel in repos:                 # the keys of repositories that did not answer this question too
+            try:
+                key = self._repo_keys.get(os.path.join(ws, rel)) if isinstance(self._repo_keys, dict) else None
+            except Exception:
+                key = None
+            if key:
+                units_by_key.setdefault(str(key), rel)
         q = str((params or {}).get("q") or "")
-        merged = _merge_folder_answers(answers, query=q, k=int((params or {}).get("k") or 0))
+        merged = _merge_folder_answers(answers, query=q, k=int((params or {}).get("k") or 0),
+                                       units_by_key=units_by_key)
         self._fresh = {}
         self._last_miss = "; ".join(misses)[:600] if merged is None else ""
         if merged is not None and misses:
@@ -1667,6 +1725,15 @@ class ExoskeletonRuntime:
         return items[0] if items else None
 
     def repo_profile(self, root: str | None = None, target: str | None = None) -> dict[str, Any]:
+        if (not target or target == "local") and self._is_units_workspace(self.resolve_workspace(root)):
+            # a folder of repositories: each one's profile (report 06.11 #2: only the first -- the gateway -- showed)
+            ans = self._ask("GET", "/v1/memory/code/profile", root, target)
+            profs = list(((ans or {}).get("data") or {}).get("items") or [])
+            if profs:
+                return {"status": "ok", "workspace": self.resolve_workspace(root), "source": "vault graph",
+                        "repositories": [{"repo": p.get("repo"), **{k: p.get(k) for k in _PROFILE_KEYS if k in p}}
+                                         for p in profs],
+                        **({"partial": ans["partial"]} if ans.get("partial") else {})}
         prof = self._vault_profile(root, target)
         if prof is not None:
             return {"status": "ok", "workspace": self.resolve_workspace(root) if not target else root,
@@ -1877,6 +1944,7 @@ class ExoskeletonRuntime:
                    + ([f"+{len(together) - _TOGETHER_SHOWN} more"] if len(together) > _TOGETHER_SHOWN else []),
                    "same_file": ans.get("same_file") or [], "by_name_count": ans.get("by_name_count"),
                    "by_name": ans.get("by_name") or [],      # found only by name (an instance's method), marked
+                   **({"summary": ans["summary"]} if ans.get("summary") else {}),
                    **self._vault_meta(ans)}
             if "resolved" in ans and not ans.get("resolved"):
                 out["note"] = f"{', '.join(sym_list)}: not a definition in the graph"     # not "0 dependents"
@@ -1931,12 +1999,13 @@ class ExoskeletonRuntime:
             try:
                 cat = self._vault("GET", "/v1/memory/code/contracts") or {}
                 q = (query or (sym_list[0] if len(sym_list) == 1 else "")).lower()
-                eps = [e for e in cat.get("endpoints") or [] if not q or q in json.dumps(e).lower()][:k]
+                eps = _one_per_contract([e for e in cat.get("endpoints") or []
+                                         if not q or q in json.dumps(e).lower()])[:k]
                 sl = self.graph_slice(sym_list, root=root, target=target) if sym_list else {"symbols": []}
                 names = [s.split("::")[-1].rsplit(".", 1)[-1].lower() for s in sym_list] + ([q] if q else [])
                 # only the links that touch what was asked (MCP audit 2026-10-25: an unknown symbol got every link)
-                links = [ln for ln in cat.get("links") or [] if not names
-                         or any(n and n in json.dumps(ln).lower() for n in names)][:k]
+                links = _one_per_contract([ln for ln in cat.get("links") or [] if not names
+                                           or any(n and n in json.dumps(ln).lower() for n in names)])[:k]
                 out = {"status": "ok", "workspace": root if target else self.resolve_workspace(root),
                        "contracts": eps, "links": links, "symbols": sl.get("symbols") or [], "source": "vault graph"}
                 if sl.get("not_found"):
@@ -2004,7 +2073,7 @@ class ExoskeletonRuntime:
             return self._grep_out(out, pattern, regex)
         import fnmatch
         ws = self.resolve_workspace(root)
-        if not _is_repository(ws):
+        if not _is_repository(ws) and not self._is_units_workspace(ws):
             # a folder INSIDE a repository is that repository, narrowed to the folder (MCP audit 2026-10-25: root=
             # <repo>/src was refused) -- a folder of no repository is still refused
             up = os.path.dirname(ws)
