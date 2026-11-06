@@ -373,7 +373,29 @@ def _find_repos(ws: str, depth: int = _REPO_DEPTH) -> list[str]:
     """The repositories (a folder holding ``.git``) inside ``ws``, as ws-relative paths -- Webbee's one rule
     (``webbee.intel.service.find_repositories``): never under a skipped, hidden or linked folder, never inside
     another repository."""
-    from webbee.intel.service import find_repositories
+    try:
+        from webbee.intel.service import find_repositories
+    except ImportError:                       # webbee < 0.7.3: the same rule, here
+        from webbee.intel.service import skipped_dir
+        out: list[str] = []
+        frontier = [""]
+        for _ in range(depth):
+            nxt: list[str] = []
+            for rel in frontier:
+                here = os.path.join(ws, rel) if rel else ws
+                try:
+                    names = sorted(os.listdir(here))
+                except OSError:
+                    continue
+                for name in names:
+                    full = os.path.join(here, name)
+                    if (not rel and name in _UNIT_SKIP_TOP) or os.path.islink(full) or not os.path.isdir(full) \
+                            or skipped_dir(here, name):
+                        continue
+                    child = f"{rel}/{name}" if rel else name
+                    (out if os.path.exists(os.path.join(full, ".git")) else nxt).append(child)
+            frontier = nxt
+        return out
     return list(find_repositories(ws, depth))
 
 

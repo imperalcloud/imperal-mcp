@@ -7,6 +7,23 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.3 - 2026-11-06
+
+### Fixed (second 06.11 field report, a folder of nine repositories)
+
+- `impact_of_change` from a folder reaches users in the folder's OTHER repositories, through the package they
+  import. The vault resolves them with the package repository's own resolver, and each user is named by its path
+  from the folder. Before, a change in `core/wpanel-sdk` showed none of the 47 modules that import it.
+- From a folder root:
+  - `search_code` keeps `semantic` and `best_match` (they read null);
+  - `repo_profile` shows every repository (it showed only the first);
+  - `grep_code` searches all of them (it refused with "not a repository");
+  - `contract_slice` lists each contract once, with the keys that hold it (one endpoint pair came back four times).
+- `impact_of_change` passes the vault's one-sentence `summary` through. Zero resolved users beside name matches
+  can no longer read as "no callers".
+- Repositories are found by Webbee's one rule: nested up to four levels, never inside another repository, never in a
+  home folder's system trees.
+
 ## 0.9.2 - 2026-11-06
 
 ### Fixed (06.11 report)
