@@ -7,6 +7,15 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.4 - 2026-11-06
+
+### Fixed
+- The cloud graph found during a live check, vault side:
+  - an impact's second step follows only the definition that calls the symbol, never a file that only changed
+    together with it (depth 2 of a private helper had listed 25 unrelated files);
+  - a package both repositories hold (`tests`) no longer hides the users of the package only the provider holds.
+- Local answers: imperal-sdk 6.5.2 (the same depth rule).
+
 ## 0.9.3 - 2026-11-06
 
 ### Fixed (second 06.11 field report, a folder of nine repositories)

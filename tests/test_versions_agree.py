@@ -38,4 +38,4 @@ def test_the_pins_carry_what_the_frame_needs():
     link resolver for the vault and the clients, a folder of repositories resolved per repository in 6.5.1+."""
     from pathlib import Path
     text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
-    assert "imperal-sdk>=6.5.1" in text and "webbee>=0.7.0" in text and "imperal-sdk[universal-index]>=6.5.1" in text
+    assert "imperal-sdk>=6.5.2" in text and "webbee>=0.7.0" in text and "imperal-sdk[universal-index]>=6.5.2" in text
