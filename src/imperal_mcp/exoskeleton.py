@@ -1297,22 +1297,34 @@ class ExoskeletonRuntime:
         import fnmatch
         from webbee.intel.query import search_code as _search_code
         merged: list = []
+        waiting = []
         for u, svc in self._unit_services(ws):
             if getattr(svc, "index", None) is None:
+                waiting.append(u["root"])
                 continue
             res = _search_code(svc, query, k=k, kind=kind)
             for m in _normalize_search_matches((res.get("data") or {}).get("items", []), svc.root, query, k=k,
                                                kind=kind):
-                m = dict(m)
-                m["path"] = self._in_unit(u, str(m.get("path") or m.get("file") or ""))
-                if path_glob and not fnmatch.fnmatch(m["path"], path_glob):
+                # every path field named from the folder (06.11 report: each hit came twice -- once with the repo's
+                # path, once with the folder's -- because only ``path`` was prefixed)
+                m = _in_folder(dict(m), u["root"])
+                if path_glob and not fnmatch.fnmatch(str(m.get("path") or ""), path_glob):
                     continue
                 merged.append(m)
-        merged.sort(key=lambda m: -float(m.get("score") or 0))
-        matches = merged[:k]
+        seen_ids: set = set()
+        uniq = []
+        for m in merged:
+            key = str(m.get("id") or m.get("path") or "")
+            if key in seen_ids:
+                continue
+            seen_ids.add(key)
+            uniq.append(m)
+        # an exact name first, whatever its score (06.11 report: exact hits carry no score and sank below fuzzy ones)
+        uniq.sort(key=lambda m: (str(m.get("title") or "") != query, -float(m.get("score") or 0)))
+        matches = uniq[:k]
         self._record_read("search_code", returned_text=json.dumps(matches, ensure_ascii=False))
-        return {"status": "ok", "workspace": ws, "query": query, "matches": matches, "total": len(matches),
-                "units": self.units_progress(ws), "source": "local index (units)"}
+        return {**self._units_status(waiting), "workspace": ws, "query": query, "matches": matches,
+                "total": len(matches), "units": self.units_progress(ws), "source": "local index (units)"}
 
     def _units_profile(self, ws: str) -> dict:
         files = 0
@@ -1330,18 +1342,28 @@ class ExoskeletonRuntime:
     def _units_impact(self, ws: str, sym_list: list) -> dict:
         from webbee.intel.query import impact_of_change as _impact_of_change
         items: list = []
+        by_name: list = []
+        waiting = []
         for u, svc in self._unit_services(ws):
             if getattr(svc, "index", None) is None:
+                waiting.append(u["root"])
                 continue
-            for it in (_impact_of_change(svc, sym_list).get("data") or {}).get("items", []):
-                it = dict(it)
-                for key in ("id", "title"):
-                    if it.get(key):
-                        it[key] = self._in_unit(u, str(it[key]))
-                items.append(it)
-        return {"status": "ok", "workspace": ws, "queried_symbols": sym_list,
+            res = _impact_of_change(svc, sym_list)
+            items += [_in_folder(dict(it), u["root"]) for it in (res.get("data") or {}).get("items", [])]
+            by_name += [_in_folder(dict(b), u["root"]) for b in res.get("by_name") or []]
+        return {**self._units_status(waiting), "workspace": ws, "queried_symbols": sym_list,
                 "dependent_files": [it.get("title") or it.get("id") for it in items], "items": items,
-                "units": self.units_progress(ws), "source": "local index (units)"}
+                "by_name": by_name, "units": self.units_progress(ws), "source": "local index (units)"}
+
+    @staticmethod
+    def _units_status(waiting: list) -> dict:
+        """``status: ok``, or ``partial`` naming the units whose index is not built yet -- never an empty "ok" that
+        reads as "nothing found / nobody affected" (06.11 report: mid-rebuild, impact said ok + [])."""
+        if not waiting:
+            return {"status": "ok"}
+        return {"status": "partial", "not_ready": waiting,
+                "note": f"{len(waiting)} unit(s) still indexing ({', '.join(waiting[:5])}) -- their answer is missing, "
+                        "ask again shortly"}
 
     def _get_shadow(self, root: str | None = None) -> tuple[str, Any]:
         _ensure_webbee_importable()

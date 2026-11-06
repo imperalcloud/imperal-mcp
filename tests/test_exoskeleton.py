@@ -1173,3 +1173,36 @@ def test_folder_with_no_repo_answering_falls_back_marked(tmp_path: Path):
     _keyed_vault(exo, {"k1": {"ok": False, "content": "not synced"}, "k2": {"ok": False, "content": "not synced"}}, [])
     out = exo.impact_of_change(["f"])
     assert out["coarse"] == "vault graph unavailable: links by name"
+
+
+def _fake_units(exo, ws, monkeypatch, ready_items: list):
+    """Two units of a folder: alpha indexed (its search answers ``ready_items``), beta still indexing."""
+    import types
+    ready = types.SimpleNamespace(index=object(), root=str(ws / "alpha"), graph=None)
+    waiting = types.SimpleNamespace(index=None, root=str(ws / "beta"), graph=None)
+    monkeypatch.setattr(exo, "_unit_services", lambda _ws: [({"root": "alpha", "kind": "repo"}, ready),
+                                                           ({"root": "beta", "kind": "repo"}, waiting)])
+    monkeypatch.setattr(exo, "units_progress", lambda _ws=None: [])
+    import webbee.intel.query as q
+    monkeypatch.setattr(q, "search_code", lambda svc, query, k=10, kind=None: {"data": {"items": ready_items}})
+    monkeypatch.setattr(q, "impact_of_change", lambda svc, syms: {"data": {"items": []}, "by_name": []})
+
+
+def test_units_not_ready_say_partial_never_empty_ok(tmp_path: Path, monkeypatch):
+    ws = _folder_with_two_repos(tmp_path)
+    exo = ExoskeletonRuntime(workspace=str(ws))
+    _fake_units(exo, ws, monkeypatch, [])
+    out = exo._units_impact(str(ws), ["f"])
+    assert out["status"] == "partial" and out["not_ready"] == ["beta"] and out["items"] == []
+
+
+def test_units_search_one_path_per_hit_exact_first(tmp_path: Path, monkeypatch):
+    ws = _folder_with_two_repos(tmp_path)
+    exo = ExoskeletonRuntime(workspace=str(ws))
+    hit = {"id": "m.py::f", "title": "f", "kind": "function", "path": "m.py", "file": "m.py", "subtitle": "m.py:1"}
+    fuzzy = {"id": "m.py::f_long", "title": "f_long", "kind": "function", "path": "m.py", "score": 0.9}
+    _fake_units(exo, ws, monkeypatch, [fuzzy, hit, dict(hit)])
+    out = exo._units_search(str(ws), "f", 10, None, None)
+    ids = [m["id"] for m in out["matches"]]
+    assert ids == ["alpha/m.py::f", "alpha/m.py::f_long"]                    # exact first, no duplicate
+    assert out["matches"][0]["file"] == "alpha/m.py" and out["matches"][0]["subtitle"] == "alpha/m.py:1"
