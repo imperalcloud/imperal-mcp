@@ -7,6 +7,14 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.7 - 2026-11-06
+
+### Fixed (live check of 0.9.6)
+- From a folder of repositories, `search_code` / `orient` follow one order: an exact name first, then the vault's own
+  `score`. Before, each repository's list was taken in turn (0.0448, 0.0333, 0.0474 ...).
+- From a folder, `impact_of_change` keeps the vault's `changed_together` and its count. Before, the merge lost them:
+  the summary said 7 files and the list was empty.
+
 ## 0.9.6 - 2026-11-06
 
 ### Fixed (field report 06.11 #3: a folder of nine repositories on Linux)
