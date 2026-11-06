@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -1117,3 +1118,58 @@ def test_a_file_that_becomes_gitignored_leaves_the_index_unread(sample_workspace
     exo._get_indexer()
     assert not any("local_keys.py" in p for p in svc.index.files)
     assert not any("local_keys.py" in r for r in read)                       # out of the index, never re-read
+
+
+# 2026-11-06 report: from a folder that holds repositories (no .git at its root) every graph question fell to the
+# name-only local index -- now the vault answers for each repository, merged.
+
+def _folder_with_two_repos(tmp_path: Path) -> Path:
+    for name in ("alpha", "beta"):
+        (tmp_path / name / ".git").mkdir(parents=True)
+        (tmp_path / name / "m.py").write_text("def f():\n    return 1\n")
+    return tmp_path
+
+
+def _keyed_vault(exo, answers_by_key: dict, calls: list):
+    exo._repo_key = lambda root, target: {"alpha": "k1", "beta": "k2"}[os.path.basename(str(root))]
+
+    def vault(method, path, params=None, body=None):
+        key = (body or params or {})["repo_key"]
+        calls.append((path, key))
+        return answers_by_key[key]
+    exo._vault = vault
+
+
+def test_folder_impact_asks_each_repo_and_names_paths_from_the_folder(tmp_path: Path):
+    ws = _folder_with_two_repos(tmp_path)
+    exo = ExoskeletonRuntime(workspace=str(ws), client=object())
+    calls: list = []
+    _keyed_vault(exo, {
+        "k1": {"ok": True, "repo_key": "k1", "data": {"items": [{"id": "src/u.py", "title": "src/u.py", "kind": "file",
+                                                                 "depth": 1}]}, "resolved": True},
+        "k2": {"ok": True, "repo_key": "k2", "data": {"items": []}, "resolved": False}}, calls)
+    out = exo.impact_of_change(["f"])
+    assert sorted(k for _p, k in calls) == ["k1", "k2"]
+    assert out["dependent_files"] == ["alpha/src/u.py"] and out["source"] == "vault graph" and "coarse" not in out
+
+
+def test_folder_search_puts_the_exact_name_first(tmp_path: Path):
+    ws = _folder_with_two_repos(tmp_path)
+    exo = ExoskeletonRuntime(workspace=str(ws), client=object())
+    calls: list = []
+    _keyed_vault(exo, {
+        "k1": {"ok": True, "repo_key": "k1", "data": {"items": [
+            {"id": "a.py::f_helper", "title": "f_helper", "path": "a.py"}]}},
+        "k2": {"ok": True, "repo_key": "k2", "data": {"items": [
+            {"id": "m.py::f", "title": "f", "path": "m.py", "subtitle": "m.py:1"}]}}}, calls)
+    out = exo.search_code("f", k=5)
+    assert out["matches"][0]["id"] == "beta/m.py::f" and out["matches"][0]["subtitle"] == "beta/m.py:1"
+    assert out["matches"][1]["path"] == "alpha/a.py" and "coarse" not in out
+
+
+def test_folder_with_no_repo_answering_falls_back_marked(tmp_path: Path):
+    ws = _folder_with_two_repos(tmp_path)
+    exo = ExoskeletonRuntime(workspace=str(ws), client=object())
+    _keyed_vault(exo, {"k1": {"ok": False, "content": "not synced"}, "k2": {"ok": False, "content": "not synced"}}, [])
+    out = exo.impact_of_change(["f"])
+    assert out["coarse"] == "vault graph unavailable: links by name"

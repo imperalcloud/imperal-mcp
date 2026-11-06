@@ -332,8 +332,9 @@ def _view_hit(text: str, nodes: list, name: str) -> dict | None:
 
 
 def _coarse(out: dict) -> dict:
-    """A local answer marked as the coarse fallback -- except a units answer, which says its own source."""
-    return out if "units" in out else {**out, "coarse": COARSE}
+    """A local answer marked as the coarse fallback. A units answer too (2026-11-06 report: from a folder the same
+    name-only links came without the mark and read as exact) -- it keeps its own ``source`` beside the mark."""
+    return {**out, "coarse": COARSE}
 
 
 class NotARepositoryError(ValueError):
@@ -416,6 +417,72 @@ def _plan_units(ws: str) -> list[dict]:
             not any(os.path.islink(os.path.join(ws, *parts[:i])) for i in range(1, len(parts) + 1)):
         units.append({"root": _ICLOUD_DRIVE, "kind": "collection", "exclude": ()})   # never through a link
     return units
+
+
+def _in_folder(item, unit: str):
+    """One vault answer item with its paths named from the folder (``<repo>/<path>``) -- the same rule as the
+    kernel's ``meta_tools._in_unit`` (2026-11-06)."""
+    import re as _re
+    if not isinstance(item, dict) or unit in ("", "."):
+        return item
+    it = dict(item)
+
+    def pre(v):
+        v = str(v)
+        return v if (not v or v.startswith("/") or v.startswith(unit + "/")) else f"{unit}/{v}"
+    for key in ("path", "file", "uses"):
+        if isinstance(it.get(key), str) and it[key]:
+            it[key] = pre(it[key])
+    for key in ("id", "subtitle"):
+        v = it.get(key)
+        if isinstance(v, str) and v:
+            sep = "::" if "::" in v else (":" if _re.match(r"^[^:\s]+:\d", v) else "")
+            if sep:
+                head, tail = v.split(sep, 1)
+                it[key] = pre(head) + sep + tail
+            elif "/" in v or "." in v.rsplit("/", 1)[-1]:
+                it[key] = pre(v)
+    if it.get("kind") == "file" and isinstance(it.get("title"), str):
+        it["title"] = pre(it["title"])
+    if isinstance(it.get("targets"), list):
+        it["targets"] = [pre(t.split("::", 1)[0]) + ("::" + t.split("::", 1)[1] if "::" in t else "")
+                         if isinstance(t, str) else t for t in it["targets"]]
+    it["repo"] = unit
+    return it
+
+
+def _merge_folder_answers(answers: list, query: str = "", k: int = 0) -> dict | None:
+    """The vault's answers for each repository of a folder as one answer, or None when none answered.
+    A search (``query``) puts exact-name hits first, then takes each repo's ranked list in turn."""
+    ok = [(u, a) for u, a in answers if isinstance(a, dict) and a.get("ok", True) is not False]
+    if not ok:
+        return None
+    lists = [[_in_folder(x, u) for x in ((a.get("data") or {}).get("items") or [])] for u, a in ok]
+    if query:
+        exact = [x for lst in lists for x in lst if isinstance(x, dict) and str(x.get("title") or "") == query]
+        rest = [[x for x in lst if x not in exact] for lst in lists]
+        items = list(exact)
+        for i in range(max((len(r) for r in rest), default=0)):
+            items += [r[i] for r in rest if i < len(r)]
+        if k:
+            items = items[:max(k, len(exact))]
+    else:
+        items = [x for lst in lists for x in lst]
+    out = {"ok": True, "data": {"items": items, "total": len(items),
+                                "has_more": any((a.get("data") or {}).get("has_more") for _u, a in ok)},
+           "repo_key": ",".join(str(a.get("repo_key") or "") for _u, a in ok),
+           "synced_at": min((a.get("synced_at") for _u, a in ok if a.get("synced_at")), default=None),
+           "repos": {u: ("answered" if isinstance(a, dict) and a.get("ok", True) is not False else "no answer")
+                     for u, a in answers}}
+    for key in ("same_file", "by_name"):
+        vals = [_in_folder(x, u) for u, a in ok for x in (a.get(key) or [])]
+        if vals or any(key in a for _u, a in ok):
+            out[key] = vals
+    if any("by_name_count" in a for _u, a in ok):
+        out["by_name_count"] = sum(int(a.get("by_name_count") or 0) for _u, a in ok)
+    if any("resolved" in a for _u, a in ok):
+        out["resolved"] = any(a.get("resolved") for _u, a in ok)
+    return out
 
 
 class OutsideWorkspaceError(ValueError):
@@ -1500,6 +1567,8 @@ class ExoskeletonRuntime:
         if self._client is None:
             self._last_miss = "this session has no Imperal client"
             return None
+        if (not target or target == "local") and self._is_units_workspace(self.resolve_workspace(root)):
+            return self._ask_folder(method, path, root, params=params, body=body)
         self._fresh, self._last_miss = {}, ""
         try:
             key = self._repo_key(root, target)
@@ -1520,6 +1589,30 @@ class ExoskeletonRuntime:
             self._last_miss = f"the vault graph answered: {str((ans or {}).get('content') or ans)[:300]}"
             return None
         return ans
+
+    def _ask_folder(self, method: str, path: str, root: str | None, *, params: dict | None = None,
+                    body: dict | None = None) -> dict | None:
+        """A folder that is no repository (2026-11-06 report: from such a folder every graph question fell to the
+        name-only local index): the vault is asked for each repository in it, the answers merged -- paths named from
+        the folder, exact names first in a search. None when no repository of it answered (the reasons kept)."""
+        ws = self.resolve_workspace(root)
+        repos = [u["root"] for u in _plan_units(ws) if u["kind"] == "repo"]
+        if not repos:
+            self._last_miss = f"{ws} holds no repository the vault graph could answer for"
+            return None
+        answers, misses = [], []
+        for rel in repos:
+            ans = self._ask(method, path, os.path.join(ws, rel), "local", params=params, body=body)
+            answers.append((rel, ans))
+            if ans is None:
+                misses.append(f"{rel}: {self._last_miss}")
+        q = str((params or {}).get("q") or "")
+        merged = _merge_folder_answers(answers, query=q, k=int((params or {}).get("k") or 0))
+        self._fresh = {}
+        self._last_miss = "; ".join(misses)[:600] if merged is None else ""
+        if merged is not None and misses:
+            merged["partial"] = misses[:20]
+        return merged
 
     def _vault_meta(self, ans: dict) -> dict[str, Any]:
         """Where an answer comes from -- and, for a server's repo, how fresh its copy is: the server's HEAD and the
