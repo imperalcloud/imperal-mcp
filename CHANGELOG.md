@@ -7,6 +7,18 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.6 - 2026-11-06
+
+### Fixed (field report 06.11 #3: a folder of nine repositories on Linux)
+- `contract_slice` reaches the endpoints a change touches through their handlers' calls, each with its call chain
+  (`mint_terminal_ticket -> session_for_sid`). Before, endpoints matched only their own text, so a symbol called by a
+  handler got `contracts: []`. It uses `imperal_sdk.code_links.contracts_reached`, the same algorithm as the kernel.
+- `graph_slice` and `contract_slice` answer at a folder of repositories. Before, they raised "is not a repository ...
+  pass root=" while impact and search answered.
+- `impact_of_change` reads the vault's own `changed_together` (files that only changed together in git history,
+  apart from the users) with its whole count.
+- Needs imperal-sdk 6.5.3.
+
 ## 0.9.5 - 2026-11-06
 
 ### Fixed (live check after 0.9.4)
