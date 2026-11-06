@@ -35,7 +35,8 @@ def test_the_pins_carry_what_the_frame_needs():
     """Final review I6: SECRET_PATTERNS is in imperal-sdk 6.2.0+, the snapshot's changed paths in webbee 0.5.9+;
     2026-11-04: the string-aware tsconfig reader and the parallel SFTP sync are in imperal-sdk 6.3.8+; the universal
     index (any folder, every file kind) is in imperal-sdk 6.4.1+ with its readers and webbee 0.7.0+; 2026-11-06: one
-    link resolver for the vault and the clients, a folder of repositories resolved per repository in 6.5.1+."""
+    link resolver for the vault and the clients, a folder of repositories resolved per repository in 6.5.1+; contract_slice
+    through callers (code_links.contracts_reached) in 6.5.3+."""
     from pathlib import Path
     text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
-    assert "imperal-sdk>=6.5.2" in text and "webbee>=0.7.0" in text and "imperal-sdk[universal-index]>=6.5.2" in text
+    assert "imperal-sdk>=6.5.3" in text and "webbee>=0.7.0" in text and "imperal-sdk[universal-index]>=6.5.3" in text
