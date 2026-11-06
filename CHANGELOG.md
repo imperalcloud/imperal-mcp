@@ -7,6 +7,15 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.8 - 2026-11-06
+
+### Fixed (live retest of 0.9.7)
+- `contract_slice` with symbols lists only the endpoints they reach (a handler, or a caller of it) plus the matches of
+  an explicit `query`. A symbol's own name no longer matches as a substring: `_code` had pulled in
+  `POST /v1/auth/cli/codes` of `mint_code`.
+- With the vault of the same day, one file's callers are each a user. `_code` now shows its 8 calling handlers
+  and the 8 endpoints they serve; before it showed one.
+
 ## 0.9.7 - 2026-11-06
 
 ### Fixed (live check of 0.9.6)
