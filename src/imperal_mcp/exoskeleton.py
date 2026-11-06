@@ -1971,7 +1971,7 @@ class ExoskeletonRuntime:
         sym_list = [symbols] if isinstance(symbols, str) else list(symbols or [])
         sl = self._units_graph_slice(ws, sym_list) if sym_list else {"symbols": []}
         endpoints, matched, waiting = [], [], []
-        q = (query or (sym_list[0] if len(sym_list) == 1 else "")).lower()
+        q = str(query or "").lower()               # a symbol reaches its endpoints by its callers, never by substring
         for u, svc in self._unit_services(ws):
             if getattr(svc, "index", None) is None:
                 waiting.append(u["root"])
@@ -2112,14 +2112,17 @@ class ExoskeletonRuntime:
         if self._client is not None:
             try:
                 cat = self._vault("GET", "/v1/memory/code/contracts") or {}
-                q = (query or (sym_list[0] if len(sym_list) == 1 else "")).lower()
+                # the text match is the asked query's only: a symbol's own name as a substring matched other handlers
+                # (live 2026-11-06: _code -> POST /v1/auth/cli/codes of mint_code); a symbol reaches its endpoints
+                # through contracts_reached (its handler, or a caller of it)
+                q = str(query or "").lower()
                 sl = self.graph_slice(sym_list, root=root, target=target) if sym_list else {"symbols": []}
                 # the endpoints the asked symbols reach: a handler that is one, or calls one through its callers
                 # (field report 06.11 #3: session_for_sid answered nothing -- the endpoint's handler calls it)
                 reached = self._contracts_reached(sym_list, cat.get("endpoints") or [], sl, root, target)
                 seen = {(e.get("repo"), e.get("method"), e.get("route"), e.get("handler")) for e in reached}
                 eps = reached + _one_per_contract([e for e in cat.get("endpoints") or []
-                                                   if (not q or q in json.dumps(e).lower())
+                                                   if ((q and q in json.dumps(e).lower()) or (not q and not sym_list))
                                                    and (e.get("repo"), e.get("method"), e.get("route"),
                                                         e.get("handler")) not in seen])
                 eps = eps[:k]

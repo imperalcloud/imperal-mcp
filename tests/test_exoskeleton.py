@@ -1031,9 +1031,10 @@ def test_contract_slice_reaches_an_endpoint_whose_handler_calls_the_symbol(tmp_p
               "mint_terminal_ticket": [{"qualname": "mint_terminal_ticket", "callers_detail": []}]}
     monkeypatch.setattr(exo, "graph_slice", lambda names, root=None, target=None: {
         "symbols": [x for n in names for x in slices.get(n, [])]})
+    eps.append({"repo": "gw", "method": "POST", "route": "/v1/auth/cli/codes", "handler": "mint_session_for_sid"})
     out = exo.contract_slice(["session_for_sid"], root="/r", target="host:h")
     assert [(c["route"], c["via"], c["chain"]) for c in out["contracts"]] == [
-        ("/v1/terminal/tickets", "caller", "mint_terminal_ticket -> session_for_sid")]
+        ("/v1/terminal/tickets", "caller", "mint_terminal_ticket -> session_for_sid")]   # no substring match
 
 
 def test_a_folder_merge_orders_by_score_and_keeps_changed_together():
