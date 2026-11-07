@@ -7,6 +7,20 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.9 - 2026-11-07
+
+### Fixed (Ignat's report 06.11 on 0.7.11 / 0.9.8)
+- `impact_of_change` lists the code of every repository before any test: a cut answer drops tests, never the users
+  in other repositories (they were cut behind the library's own tests).
+- A cut answer never halves the query's own echo (`queried_symbols`), and `<list>_total` is the real count ("65
+  changed together", not the 9 lines shown).
+- A file found again through an overlapping repository key is listed once (5 callers were counted twice).
+- A folder's `synced_at` is its newest sync, not the oldest untouched repository's.
+
+### Security
+- A password given on a command line (`mysql -p'...'`, `-pX`, `sshpass -p ...`) is redacted before anything leaves
+  this machine (as the kernel does since a54e2f72).
+
 ## 0.9.8 - 2026-11-06
 
 ### Fixed (live retest of 0.9.7)
