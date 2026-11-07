@@ -588,3 +588,17 @@ def test_a_session_with_no_withheld_output_says_so_with_an_empty_list(spool):
     H.run_hook("post-tool", CLAUDE_BASH, gateway=gw)
     H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "1 passed"}, gateway=gw)
     assert [b for n, b in gw.calls if n == "final"][0]["withheld_seen"] == []
+
+
+CLAUDE_FAILED_BASH = {"session_id": "s1", "transcript_path": "/t", "cwd": "/w", "hook_event_name": "PostToolUseFailure",
+                      "tool_name": "Bash", "tool_input": {"command": "pytest -q; grep -c FAILED log"},
+                      "tool_use_id": "u9", "error": "Exit code 1\n===== 235 passed, 2 skipped in 158.21s =====\n0",
+                      "is_interrupt": False}
+
+
+def test_a_failed_call_is_recorded_with_its_output_and_as_failed():
+    # live 2026-11-07: Claude Code sends a non-zero exit as PostToolUseFailure (no tool_response, the text in error);
+    # the hook dropped it, and the kernel called "235 passed" unseen
+    [item] = H.tool_items(CLAUDE_FAILED_BASH)
+    assert item["tool"] == "bash" and item["ok"] is False
+    assert "235 passed, 2 skipped" in item["text"] and item["args"]["command"].startswith("pytest -q")

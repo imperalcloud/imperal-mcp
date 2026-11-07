@@ -7,6 +7,16 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.11 - 2026-11-07
+
+### Fixed
+- Claude Code: a failed tool call (a command with a non-zero exit, a tool error) is its own hook event,
+  `PostToolUseFailure`; the hook never listened to it, so no failed test run, no `grep` that found nothing, no command
+  ending in an error reached the kernel -- and its claim check called their output unseen. `imperal-mcp setup` now
+  registers the hook for it; the call is recorded with its output (`error`: "Exit code N" and what it printed) as
+  failed. Run `imperal-mcp setup` once after upgrading.
+- `server.json` and the Claude Code plugin files carry the package version again (0.9.10 left them at 0.9.9).
+
 ## 0.9.10 - 2026-11-07
 
 ### Fixed (the owner: the stop hook must always be right by the facts)

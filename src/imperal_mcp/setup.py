@@ -185,7 +185,10 @@ def _claude(home: str, remove: bool) -> dict:
     _save(cfg, _set_server(data, "mcpServers", remove))
     st["hooks"] = _set_hooks(st.get("hooks"), {"SessionStart": ("session-start", None),
                                                "UserPromptSubmit": ("prompt", None),
-                                               "PostToolUse": ("post-tool", "*"), "Stop": ("stop", None)},
+                                               "PostToolUse": ("post-tool", "*"),
+                                               # a failed call (a non-zero exit, a tool error) is its own event: without
+                                               # it no failed test run reached the kernel (live 2026-11-07)
+                                               "PostToolUseFailure": ("post-tool", "*"), "Stop": ("stop", None)},
                              "claude", remove)
     if not st["hooks"]:
         st.pop("hooks")

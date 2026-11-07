@@ -25,7 +25,9 @@ def test_setup_writes_server_hooks_and_protocol_for_each_shell(home):
     # Claude Code
     assert json.loads((home / ".claude.json").read_text())["mcpServers"]["imperal"]["command"] == "/opt/imperal-mcp"
     ch = json.loads((home / ".claude" / "settings.json").read_text())["hooks"]
-    assert set(ch) == {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"}
+    # a failed call (a non-zero exit) is its own event in Claude Code: without it the kernel never saw a failed test run
+    assert set(ch) == {"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop"}
+    assert any("hook post-tool" in h["command"] for g in ch["PostToolUseFailure"] for h in g["hooks"])
     assert "/opt/imperal-mcp hook prompt" in _hooks_commands(ch)[1] or any("hook prompt" in c for c in _hooks_commands(ch))
     assert EXOSKELETON_INSTRUCTIONS.strip()[:60] in (home / ".claude" / "CLAUDE.md").read_text()
     # Codex

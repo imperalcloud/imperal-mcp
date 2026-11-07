@@ -306,7 +306,11 @@ def mcp_session(me: str, shell_session: str) -> str:
 
 def normalize(payload: dict) -> dict:
     """Antigravity CLI names its fields its own way (``conversationId``, ``workspacePaths``, ``toolCall``): the same
-    payload in the common words (the other shells already use them)."""
+    payload in the common words (the other shells already use them). Claude Code's failed call
+    (``PostToolUseFailure``) has no ``tool_response``: its text (for a command, "Exit code N" and the output) is in
+    ``error`` -- the same call, failed."""
+    if payload.get("hook_event_name") == "PostToolUseFailure" and "tool_response" not in payload:
+        return {**payload, "tool_response": {"output": str(payload.get("error") or ""), "error": True}}
     if "conversationId" not in payload:
         return payload
     call = payload.get("toolCall") if isinstance(payload.get("toolCall"), dict) else {}
