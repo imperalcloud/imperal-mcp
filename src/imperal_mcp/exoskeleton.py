@@ -471,6 +471,20 @@ def _cross_in_folder(item, unit: str, units_by_key: dict):
     return it
 
 
+def _one_path_each(items: list) -> list:
+    """A file found again through an overlapping repository key (``outside_folder``, its path named from a parent
+    folder) is the same file as its in-folder copy -- kept once (Ignat 06.11 §4.4: 5 callers counted twice)."""
+    inside = [str(x.get("path") or "") for x in items if isinstance(x, dict) and not x.get("outside_folder")]
+    out = []
+    for x in items:
+        p = str(x.get("path") or "") if isinstance(x, dict) else ""
+        if isinstance(x, dict) and x.get("outside_folder") and any(p.endswith("/" + q) or q.endswith("/" + p)
+                                                                   for q in inside if q):
+            continue
+        out.append(x)
+    return out
+
+
 def _merge_folder_answers(answers: list, query: str = "", k: int = 0, units_by_key: dict | None = None) -> dict | None:
     """The vault's answers for each repository of a folder as one answer, or None when none answered.
     A search (``query``) puts exact-name hits first, then takes each repo's ranked list in turn."""
@@ -505,11 +519,13 @@ def _merge_folder_answers(answers: list, query: str = "", k: int = 0, units_by_k
         if k:
             items = items[:max(k, len(exact))]
     else:
-        items = [x for lst in lists for x in lst]
+        items = _one_path_each(code_first([x for lst in lists for x in lst]))
     out = {"ok": True, "data": {"items": items, "total": len(items),
                                 "has_more": any((a.get("data") or {}).get("has_more") for _u, a in ok)},
            "repo_key": ",".join(str(a.get("repo_key") or "") for _u, a in ok),
-           "synced_at": min((a.get("synced_at") for _u, a in ok if a.get("synced_at")), default=None),
+           # the folder's newest sync: a repository the client did not change is not resynced (its time stays) --
+           # the oldest one read as a frozen map (Ignat 06.11 §5.2)
+           "synced_at": max((a.get("synced_at") for _u, a in ok if a.get("synced_at")), default=None),
            "repos": {u: ("answered" if isinstance(a, dict) and a.get("ok", True) is not False else "no answer")
                      for u, a in answers}}
     for key in ("same_file", "by_name"):
@@ -702,6 +718,23 @@ def app_summary(app: Any) -> Any:
             "tools": tools, "note": "full=true gives the raw record with the whole manifest"}
 
 
+# lists a cut must never touch: the query's own echo (Ignat 06.11 §4.1: "queried_symbols_shown: 1 / 2")
+_KEEP_WHOLE = frozenset({"queried_symbols"})
+_MORE = re.compile(r"^\+(\d+) more$")
+
+
+def _real_total(v: list) -> int:
+    """A display list's real length: one that ends with "+N more" stands for N more than it shows."""
+    m = _MORE.match(str(v[-1])) if v else None
+    return (len(v) - 1 + int(m.group(1))) if m else len(v)
+
+
+def code_first(items: list) -> list:
+    """The code of every repository first, then the tests (stable) -- what the impact tool promises; a cut then
+    drops tests, never another repository's code (Ignat 06.11 §4.1)."""
+    return sorted(items or [], key=lambda it: str((it or {}).get("group") or "") == "tests")
+
+
 def bounded(obj: Any, limit: int = ANSWER_CHARS) -> Any:
     """A tool's answer within ``limit`` characters: its longest lists cut (each keeps its first entries and says how
     many there were), long strings clipped; ``full=true`` on the tool gives everything."""
@@ -710,7 +743,7 @@ def bounded(obj: Any, limit: int = ANSWER_CHARS) -> Any:
     if not isinstance(obj, dict) or size(obj) <= limit:
         return obj
     out = dict(obj)
-    lists = {k: list(v) for k, v in out.items() if isinstance(v, list) and len(v) > 1}
+    lists = {k: list(v) for k, v in out.items() if isinstance(v, list) and len(v) > 1 and k not in _KEEP_WHOLE}
     data = out.get("data") if isinstance(out.get("data"), dict) else None
     if data is not None and isinstance(data.get("items"), list):
         out["data"] = data = dict(data)
@@ -728,7 +761,7 @@ def bounded(obj: Any, limit: int = ANSWER_CHARS) -> Any:
             out[k] = lists[k][: shown[k]]
     for k, v in lists.items():
         if shown[k] < len(v):
-            out[f"{k}_shown"], out[f"{k}_total"] = shown[k], len(v)
+            out[f"{k}_shown"], out[f"{k}_total"] = shown[k], _real_total(v)
     if size(out) > limit:          # still too big: the long strings give way
         out = {k: (v[:2000] + "…" if isinstance(v, str) and len(v) > 2000 else v) for k, v in out.items()}
     out["truncated"] = f"bounded to {limit} chars -- pass full=true for everything"
@@ -2045,6 +2078,7 @@ class ExoskeletonRuntime:
             items = [it for it in items if int(it.get("depth") or 1) <= 1
                      or str(it.get("uses") or "") in near
                      or any(str(t).split("::", 1)[0] in near for t in it.get("targets") or [])]
+            items = code_first(items)
             files = [it.get("title") or it.get("id") for it in items]
             self._record_read("impact_of_change", returned_text=json.dumps(items, ensure_ascii=False))
             out = {"status": "ok", "workspace": root if target else self.resolve_workspace(root),
