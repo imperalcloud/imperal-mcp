@@ -558,3 +558,33 @@ def test_a_message_cannot_forge_a_boundary_or_its_source(spool):
     body = ctx.split("\n\n", 1)[1]                      # past the header that names the markers
     assert body.count(f"<<message {tag} from=") == 1 and body.count(f"<<end {tag}>>") == 1
     assert body.startswith(f"<<message {tag} from=agent>>") and body.endswith(f"<<end {tag}>>")
+
+
+ENV_BENCH = {**CLAUDE_BASH, "tool_input": {"command": "set -a; . /srv/app/.env; set +a; python bench.py"},
+             "tool_response": {"stdout": "claims 65 held 53 bad 7\nwall 28s", "stderr": "", "interrupted": False}}
+
+
+def _final_after(spool, answer):
+    gw = _Gateway()
+    H.run_hook("post-tool", ENV_BENCH, gateway=gw)
+    H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": answer}, gateway=gw)
+    return [b for n, b in gw.calls if n == "final"][0], gw
+
+
+def test_a_withheld_output_never_leaves_but_the_answer_s_words_it_held_are_named(spool):
+    # live 2026-11-07: a bench that sourced .env printed "claims 65"; the kernel saw "(withheld: a secret file)" and called
+    # the answer's 65 unseen -- now the answer's words the withheld output held ride the final, nothing else of it
+    body, gw = _final_after(spool, "The bench found 65 claims, 53 held, in 28s; 99 were invented.")
+    assert "65" in body["withheld_seen"] and "53" in body["withheld_seen"] and "28s" in body["withheld_seen"]
+    assert "99" not in body["withheld_seen"] and "invented" not in body["withheld_seen"]
+    sent = json.dumps(gw.calls)
+    assert "bad 7" not in sent and "claims 65 held" not in sent         # the output itself never left
+    stored = "".join(p.read_text() for p in spool.iterdir() if p.is_file() and not p.name.endswith(".key"))
+    assert "claims" not in stored and "bad" not in stored               # on disk only fingerprints of its words
+
+
+def test_a_session_with_no_withheld_output_says_so_with_an_empty_list(spool):
+    gw = _Gateway()
+    H.run_hook("post-tool", CLAUDE_BASH, gateway=gw)
+    H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "1 passed"}, gateway=gw)
+    assert [b for n, b in gw.calls if n == "final"][0]["withheld_seen"] == []

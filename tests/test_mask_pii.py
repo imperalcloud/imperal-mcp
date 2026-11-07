@@ -74,3 +74,17 @@ def test_a_uuid_is_never_masked_as_a_phone():
     s = "target ssh:0f09e3ed-78eb-4c78-9681-2e4e1254bd84 and call +1 (555) 013-2468"
     out = apply_pii_redaction(s, PIIRedactionLevel.MASK_PII)
     assert "ssh:0f09e3ed-78eb-4c78-9681-2e4e1254bd84" in out and "<PHONE>" in out and "555" not in out
+
+
+def test_a_date_time_and_a_hash_are_never_masked_as_a_phone():
+    # live 2026-11-07: `git show -s --format="%h %ci"` reached the kernel as "573a3a<PHONE>:15:12 +0000" -- every git
+    # date of the session lost, so the kernel's claim check could not find a commit time the agent truly read
+    for s in ["573a3a63 2026-11-07 12:15:12 +0000", "2026-11-07 12:15:12 +0000", "2026-11-07T12:15:12Z",
+              "at 2026-11-07 12:15", "commit e8913896 at 2026-11-07 13:47"]:
+        assert apply_pii_redaction(s, PIIRedactionLevel.MASK_PII) == s, s
+
+
+def test_a_phone_beside_a_date_time_is_still_masked():
+    out = apply_pii_redaction("2026-11-07 12:15:12 call +1 (555) 123-4567", PIIRedactionLevel.MASK_PII)
+    assert out.startswith("2026-11-07 12:15:12 ") and "555" not in out and "<PHONE>" in out
+    assert apply_pii_redaction("call 380991234567", PIIRedactionLevel.MASK_PII) == "call <PHONE>"

@@ -23,11 +23,12 @@ import re
 import time
 from typing import Any, Callable
 
-from .exoskeleton import EXOSKELETON_INSTRUCTIONS, exchange_item
+from .exoskeleton import EXOSKELETON_INSTRUCTIONS, WITHHELD_SEEN_MAX, exchange_item, withheld_words, word_marks
 
 EXCHANGE_MAX, MEMORY_MAX, MEMORY_CHARS = 60, 20, 4000     # the gateway's bounds on one step
 REQUEST_CHARS = 300_000                                   # one step's exchange, well under Temporal's 2 MB payload
 SPOOL_ITEMS_MAX, SPOOL_MEMORY_MAX = 200, 50               # what a spool keeps while nothing can be sent
+WITHHELD_MARKS_MAX = 50_000      # word fingerprints of a session's withheld outputs kept (16 hex each: under 1 MB)
 # Claude Code keeps 10 000 characters of a hook's context (more becomes a file the model is not told to read):
 # the frame a hook gives fits, DECISION first (final review I1)
 HOOK_FRAME_CHARS = 9500
@@ -151,6 +152,29 @@ class Spool:
             except FileNotFoundError:
                 newer = ""
             self._write(items, memory, newer)
+
+    def add_withheld_marks(self, marks) -> None:
+        """Fingerprints of the words of an output withheld as a secret file's (``exoskeleton.word_marks``): the
+        session's own, newest kept -- the output itself is never on disk."""
+        if not marks:
+            return
+        with _locked(self.base):
+            path = self.base + ".withheld"
+            try:
+                with open(path, encoding="utf-8") as f:
+                    old = f.read().split()
+            except FileNotFoundError:
+                old = []
+            keep = list(dict.fromkeys(old + sorted(marks)))[-WITHHELD_MARKS_MAX:]
+            with _private(path, "w") as f:
+                f.write("\n".join(keep) + "\n")
+
+    def withheld_marks(self) -> set:
+        try:
+            with open(self.base + ".withheld", encoding="utf-8") as f:
+                return set(f.read().split())
+        except OSError:
+            return set()
 
     def state(self) -> dict:
         try:
@@ -577,7 +601,12 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
     announce(str(payload.get("cwd") or os.getcwd()), shell_session)
     spool = Spool(shell_session)
     if event == "post-tool":
-        spool.add_items(tool_items(payload))
+        items = tool_items(payload)
+        spool.add_items(items)
+        if any(str(i.get("text") or "").startswith("(withheld") for i in items):
+            # the output stays on this machine; fingerprints of its words let the final name the answer's words it held
+            raw, _ok = _text_of(normalize(payload).get("tool_response"))
+            spool.add_withheld_marks(word_marks(withheld_words(raw)))
         said = _inbox(payload, spool, gateway, every=INBOX_EVERY_S)
         return context_output(payload, said) if said else None
     if event == "session-start":
@@ -653,9 +682,15 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
                                                            "exchange": items, "memory": memory,
                                                            "repo_key": str(st.get("repo_key") or ""),
                                                            "session_repo": repo}))
-        got = gateway.final({"session_id": sess, "final_text": _clean(final)[:20000], "step": int(st.get("step") or 0),
+        sent_text = _clean(final)[:20000]
+        marks = spool.withheld_marks()
+        # the answer's own words (as sent) that an output withheld as a secret file held: the kernel cannot see those
+        # outputs, and without this it called such a word unseen (live 2026-11-07); [] -- none held any
+        words = withheld_words(sent_text) if marks else []
+        seen = [w for w, m in zip(words, word_marks(words)) if m in marks]
+        got = gateway.final({"session_id": sess, "final_text": sent_text, "step": int(st.get("step") or 0),
                              "repo_key": str(st.get("repo_key") or ""), "session_repo": repo,
-                             "tools": list(MCP_TOOL_NAMES)})
+                             "tools": list(MCP_TOOL_NAMES), "withheld_seen": seen[:WITHHELD_SEEN_MAX]})
         if (got or {}).get("hold") and str(got.get("reason") or "").strip():
             return block_output(payload, str(got["reason"]))
         opened = [str(x) for x in (got or {}).get("open") or [] if str(x).strip()]

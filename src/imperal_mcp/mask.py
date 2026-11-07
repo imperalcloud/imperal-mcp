@@ -42,6 +42,11 @@ def _phone_or_keep(m: "re.Match[str]") -> str:
 
 
 _UUID_RE = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+# a date-time ("2026-11-07 12:15:12", git %ci, every log line) and a hex id with a letter (a commit "573a3a63") are
+# never a phone: live 2026-11-07 "573a3a63 2026-11-07 12:15:12" reached the kernel as "573a3a<PHONE>:15:12" -- every
+# git date of a session lost, and the kernel's claim check called a commit time the agent truly read invented
+_NEVER_PII_RE = re.compile(r"\b(?:19|20)\d\d-[01]\d-[0-3]\d[ T][0-2]\d:[0-5]\d(?::[0-5]\d(?:\.\d+)?)?\b"
+                           r"|\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b")
 _SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 # every 13-19 digit run is masked (fail-closed: this is the client's own layer, the gateway checks again) -- except
 # the exact date-time stamp shape: "rel-20261025-094552" went into the vault as "rel-<CARD>" (live 2026-10-25)
@@ -76,7 +81,7 @@ def apply_pii_redaction(text: str | None, level: PIIRedactionLevel) -> str | Non
     def _shield(m: "re.Match[str]") -> str:
         ids.append(m.group(0))
         return f"\x00UUID{len(ids) - 1}\x00"
-    masked = _UUID_RE.sub(_shield, text)
+    masked = _NEVER_PII_RE.sub(_shield, _UUID_RE.sub(_shield, text))
     masked = _SSN_RE.sub("<SSN>", masked)
     masked = _CC_RE.sub(_card_or_keep, masked)
     masked = _EMAIL_RE.sub("<EMAIL>", masked)

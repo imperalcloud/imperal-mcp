@@ -804,6 +804,34 @@ def _withhold_key() -> bytes:
     return key
 
 
+_WORD_EDGE = "\"'`.,;:!?()[]{}<>«»“”"
+_WORD_NUM = re.compile(r"\d+(?:\.\d+)?")
+WITHHELD_SEEN_MAX = 400          # the gateway's bound on the words a final may report
+
+
+def withheld_words(text: str) -> list:
+    """The words of a text as the kernel's claim check reads them: each whitespace word trimmed of its punctuation, its
+    parts (``65–72`` -> 65, 72; ``a=b``), its numbers (``28s`` -> 28) -- the same cut for an output and an answer."""
+    out: list = []
+    for w in str(text or "").split():
+        w = w.strip(_WORD_EDGE)
+        if not w:
+            continue
+        out.append(w)
+        out += [p for p in re.split(r"[^\w.\-]+", w) if p.strip(".-")]
+        out += _WORD_NUM.findall(w)
+    return list(dict.fromkeys(x[:120] for x in out if x.strip(".-")))
+
+
+def word_marks(words) -> list:
+    """Keyed fingerprints of words, one per word in order (this machine's own key): what a withheld output held,
+    never what it said."""
+    import hashlib
+    import hmac
+    key = _withhold_key()
+    return [hmac.new(key, str(w).encode(), hashlib.sha256).hexdigest()[:16] for w in words]
+
+
 def _only_safe_args(a: dict, cmd: str) -> dict:
     """A call on a secret file keeps only where it acted (its path, target) -- never a value that may hold it."""
     out = {k: v for k, v in a.items() if k in _SAFE_ARGS}

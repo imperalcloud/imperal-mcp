@@ -7,6 +7,17 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.10 - 2026-11-07
+
+### Fixed (the owner: the stop hook must always be right by the facts)
+- A date-time (`2026-11-07 12:15:12`, every `git log --format=%ci` and log line) and a hex id with a letter (a commit
+  `573a3a63`) are never masked as a phone: they reached the kernel as `<PHONE>:15:12`, and the kernel's claim check
+  called a commit time the agent truly read invented. Phones are still masked.
+- An output withheld as a secret file's (a command that sources `.env`) still never leaves the machine; the hook keeps
+  keyed fingerprints of its words (this machine's own key, the words never on disk) and the final names the answer's
+  own words they held (`withheld_seen`), so the kernel no longer calls them unseen. Needs the gateway and kernel of the
+  same day; an older gateway drops the field and the kernel calls such claims unproven, never false.
+
 ## 0.9.9 - 2026-11-07
 
 ### Fixed (Ignat's report 06.11 on 0.7.11 / 0.9.8)
