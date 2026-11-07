@@ -70,11 +70,20 @@ _SECRET_RE = re.compile(
 _SECRET_URI_USER_ONLY_RE = re.compile(r"(?i)(?<![a-z0-9+.-])([a-z][a-z0-9+.-]{0,31}://)[^\s/@:]{8,}@")
 
 
+# a password given on a command line (kernel a54e2f72, Ignat 11-06): the MySQL clients take it glued to ``-p``,
+# sshpass after ``-p``; ``mkdir -p`` / ``ssh -p 22`` stay
+_CLI_MYSQL_PW_RE = re.compile(r"(\b(?:mysql|mysqldump|mariadb|mariadb-dump|mysqladmin|mysqlimport|mysqlcheck)\b"
+                              r"[^|;&\n]*?\s-p)(?:'[^'\n]*'|\"[^\"\n]*\"|[^\s'\"]+)")
+_CLI_SSHPASS_RE = re.compile(r"(\bsshpass\s+-p\s*)(?:'[^'\n]*'|\"[^\"\n]*\"|\S+)")
+
+
 def scrub_secrets(text: str, code: bool = False) -> str:
     """Redact common secret/token shapes. ``code``: the text is source code -- a secret-named key keeps an unquoted
     value (an identifier, a type, an expression)."""
     s = str(text or "")
     s = _mask_pem(s)
+    s = _CLI_MYSQL_PW_RE.sub(lambda m: m.group(1) + "[REDACTED]", s)
+    s = _CLI_SSHPASS_RE.sub(lambda m: m.group(1) + "[REDACTED]", s)
     s = _SECRET_URI_USERINFO_RE.sub("[REDACTED]@", s)
     s = _SECRET_URI_USER_ONLY_RE.sub(lambda m: m.group(1) + "[REDACTED]@", s)
     s = _SECRET_AUTH_HEADER_RE.sub(lambda m: f"{m.group(1)}[REDACTED]", s)
