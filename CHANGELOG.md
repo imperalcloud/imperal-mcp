@@ -7,6 +7,13 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.13 - 2026-11-08
+
+### Fixed
+- The secret scrub hid a decimal measure under a key named token (`'token': 11.24`, seconds to a first token): the
+  kernel then held the number as seen in no output. A key that is secret only by "token" keeps a decimal fraction;
+  whole numbers (a one-time code) and every credential shape stay redacted.
+
 ## 0.9.12 - 2026-11-08
 
 ### Fixed
