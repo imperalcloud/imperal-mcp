@@ -48,7 +48,18 @@ def _keyword_redact(m: "re.Match", code: bool = False) -> str:
         # source code (``code``): only a quoted literal is a secret -- ``password: str``, ``token=self.token``
         # stay as written, so an edit copied from the frame still matches the file
         return m.group(0)
+    if _TOKEN_ONLY_RE.search(key) and not _OTHER_SECRET_RE.search(key) and _DECIMAL_RE.match(val):
+        # a key that is secret only by "token" holding a decimal fraction is a measure (a timing, a share), never a
+        # credential -- live 2026-11-08: "'token': 11.24" (seconds to the first token) was redacted and the kernel
+        # held the number as unseen. Whole numbers stay redacted: a one-time code is a number.
+        return m.group(0)
     return f"{key}{sep}[REDACTED]"
+
+
+_TOKEN_ONLY_RE = re.compile(r"(?i)token(?![a-z])")
+_OTHER_SECRET_RE = re.compile(r"(?i)api[_-]?key|private[_-]?key|access[_-]?key|secret|passw(?:or)?d|authorization|bearer"
+                              r"|credentials?|(?<![a-z])pass(?![a-z])|(?<![a-z])pwd(?![a-z])")
+_DECIMAL_RE = re.compile(r"^\d+\.\d+[,;)}\]]*$")
 _SECRET_BEARER_RE = re.compile(r"(?i)bearer\s+[A-Za-z0-9._-]{10,}")
 _SECRET_JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
 _SECRET_PREFIXED_KEY_RE = re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{10,}")
