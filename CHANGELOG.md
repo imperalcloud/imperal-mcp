@@ -7,6 +7,14 @@ are documented here. Depends on `imperal-sdk`.
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.12 - 2026-11-08
+
+### Fixed
+- Claude Code: a subagent's tool call (the hook payload carries `agent_id`) went into the parent session's spool, so the
+  kernel took it as the parent's own work; one became the parent's "last check" at its final. A subagent's calls now
+  go to their own spool and, at the parent's stop, to their own kernel session. Needs kernel rel-20261108-015609
+  (the stop hook sees every output the task got).
+
 ## 0.9.11 - 2026-11-07
 
 ### Fixed
