@@ -483,6 +483,37 @@ def _session_of(payload: dict, gateway) -> tuple[Spool, str, str]:
     return spool, shell_session, mcp_session(me, shell_session) if me else ""
 
 
+AGENT_MARK = ".agent."
+
+
+def _agent_session(shell_session: str, agent: str) -> str:
+    """The spool and kernel session of one subagent of a shell session."""
+    return f"{shell_session}{AGENT_MARK}{agent}"
+
+
+def _flush_agents(shell_session: str, me: str, gateway) -> None:
+    """Each subagent spool of this shell session goes to the kernel as its own session (the parent's stays clean)."""
+    if not me:
+        return
+    prefix = _safe(shell_session + AGENT_MARK)
+    try:
+        names = [n[:-len(".jsonl")] for n in os.listdir(spool_dir())
+                 if n.startswith(prefix) and n.endswith(".jsonl")]
+    except OSError:
+        return
+    for name in names:
+        sub = Spool(name)
+        agent = name[len(prefix):]
+        step = int(sub.state().get("step") or 0) + 1
+        try:
+            _send(sub, lambda items, memory: gateway.record({
+                "session_id": mcp_session(me, _agent_session(shell_session, agent)), "step": step,
+                "goal": "", "items": [], "exchange": items, "memory": memory, "repo_key": "", "session_repo": ""}))
+            sub.update(step=step)
+        except Exception:
+            continue
+
+
 def _bounded_items(items: list) -> list:
     """The newest items that fit one request (count and characters)."""
     out, size = [], 0
@@ -604,6 +635,12 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
         return None
     announce(str(payload.get("cwd") or os.getcwd()), shell_session)
     spool = Spool(shell_session)
+    agent = str(payload.get("agent_id") or "")
+    if event == "post-tool" and agent:
+        # a subagent's call (Claude Code sends agent_id only for those): its own spool and kernel session, never the
+        # parent's task facts (live 2026-11-08: a subagent's grep became the parent's "last check" at the final)
+        Spool(_agent_session(shell_session, agent)).add_items(tool_items(payload))
+        return None
     if event == "post-tool":
         items = tool_items(payload)
         spool.add_items(items)
@@ -686,6 +723,7 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
                                                            "exchange": items, "memory": memory,
                                                            "repo_key": str(st.get("repo_key") or ""),
                                                            "session_repo": repo}))
+        _flush_agents(shell_session, str(spool.state().get("me") or ""), gateway)
         sent_text = _clean(final)[:20000]
         marks = spool.withheld_marks()
         # the answer's own words (as sent) that an output withheld as a secret file held: the kernel cannot see those

@@ -602,3 +602,20 @@ def test_a_failed_call_is_recorded_with_its_output_and_as_failed():
     [item] = H.tool_items(CLAUDE_FAILED_BASH)
     assert item["tool"] == "bash" and item["ok"] is False
     assert "235 passed, 2 skipped" in item["text"] and item["args"]["command"].startswith("pytest -q")
+
+
+def test_a_subagent_s_calls_go_to_its_own_session_never_the_parent_s(spool):
+    # live 2026-11-08: a subagent's grep became the parent's "last check" at the parent's final
+    gw = _Gateway()
+    H.run_hook("post-tool", {**CLAUDE_BASH, "agent_id": "a1",
+                             "tool_input": {"command": "grep -n x sub.py"}}, gateway=gw)
+    H.run_hook("post-tool", CLAUDE_BASH, gateway=gw)
+    H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "done"}, gateway=gw)
+    records = [b for n, b in gw.calls if n == "record"]
+    parent = H.mcp_session("imp_u_ME", "s1")
+    mine = [r for r in records if r["session_id"] == parent]
+    theirs = [r for r in records if r["session_id"] != parent]
+    assert [i["args"]["command"] for r in mine for i in r["exchange"]] == ["pytest -q"]
+    assert len(theirs) == 1 and theirs[0]["session_id"] == H.mcp_session("imp_u_ME", "s1.agent.a1")
+    assert [i["args"]["command"] for i in theirs[0]["exchange"]] == ["grep -n x sub.py"]
+    assert [n for n, _ in gw.calls if n != "me"][-1] == "final"
