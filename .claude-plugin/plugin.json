@@ -1,6 +1,6 @@
 {
   "name": "imperal-mcp",
-  "description": "The exoskeleton for your AI coding agent: memory across sessions, a live code map, undo for every change and a hallucination check. MCP server for Claude Code, Cursor, Codex, Gemini CLI.",
+  "description": "The exoskeleton for your AI coding agent: memory across sessions, a live code map, undo for every change and a fact check of every name, file and number it states. MCP server for Claude Code, Cursor, Codex, Gemini CLI.",
   "version": "0.9.15",
   "author": {
     "name": "Imperal, Inc.",

@@ -2,7 +2,7 @@
 name = "imperal-mcp"
 version = "0.9.15"
 readme = "README.md"
-description = "The exoskeleton for your AI coding agent: memory across sessions, a live code map, undo for every change and a hallucination check. MCP server for Claude Code, Cursor, Codex, Gemini CLI."
+description = "The exoskeleton for your AI coding agent: memory across sessions, a live code map, undo for every change and a fact check of every name, file and number it states. MCP server for Claude Code, Cursor, Codex, Gemini CLI."
 requires-python = ">=3.7"
 license = { text = "GPL-3.0-only" }
 authors = [{ name = "Valentin Scerbacov", email = "valentin@imperal.io" }, { name = "Imperal, Inc." }]

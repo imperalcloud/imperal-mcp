@@ -38,6 +38,8 @@ kernel, vault and extensions of the same day.
   estimate (4 characters each); answers with no local file behind them (a server's) are counted apart, never as a
   saving. Live on this repository: 4 calls, 2 files, 192 798 characters a whole read against 11 450 returned (94.1%).
 - A hook test that flaked about 1 run in 10 (a hex fingerprint can hold the letters b-a-d).
+- The listings and README say "a fact check of every name, file and number it states" instead of "a hallucination
+  check": the check matches what the agent states against what it read and ran, not every kind of model error.
 
 ## 0.9.14 - 2026-11-13
 

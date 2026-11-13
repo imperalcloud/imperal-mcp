@@ -10,7 +10,7 @@
 [![Protocol: MCP](https://img.shields.io/badge/MCP-Stdio%20Server-10a37f)](https://modelcontextprotocol.io)
 
 **Stop babysitting your AI.** Put it in an exoskeleton: it remembers everything, sees your whole codebase, can undo any
-change and can't fake a result - or hallucinate one past you. Fewer wasted tokens, fewer broken builds. Works with **Claude Code, Cursor, OpenAI Codex, Gemini CLI,
+change and can't fake a result - or invent one past you. Fewer wasted tokens, fewer broken builds. Works with **Claude Code, Cursor, OpenAI Codex, Gemini CLI,
 Windsurf, Claude Desktop, Cline and Goose**.
 
 ```bash
@@ -20,7 +20,7 @@ pipx install "imperal-mcp[code]" && imperal-mcp login && imperal-mcp setup
 Keep the quotes: zsh (the macOS default) reads `[code]` as a file pattern without them. No pipx yet? `uv tool install
 "imperal-mcp[code]"` does the same, or see [Quick start](#quick-start).
 
-The code tools work offline, no account needed. Memory across sessions, the kernel's frame and the hallucination
+The code tools work offline, no account needed. Memory across sessions, the kernel's frame and the fact
 check run on an [Imperal Cloud](https://panel.imperal.io) account (`imperal-mcp login`, or let your agent call the
 `login` tool: it shows you a link and a code) - sign-up is free, plans and credits:
 [imperal.io/pricing](https://imperal.io/pricing).
@@ -50,7 +50,7 @@ AI coding agents are brilliant - and work blind:
 | Reads whole files to find one function | **X-ray vision** - a live map of your code: it reads the 28 lines it needs, not 2,000 |
 | Edits blind | **Knows the blast radius** - every caller and file a change reaches, *before* the edit |
 | Leaves broken experiments behind | **A safety net** - invisible checkpoints; any change undone in one call, your `.git` untouched |
-| Invents functions, files and results | **Hallucination check** - every name, file and result it states is matched against what it really read and ran |
+| Invents functions, files and results | **Fact check** - every name, file and number it states is matched against what it really read and ran |
 | Says "done" when it isn't | **A referee** - a task closes only with proof the kernel saw: a diff, a check that passed, a finding with sources |
 | Works alone | **A team** - sees your other agents working right now and talks to them |
 
@@ -78,7 +78,7 @@ WITH the exoskeleton
 
 ---
 
-## Hallucinations: caught before they reach you
+## Made-up names, files and numbers: caught before they reach you
 
 You can't trust a sentence just because it sounds sure. So the exoskeleton doesn't trust the model's words - it
 checks them against the record of what actually happened in this task.
@@ -384,7 +384,7 @@ memory, history, messaging - is free.
 
 **Does it work without the cloud?**
 The code map, symbol reads, blast radius, syntax checks and checkpoints run fully offline. Memory across sessions,
-the kernel's frame and the hallucination check need your Imperal Cloud account.
+the kernel's frame and the fact check need your Imperal Cloud account.
 
 **How is this different from an MCP server that searches code?**
 Search tells your agent where things are. The exoskeleton also remembers what it did, knows what a change will break,
