@@ -21,8 +21,9 @@ Keep the quotes: zsh (the macOS default) reads `[code]` as a file pattern withou
 "imperal-mcp[code]"` does the same, or see [Quick start](#quick-start).
 
 The code tools work offline, no account needed. Memory across sessions, the kernel's frame and the hallucination
-check run on an [Imperal Cloud](https://panel.imperal.io) account (`imperal-mcp login`) - sign-up is free, plans
-and credits: [imperal.io/pricing](https://imperal.io/pricing).
+check run on an [Imperal Cloud](https://panel.imperal.io) account (`imperal-mcp login`, or let your agent call the
+`login` tool: it shows you a link and a code) - sign-up is free, plans and credits:
+[imperal.io/pricing](https://imperal.io/pricing).
 
 ---
 
@@ -180,6 +181,22 @@ claude mcp add imperal -- imperal-mcp
 }
 ```
 
+**Nothing installed, through uv** (what the [MCP Registry](https://registry.modelcontextprotocol.io) entry runs):
+
+```json
+{
+  "mcpServers": {
+    "imperal": {
+      "command": "uvx",
+      "args": ["--with", "imperal-mcp[code]", "imperal-mcp"],
+      "env": { "IMPERAL_WORKSPACE": "/absolute/path/to/your/repo" }
+    }
+  }
+}
+```
+
+Keep `--with imperal-mcp[code]`: without it the code tools answer with what to install.
+
 **Any other MCP stdio client:** run `imperal-mcp` with `IMPERAL_WORKSPACE` set to your repository root.
 
 </details>
@@ -217,12 +234,13 @@ claude mcp add imperal -- imperal-mcp
 | `post-tool` | Every call and its result go to the vault; edits are syntax-checked |
 | `stop` | The final answer is checked against the facts; open plan items are named |
 
-### Tool catalog (34 tools, 4 resources, 1 prompt)
+### Tool catalog (35 tools, 4 resources, 1 prompt)
 
 **Kernel & task** (Imperal Cloud)
 
 | Tool | What it does |
 | :--- | :--- |
+| `login(again?)` | Sign in from inside the agent: it gets a link and a short code to show you, you approve in any browser |
 | `frame(root?, target?)` | The kernel's step frame - task, proofs, code around the focus, reach of the change, world, path |
 | `task(goal, items?)` | Declare the request and the plan; items close only by a measured proof |
 | `state_lens(section?, focus?, conversation?)` | What the kernel holds, by section (law, plan, reality, memory, conversation, path) - yours or another live session's |

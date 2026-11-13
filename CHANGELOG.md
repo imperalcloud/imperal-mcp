@@ -1,11 +1,33 @@
 # Changelog
 
-All notable changes to **`imperal-mcp`** — the local stdio MCP server that lets any
-LLM client (Claude Code, Codex, Cursor) build and deploy a declarative Imperal app —
-are documented here. Depends on `imperal-sdk`.
+All notable changes to **`imperal-mcp`** - the exoskeleton for your AI coding agent: memory across sessions,
+a live code map, undo for every change and a hallucination check, as a local stdio MCP server for any agent
+(and Imperal apps built and run from it) - are documented here. Depends on `imperal-sdk`.
 
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
+
+## 0.9.14 - 2026-11-13
+
+A new agent's first minutes, measured on a fresh install from the MCP Registry with no account.
+
+### Fixed
+- The MCP Registry and the Claude Code plugin files described the 0.2 package ("build and deploy Imperal IR apps"):
+  the version moved on every release, the words never. They now say what PyPI says, and a test holds them together.
+- The registry's install (`uvx imperal-mcp`) has no `[code]` extra, so every code tool failed; orient answered a bare
+  "No module named 'webbee'". The registry entry now runs `uvx --with imperal-mcp[code] imperal-mcp`, and a code tool
+  started without the extra says what to install (pipx, uv tool, or `--with` for uvx) instead of a raw import error.
+  The extra stays optional: webbee's own environment carries imperal-mcp without it.
+
+### Added
+- `login` tool: an agent signs its user in itself. The first call gives a link and a short code to show the user, who
+  approves in any browser; the device grant keeps polling in the background and the next call says whether it is done.
+  No restart: the client reads the saved credentials on each request. Every "not logged in" now points at it.
+
+### Changed
+- The tool list opens with the code and memory tools; the eight Imperal-app tools come last.
+- The protocol every session gets is 2 279 characters instead of 3 706: the same loop (frame first, proofs,
+  learned/expect/need), plainer words, no command tone.
 
 ## 0.9.13 - 2026-11-08
 

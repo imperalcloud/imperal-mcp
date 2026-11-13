@@ -254,100 +254,19 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         import asyncio
         exo.loop = asyncio.get_running_loop()
         full = bool(kwargs.pop("full", False))
-        out = await asyncio.to_thread(fn, **kwargs)
+        try:
+            out = await asyncio.to_thread(fn, **kwargs)
+        except ImportError as exc:
+            # live 2026-11-13: the registry's `uvx imperal-mcp` lists every code tool; without the [code] extra
+            # orient answered a bare "No module named 'webbee'" -- each code tool now says what to install
+            from .exoskeleton import MISSING_CODE_DEPENDENCY_MESSAGE, missing_code_extra
+            if not missing_code_extra(exc):
+                raise
+            out = {"ok": False, "status": "error", "error": MISSING_CODE_DEPENDENCY_MESSAGE}
         if fn.__name__ in _LIST_TOOLS and not full:      # a list answer stays within the model's reach (Task 8)
             from .exoskeleton import bounded
             out = bounded(out)
         return _recorded(fn.__name__, out, **kwargs) if fn.__name__ not in ("frame", "task", "lens") else out
-
-    @mcp.tool(
-        title="Validate IR",
-        annotations=ToolAnnotations(readOnlyHint=True),
-    )
-    def validate_ir(app_ir: dict) -> dict:
-        """Validate an app.ir.json locally (envelope + every declarative step)."""
-        return _validate_ir(app_ir)
-
-    @mcp.tool(
-        title="Smoke-test IR",
-        annotations=ToolAnnotations(readOnlyHint=True),
-    )
-    async def smoke_ir(app_ir: dict, function: str, args: dict | None = None) -> dict:
-        """Run one function of an app.ir.json in an ISOLATED store and report {ok,result,trace}."""
-        return await client.smoke_ir(app_ir, function, args or {})
-
-    @mcp.tool(
-        title="Deploy IR",
-        annotations=ToolAnnotations(destructiveHint=True),
-    )
-    async def deploy_ir(app_ir: dict, app_id: str) -> dict:
-        """Deploy an app.ir.json into the caller's account (creates the app record if needed)."""
-        display = (app_ir.get("app", {}) or {}).get("id", app_id)
-        await client.ensure_app(app_id, display)
-        return await deploy_ir_logic(client, app_ir, app_id)
-
-    @mcp.tool(
-        title="List Apps",
-        annotations=ToolAnnotations(readOnlyHint=True),
-    )
-    async def list_apps() -> Any:
-        """List the caller's developer apps (PII-masked)."""
-        return defensive_scrub(await client.list_apps())
-
-    @mcp.tool(
-        title="Get App",
-        annotations=ToolAnnotations(readOnlyHint=True),
-    )
-    async def get_app(app_id: str, full: bool = False) -> Any:
-        """One app: what it is and its callable tools (name, action_type, what it does) -- the run_read_tool /
-        run_write_tool ``function`` names; full=true gives the raw record with the whole manifest (PII-masked)."""
-        got = defensive_scrub(await client.get_app(app_id))
-        return got if full else app_summary(got)
-
-    @mcp.tool(
-        title="Run Read Tool",
-        annotations=ToolAnnotations(readOnlyHint=True),
-    )
-    async def run_read_tool(app_id: str, function: str = "", args: dict | None = None, tool: str = "") -> Any:
-        """Run a READ-only tool of a deployed app (refuses write/destructive). ``function`` is the tool's name as
-        get_app lists it (``tool`` is taken as the same)."""
-        if not (function or tool):
-            return {"ok": False, "error": "name the app's tool: function=<a name get_app lists>"}
-        return await run_read_tool_logic(client, app_id, function or tool, args or {})
-
-    @mcp.tool(
-        title="Run Write Tool",
-        annotations=ToolAnnotations(destructiveHint=True),
-    )
-    async def run_write_tool(app_id: str, function: str = "", args: dict | None = None, ctx: Context = None,
-                             tool: str = "") -> Any:
-        """Run a WRITE or DESTRUCTIVE tool of a deployed app. Money tools always go
-        through out-of-band panel approval (never terminal consent or autopilot):
-        re-run this tool after approving in the panel to complete. Write runs
-        directly; destructive requires human consent (elicitation) or session
-        autopilot; read tools are refused (use run_read_tool)."""
-        if not (function or tool):
-            return {"ok": False, "error": "name the app's tool: function=<a name get_app lists>"}
-        return await run_write_tool_logic(client, ctx, app_id, function or tool, args or {}, _AUTOPILOT)
-
-    @mcp.tool(
-        title="Upload Local File",
-        annotations=ToolAnnotations(destructiveHint=False),
-    )
-    async def upload_file(path: str, name: str | None = None) -> Any:
-        """Send a file from THIS machine into Imperal and get its ids back.
-
-        Read the file straight off disk -- never paste its bytes into a tool
-        call, that is truncated long before it reaches the gateway.
-
-        Returns {file_id, document_id, filename, size_bytes, status}. To then
-        PLACE that file into any extension (a task attachment, an envelope, a
-        post), call run_write_tool with the sink's own file argument set to
-        {"document_id": <document_id>}: the gateway swaps the reference for the
-        real bytes on the way in, so the file never travels through this
-        conversation.
-        """
-        return defensive_scrub(await client.upload_file(path, name=name))
 
     # ── Exoskeleton: Local Code Intelligence & AST Surgery ──────────────────
 
@@ -552,6 +471,20 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         """Return measured characters and lines returned vs. full-file baseline in this session."""
         return exo.token_savings()
 
+    from .auth import AgentLogin
+    agent_login = AgentLogin()
+    mcp._agent_login = agent_login      # tests swap the grant
+
+    @mcp.tool(
+        title="Sign In to Imperal",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
+    )
+    async def login(again: bool = False) -> dict:
+        """Sign in for the memory tools (recall_context, remember_fact, frame, ...); the code tools need no account.
+        Returns a link and a short code: show both to the user, who approves in any browser. Call it again to see
+        whether the sign-in is done. again=true starts a new sign-in over an expired session."""
+        return await agent_login(again=again)
+
     @mcp.tool(
         title="Recall Cross-Surface Cloud Memory",
         annotations=ToolAnnotations(readOnlyHint=True),
@@ -622,6 +555,98 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
                 },
             )
         )
+
+    # ── Imperal apps: build, deploy and run (listed after the code and memory tools: what a new agent sees
+    #    first is what it came for -- live 2026-11-13 the list opened with eight IR-app tools) ──────────
+
+    @mcp.tool(
+        title="Validate IR",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    def validate_ir(app_ir: dict) -> dict:
+        """Validate an app.ir.json locally (envelope + every declarative step)."""
+        return _validate_ir(app_ir)
+
+    @mcp.tool(
+        title="Smoke-test IR",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    async def smoke_ir(app_ir: dict, function: str, args: dict | None = None) -> dict:
+        """Run one function of an app.ir.json in an ISOLATED store and report {ok,result,trace}."""
+        return await client.smoke_ir(app_ir, function, args or {})
+
+    @mcp.tool(
+        title="Deploy IR",
+        annotations=ToolAnnotations(destructiveHint=True),
+    )
+    async def deploy_ir(app_ir: dict, app_id: str) -> dict:
+        """Deploy an app.ir.json into the caller's account (creates the app record if needed)."""
+        display = (app_ir.get("app", {}) or {}).get("id", app_id)
+        await client.ensure_app(app_id, display)
+        return await deploy_ir_logic(client, app_ir, app_id)
+
+    @mcp.tool(
+        title="List Apps",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    async def list_apps() -> Any:
+        """List the caller's developer apps (PII-masked)."""
+        return defensive_scrub(await client.list_apps())
+
+    @mcp.tool(
+        title="Get App",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    async def get_app(app_id: str, full: bool = False) -> Any:
+        """One app: what it is and its callable tools (name, action_type, what it does) -- the run_read_tool /
+        run_write_tool ``function`` names; full=true gives the raw record with the whole manifest (PII-masked)."""
+        got = defensive_scrub(await client.get_app(app_id))
+        return got if full else app_summary(got)
+
+    @mcp.tool(
+        title="Run Read Tool",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    async def run_read_tool(app_id: str, function: str = "", args: dict | None = None, tool: str = "") -> Any:
+        """Run a READ-only tool of a deployed app (refuses write/destructive). ``function`` is the tool's name as
+        get_app lists it (``tool`` is taken as the same)."""
+        if not (function or tool):
+            return {"ok": False, "error": "name the app's tool: function=<a name get_app lists>"}
+        return await run_read_tool_logic(client, app_id, function or tool, args or {})
+
+    @mcp.tool(
+        title="Run Write Tool",
+        annotations=ToolAnnotations(destructiveHint=True),
+    )
+    async def run_write_tool(app_id: str, function: str = "", args: dict | None = None, ctx: Context = None,
+                             tool: str = "") -> Any:
+        """Run a WRITE or DESTRUCTIVE tool of a deployed app. Money tools always go
+        through out-of-band panel approval (never terminal consent or autopilot):
+        re-run this tool after approving in the panel to complete. Write runs
+        directly; destructive requires human consent (elicitation) or session
+        autopilot; read tools are refused (use run_read_tool)."""
+        if not (function or tool):
+            return {"ok": False, "error": "name the app's tool: function=<a name get_app lists>"}
+        return await run_write_tool_logic(client, ctx, app_id, function or tool, args or {}, _AUTOPILOT)
+
+    @mcp.tool(
+        title="Upload Local File",
+        annotations=ToolAnnotations(destructiveHint=False),
+    )
+    async def upload_file(path: str, name: str | None = None) -> Any:
+        """Send a file from THIS machine into Imperal and get its ids back.
+
+        Read the file straight off disk -- never paste its bytes into a tool
+        call, that is truncated long before it reaches the gateway.
+
+        Returns {file_id, document_id, filename, size_bytes, status}. To then
+        PLACE that file into any extension (a task attachment, an envelope, a
+        post), call run_write_tool with the sink's own file argument set to
+        {"document_id": <document_id>}: the gateway swaps the reference for the
+        real bytes on the way in, so the file never travels through this
+        conversation.
+        """
+        return defensive_scrub(await client.upload_file(path, name=name))
 
     @mcp.resource("imperal://exoskeleton-protocol")
     def _r_exo_protocol() -> str:

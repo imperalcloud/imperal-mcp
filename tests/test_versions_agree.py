@@ -40,3 +40,30 @@ def test_the_pins_carry_what_the_frame_needs():
     from pathlib import Path
     text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
     assert "imperal-sdk>=6.5.3" in text and "webbee>=0.7.0" in text and "imperal-sdk[universal-index]>=6.5.3" in text
+
+
+def _pyproject_description() -> str:
+    return re.search(r'^description = "([^"]+)"', (ROOT / "pyproject.toml").read_text(), re.M).group(1)
+
+
+def test_every_listing_says_what_pypi_says():
+    """2026-11-13: the MCP Registry and the Claude Code plugin files still said "build and deploy Imperal IR apps"
+    (the 0.2 pitch) while PyPI already said what the package is -- the version moved on every release, the words never.
+    The registry takes at most 100 characters: its line is the promise inside the PyPI description, word for word."""
+    d = _pyproject_description()
+    s = json.loads((ROOT / "server.json").read_text())
+    assert len(s["description"]) <= 100 and s["description"].lower() in d.lower()
+    plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
+    assert plugin["description"] == d
+    market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
+    assert [p["description"].startswith(d) for p in market["plugins"] if p["name"] == "imperal-mcp"] == [True]
+
+
+def test_the_registry_install_brings_the_code_tools():
+    """2026-11-13: `uvx imperal-mcp`, the registry's install, listed every code tool and each one failed without the
+    [code] extra ("No module named 'webbee'"). `uvx --with imperal-mcp[code] imperal-mcp==<v>` installs it; the extra
+    is not a plain dependency because webbee's own environment carries imperal-mcp without it."""
+    s = json.loads((ROOT / "server.json").read_text())
+    (pkg,) = [p for p in s["packages"] if p["identifier"] == "imperal-mcp"]
+    assert pkg["runtimeHint"] == "uvx"
+    assert {"type": "named", "name": "--with", "value": "imperal-mcp[code]"}.items() <= pkg["runtimeArguments"][0].items()

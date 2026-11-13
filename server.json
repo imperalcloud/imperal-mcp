@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.imperalcloud/imperal-mcp",
   "title": "Imperal MCP",
-  "description": "Build, validate, smoke-test & deploy Imperal declarative IR apps from any LLM or agent.",
-  "version": "0.9.13",
+  "description": "Memory across sessions, a live code map, undo for every change and a hallucination check.",
+  "version": "0.9.14",
   "repository": {
     "url": "https://github.com/imperalcloud/imperal-mcp",
     "source": "github"
@@ -12,8 +12,16 @@
     {
       "registryType": "pypi",
       "identifier": "imperal-mcp",
-      "version": "0.9.13",
+      "version": "0.9.14",
       "runtimeHint": "uvx",
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--with",
+          "value": "imperal-mcp[code]",
+          "description": "The code map, undo and fact check tools (the [code] extra)"
+        }
+      ],
       "transport": {
         "type": "stdio"
       },

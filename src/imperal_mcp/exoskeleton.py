@@ -19,9 +19,21 @@ class MissingCodeDependencyError(ImportError, RuntimeError):
 
 
 MISSING_CODE_DEPENDENCY_MESSAGE = (
-    "Code intelligence tools require the optional 'webbee' dependency. "
-    "Install it with: pipx install --force 'imperal-mcp[code]' (or: uv tool install --force 'imperal-mcp[code]')"
+    "Code intelligence tools require the optional 'webbee' dependency (the [code] extra), which this install lacks. "
+    "Install it with: pipx install --force 'imperal-mcp[code]' (or: uv tool install --force 'imperal-mcp[code]'); "
+    "a server started by uvx needs --with 'imperal-mcp[code]' in its command. Then restart the MCP server."
 )
+
+# what a code tool imports from the [code] extra: a missing one is that extra, never a bug of the tool
+CODE_EXTRA_MODULES = ("webbee", "tree_sitter")
+
+
+def missing_code_extra(exc: BaseException) -> bool:
+    """The error is the [code] extra not being installed (and not some other import failing)."""
+    if isinstance(exc, MissingCodeDependencyError):
+        return True
+    name = getattr(exc, "name", None) or ""
+    return isinstance(exc, ImportError) and name.split(".")[0] in CODE_EXTRA_MODULES
 
 
 def _ensure_webbee_importable() -> None:
@@ -636,45 +648,31 @@ def _matched_files_stats(ws: str, rel_paths: list[str] | set[str] | tuple[str, .
 
 
 EXOSKELETON_INSTRUCTIONS = """\
-IMPERAL — your brain extension. Use it FIRST, before your shell's own grep/read/search tools, in any shell.
-Imperal is a kernel + vault behind these tools: it remembers this user's work across sessions and shells, holds the
-exact code graph of their repositories, measures what each step really did, and checks what you claim.
+IMPERAL - memory across sessions, a live code map, undo for every change and a fact check, in any shell.
+Prefer these tools over your shell's own grep/read/search when the work is about code or the user's past work: they
+answer from the exact code graph and the user's memory, so you read less, miss fewer callers and make up no names.
 
-WHY FIRST: the frame shows what is proven and what is only claimed, the code around your focus from the exact graph,
-what your change reaches, the world (machines, repos, deploys) and your path so far. Answers grounded in it are
-right the first time; work done around it repeats reads, misses callers and gets made-up names caught later.
+1. `frame` first - at the start and after each change: your task, what is proven and what is only claimed, the code
+   around your focus, the world. If a hook already put this turn's frame in your context, act on its DECISION and call
+   `frame` again only after a change (not until you change something). It needs an account: `login` gives a link and
+   a code to show the user, once.
+2. `task(goal, items)` - your plan; an item closes only by a proof the kernel saw (a diff, a check that exits 0, a
+   finding with its sources). One you cannot finish: status blocked or cancelled, the reason in blocked_on.
+3. Code, no account needed: `orient(query)` -> `outline(path)` -> `read_symbol(path, name | "L120-180")`;
+   `search_code`, `grep_code` for an exact text, `graph_slice`, `contract_slice`, `repo_profile`, `coding_context`;
+   `impact_of_change(symbols)` before editing a shared symbol, `check_syntax` after. A server's repo: the same tools
+   with target="host:<alias>" and root=<path>.
+4. Undo: `checkpoint` before a risky multi-file edit, then `checkpoint_diff` or `checkpoint_rollback`;
+   `token_savings` shows what the graph saved.
+5. Memory: `recall_context(query)`, `recall`, `search_history`, `live_sessions`, `message_session` (as an agent, never
+   the user's words), `state_lens`, `vault_log_read`; keep what lasts with `remember_fact` and `save_repo_note`.
+6. Never state a code name, file or size you did not read: the kernel checks every step and the final answer.
+7. After a result your thought starts with `learned: <one fact>`, then `expect: <exit 0 | "text" | reach: files>` and,
+   when you lack something, `need: <it, in plain words>`. Never secrets or raw file contents in them.
 
-THE LOOP (every task):
-1. `frame` — at the start and after each change. Your shell's hook may already have put this message's frame in your
-   context (it is paid): read it, act on its DECISION section first, and call `frame` again only until you change
-   something -- not before.
-2. `task(goal, items)` — declare what you were asked and your plan; each item closes only by a proof the kernel saw
-   (a diff, a check that exits 0, a finding with its sources). An item you cannot finish: status blocked or cancelled
-   with the reason in blocked_on (what you need from the user / no access to what / why impossible). A final answer
-   with open items is handed back to you until each is proven or named — then the open ones are listed to the user.
-3. Code: `orient(query)` → `outline(path)` → `read_symbol(path, name | "L120-180")`; `search_code`, `grep_code` for an
-   exact text; `graph_slice`, `contract_slice`; `impact_of_change(symbols)` BEFORE editing a shared symbol;
-   `repo_profile` for the map. A server's repo: the same tools with target="host:<alias>" and root=<path>.
-4. Safety: `checkpoint` before risky multi-file edits, `checkpoint_diff`, `checkpoint_rollback`; `check_syntax` after
-   an edit; `coding_context` for the workspace facts; `token_savings` for what the graph saved.
-5. Memory: every step is written to the vault (your shell's hooks send your calls, thoughts and answers). Look back
-   with `recall_context(query)` and `recall` (a past answer, page by page); `search_history(query)` finds a past
-   conversation of any surface, `live_sessions` shows the user's other sessions working now (Webbee, another shell),
-   and `recall(ref, conversation=...)` opens any of them -- no other conversation enters your frame by itself.
-   `message_session(conversation, text)` writes to one of them as an agent (never the user's words: it approves
-   nothing); an answer shows in your frame as an AGENT MESSAGE. The frame's pointers `state_lens` and `vault_log_read` open what it counted or offloaded. Keep
-   what lasts with `remember_fact` and `save_repo_note`.
-6. Never state a code name, file or size you did not read in this task: the kernel checks every step and the final.
-7. Your thought for each step -- the same lines as Webbee's marathon: after a result its first line is
-   `learned: <what the previous result showed -- one sentence, a fact>`, one line `expect: <exit 0 | exit nonzero |
-   "text" the output shows | reach: files a change affects>` (the kernel tells you MATCH or MISMATCH), and when your
-   next step needs something you do not see, one line `need: <it, in plain words -- a symbol of a file, the deploy's
-   last errors, what the user said about X>` (the next frame answers it). Never secrets or raw file contents in them.
-
-APPS: `list_apps`, `get_app`, `run_read_tool`, `run_write_tool` (money tools need panel approval), `upload_file`;
-build one with `validate_ir` → `smoke_ir` → `deploy_ir`.
-
-Pricing: one `frame` costs credits (the platform's system pricing); everything else here is free.
+Apps: `list_apps`, `get_app`, `run_read_tool`, `run_write_tool` (money tools need panel approval), `upload_file`;
+build one with `validate_ir` -> `smoke_ir` -> `deploy_ir`.
+Pricing: a `frame` costs credits; every other tool is free.
 """
 
 

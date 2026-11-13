@@ -24,6 +24,10 @@ _SLOW_DOWN_BUMP = 5
 _SIBLING_RETRY_DELAY_S = 0.3
 
 
+# an agent signs in through the `login` tool (it shows the user a link and a code); a person in a terminal runs the CLI
+SIGN_IN_HINT = "call the `login` tool (it gives a link and a code for the user), or run `imperal-mcp login`"
+
+
 class NotLoggedInError(RuntimeError):
     """No usable credentials — the user must run `imperal-mcp login`."""
 
@@ -94,7 +98,7 @@ async def _refresh(api_url: str, refresh_token: str) -> dict:
     except httpx.HTTPError as e:
         raise TransientAuthError(f"refresh transport error: {type(e).__name__}") from e
     if resp.status_code == 401:
-        raise NotLoggedInError("session expired — run `imperal-mcp login`")
+        raise NotLoggedInError("session expired - " + SIGN_IN_HINT)
     if resp.status_code != 200:
         raise TransientAuthError(f"refresh failed: HTTP {resp.status_code}")
     return resp.json()
@@ -122,7 +126,7 @@ _refresh_lock = asyncio.Lock()
 async def ensure_access_token(cfg, force: bool = False) -> str:
     creds = load_creds()
     if not creds or not creds.get("refresh_token"):
-        raise NotLoggedInError("not logged in — run `imperal-mcp login`")
+        raise NotLoggedInError("not logged in - " + SIGN_IN_HINT)
     now = time.time()
     if not force and creds.get("access_token") and creds.get("access_expires_at", 0) - _REFRESH_SKEW > now:
         return creds["access_token"]
@@ -135,7 +139,7 @@ async def ensure_access_token(cfg, force: bool = False) -> str:
         if not force and fresh.get("access_token") and fresh.get("access_expires_at", 0) - _REFRESH_SKEW > now:
             return fresh["access_token"]
         if not fresh.get("refresh_token"):
-            raise NotLoggedInError("not logged in — run `imperal-mcp login`")
+            raise NotLoggedInError("not logged in - " + SIGN_IN_HINT)
 
         attempted = fresh["refresh_token"]
         presented = attempted
@@ -293,3 +297,76 @@ async def logout(cfg) -> None:
     p = creds_path()
     if p.exists():
         p.unlink()
+
+
+# ── Sign-in an agent runs (the MCP `login` tool) ──────────────────────────────
+# The same device grant as `imperal-mcp login`, started from inside the server: the first call answers with the link
+# and the code for the agent to show its user, the grant keeps polling in the background, and the next call says
+# whether it is done. The client reads the saved credentials on every request, so no restart follows.
+
+class AgentLogin:
+    """One device-grant sign-in at a time for a running server."""
+
+    PROMPT_WAIT_S = 20.0    # the gateway answers /device/authorize within this in normal operation
+
+    def __init__(self, cfg_factory=None, login=None):
+        from .config import Config
+        self._cfg_factory = cfg_factory or Config.from_env
+        self._login = login or login_device
+        self._task: asyncio.Task | None = None
+        self._prompt: dict | None = None
+
+    @staticmethod
+    def signed_in() -> bool:
+        creds = load_creds()
+        return bool(creds and creds.get("refresh_token"))
+
+    def _waiting(self) -> dict:
+        p = self._prompt or {}
+        return {
+            "ok": True, "status": "waiting_for_user",
+            "user_code": p.get("user_code"), "verification_uri": p.get("verification_uri"),
+            "verification_uri_complete": p.get("verification_uri_complete"),
+            "next": "Show the user the link and the code; they approve in any browser (a phone works). "
+                    "Call `login` again to see whether the sign-in is done.",
+        }
+
+    async def __call__(self, again: bool = False) -> dict:
+        task = self._task
+        if task is not None and task.done():
+            self._task = None
+            exc = task.exception()
+            if exc is not None:
+                return {"ok": False, "status": "failed", "error": str(exc)[:300],
+                        "next": "Call `login` again to start a new sign-in."}
+            return {"ok": True, "status": "signed_in", "email": task.result()}
+        if task is not None:
+            return self._waiting()
+        if self.signed_in() and not again:
+            return {"ok": True, "status": "signed_in",
+                    "next": "Already signed in. If a tool says the session expired, call `login` with again=true."}
+        return await self._start()
+
+    async def _start(self) -> dict:
+        loop = asyncio.get_running_loop()
+        shown: asyncio.Future = loop.create_future()
+
+        def on_prompt(user_code: str, verification_uri: str, verification_uri_complete: str) -> None:
+            self._prompt = {"user_code": user_code, "verification_uri": verification_uri,
+                            "verification_uri_complete": verification_uri_complete}
+            if not shown.done():
+                shown.set_result(True)
+
+        self._prompt = None
+        # no browser from here: stdout is the MCP stream, and a browser launcher's child inherits it
+        self._task = loop.create_task(self._login(self._cfg_factory(), on_prompt=on_prompt, open_browser=False))
+        done, _ = await asyncio.wait({shown, self._task}, timeout=self.PROMPT_WAIT_S,
+                                     return_when=asyncio.FIRST_COMPLETED)
+        if shown in done:
+            return self._waiting()
+        if self._task in done:              # the grant ended before it showed a code: report its error
+            return await self()
+        self._task.cancel()
+        self._task = None
+        return {"ok": False, "status": "failed", "error": "the sign-in service did not answer in time",
+                "next": "Call `login` again in a minute."}

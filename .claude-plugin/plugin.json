@@ -1,7 +1,7 @@
 {
   "name": "imperal-mcp",
-  "description": "Build and deploy Imperal apps from any LLM. Gives Claude Code validate_ir, smoke_ir, deploy_ir, list_apps, get_app, run_read_tool, run_write_tool and upload_file -- the full developer workflow for the Imperal platform.",
-  "version": "0.9.13",
+  "description": "The exoskeleton for your AI coding agent: memory across sessions, a live code map, undo for every change and a hallucination check. MCP server for Claude Code, Cursor, Codex, Gemini CLI.",
+  "version": "0.9.14",
   "author": {
     "name": "Imperal, Inc.",
     "email": "support@imperal.io"
@@ -10,11 +10,15 @@
   "repository": "https://github.com/imperalcloud/imperal-mcp",
   "license": "GPL-3.0-only",
   "keywords": [
-    "imperal",
     "mcp",
-    "deploy",
-    "ir",
-    "cloud",
-    "developer-tools"
+    "claude-code",
+    "cursor",
+    "codex",
+    "ai-memory",
+    "agent-memory",
+    "code-graph",
+    "hallucination",
+    "developer-tools",
+    "imperal"
   ]
 }
