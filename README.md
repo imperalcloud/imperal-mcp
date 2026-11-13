@@ -54,7 +54,7 @@ AI coding agents are brilliant - and work blind:
 | Says "done" when it isn't | **A referee** - a task closes only with proof the kernel saw: a diff, a check that passed, a finding with sources |
 | Works alone | **A team** - sees your other agents working right now and talks to them |
 
-An illustration of one task - your own numbers: `token_savings()` measures them in every session.
+An illustration of one task (`token_savings()` counts what the code tools return in your own sessions).
 
 ```text
 WITHOUT the exoskeleton
@@ -273,7 +273,7 @@ Keep `--with imperal-mcp[code]`: without it the code tools answer with what to i
 | `impact_of_change(symbols, full?)` | Every file and call site that depends on what you plan to change |
 | `check_syntax(path)` | Tree-sitter (and Python `ast` / JSON) syntax check after an edit |
 | `coding_context()` | Project tree and git status snapshot |
-| `token_savings()` | Measured characters and lines returned vs. the real files on disk |
+| `token_savings()` | Calls per code tool this session and the characters and lines they returned (no "saved" claim) |
 
 **Safety net** (local)
 

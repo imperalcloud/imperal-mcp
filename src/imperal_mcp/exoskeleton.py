@@ -183,13 +183,32 @@ def _normalize_search_matches(
             item.setdefault("file", path_val)
         normalized.append(item)
 
-    if any(m.get("path") for m in normalized):
-        return normalized[:k]
+    # words of any script (live 2026-11-13: [A-Za-z0-9_] dropped every Cyrillic word, so a Russian quote of a comment
+    # found nothing); one- and two-letter words ("в", "и", "of") match everywhere and prove nothing
+    words = re.findall(r"\w+", query or "")
+    tokens = [t.lower() for t in words if len(t) >= 3] or [t.lower() for t in words if len(t) >= 2]
 
-    # Fallback lexical scan across workspace files when vector/AST index has no path hits
-    tokens = [t.lower() for t in re.findall(r"[A-Za-z0-9_]+", query or "") if len(t) >= 2]
-    if not tokens:
+    def _mentions(item: dict) -> bool:
+        blob = " ".join(str(item.get(f) or "") for f in ("name", "qualname", "title", "snippet", "text", "signature",
+                                                           "doc", "path")).lower()
+        return any(t in blob for t in tokens)
+
+    if any(m.get("path") for m in normalized) and (not tokens or any(_mentions(m) for m in normalized
+                                                                     if m.get("path"))):
         return normalized[:k]
+    # the index answered only by meaning, and no hit holds a word of the query (an English-only embedding scores any
+    # Russian text alike -- live: unrelated tests came back "strong"): read the files for the words, and keep the
+    # meaning-only hits after them, marked weak
+    ranked_by_meaning = []
+    for m in normalized:
+        m = dict(m)
+        if m.get("path") and tokens:
+            m["match"] = "weak"
+            m["why"] = "found by meaning only; no word of the query is in it"
+        ranked_by_meaning.append(m)
+    normalized = []
+    if not tokens:
+        return ranked_by_meaning[:k]
 
     skip_dirs = {".git", ".hg", ".svn", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache", "dist", "build"}
     root_path = Path(ws)
@@ -242,8 +261,10 @@ def _normalize_search_matches(
                 )
             if len(normalized) >= k:
                 return normalized[:k]
-    return normalized[:k]
+    return (normalized + ranked_by_meaning)[:k]
 
+
+_IMPACT_KEPT = ("summary", "by_name", "by_name_count", "same_file", "resolved", "note")
 
 _FILE_KINDS = frozenset({"code", "config", "document", "data", "mail", "image"})
 
@@ -654,8 +675,14 @@ def _one_per_contract(entries: list) -> list:
     for e in entries or []:
         if not isinstance(e, dict):
             continue
-        ident = json.dumps({k: v for k, v in e.items() if k not in _REPO_ID_KEYS and not str(k).endswith("_repo")
-                            and not str(k).endswith("repo_key")}, sort_keys=True, default=str)
+        if e.get("route") or e.get("key"):
+            # a contract is its method, route and handler -- never the path or line one copy indexed it at (live
+            # 2026-11-13: a folder sync prefixed the path and an older sync kept older lines, so 4 copies stayed 4)
+            ident = json.dumps([str(e.get("kind") or ""), str(e.get("method") or "").upper(),
+                                str(e.get("route") or e.get("key") or ""), str(e.get("handler") or "")])
+        else:
+            ident = json.dumps({k: v for k, v in e.items() if k not in _REPO_ID_KEYS and not str(k).endswith("_repo")
+                                and not str(k).endswith("repo_key")}, sort_keys=True, default=str)
         keys = [str(e.get(k)) for k in ("repo_key", "repo", "provider_repo", "user_repo") if e.get(k)]
         if ident in at:
             held = out[at[ident]].setdefault("held_by", [])
@@ -732,7 +759,7 @@ answer from the exact code graph and the user's memory, so you read less, miss f
    `impact_of_change(symbols)` before editing a shared symbol, `check_syntax` after. root is the repository (default:
    the workspace); a server's repo: the same tools with target="host:<alias>" (or ssh:<connection_id>) and root=<path>.
 4. Undo: `checkpoint` before a risky multi-file edit, then `checkpoint_diff` or `checkpoint_rollback`;
-   `token_savings` shows what the graph saved.
+   `token_savings` counts what the code tools returned.
 5. Memory: `recall_context(query)`, `recall`, `search_history`, `live_sessions`, `message_session` (as an agent, never
    the user's words), `state_lens`, `vault_log_read`; keep what lasts with `remember_fact` and `save_repo_note`.
 6. Never state a code name, file or size you did not read: the kernel checks every step and the final answer.
@@ -831,7 +858,60 @@ def bounded(obj: Any, limit: int = ANSWER_CHARS) -> Any:
             out[f"{k}_shown"], out[f"{k}_total"] = shown[k], _real_total(v)
     if size(out) > limit:          # still too big: the long strings give way
         out = {k: (v[:2000] + "…" if isinstance(v, str) and len(v) > 2000 else v) for k, v in out.items()}
+    for _ in range(12):            # ... then what sits INSIDE the remaining entries (live 2026-11-13: one graph_slice
+        if size(out) <= limit:     # symbol carried its whole body and 40 callers twice: 38 KB past this bound)
+            break
+        if not _shrink_inside(out):
+            break
     out["truncated"] = f"bounded to {limit} chars -- pass full=true for everything"
+    return out
+
+
+def _shrink_inside(x: Any, depth: int = 0) -> bool:
+    """One halving step for the lists and long strings nested inside ``x``; False when nothing is left to cut."""
+    if depth > 6:
+        return False
+    changed = False
+    items = x.items() if isinstance(x, dict) else enumerate(x) if isinstance(x, list) else ()
+    for k, v in list(items):
+        if isinstance(v, str) and len(v) > 400:
+            x[k] = v[: max(400, len(v) // 2)] + "…"
+            changed = True
+        elif isinstance(v, list) and len(v) > 3 and depth > 0:
+            x[k] = v[: max(3, len(v) // 2)]
+            if isinstance(x, dict) and f"{k}_total" not in x:
+                x[f"{k}_total"] = len(v)
+            changed = True
+        elif isinstance(v, (dict, list)):
+            changed = _shrink_inside(v, depth + 1) or changed
+    return changed
+
+
+_SLICE_TEXT_LINES, _SLICE_TEXT_CHARS, _SLICE_LINKS = 80, 4000, 15
+
+
+def lean_slice_item(item: Any) -> Any:
+    """One graph_slice symbol as an agent reads it: the definition's text clipped (read_symbol gives it whole), callers
+    and callees once (the *_detail lists repeat the plain ones) and at most 15 of each, with their totals."""
+    if not isinstance(item, dict):
+        return item
+    out = dict(item)
+    text = out.get("text")
+    if isinstance(text, str):
+        lines = text.split("\n")
+        if len(lines) > _SLICE_TEXT_LINES or len(text) > _SLICE_TEXT_CHARS:
+            out["text"] = "\n".join(lines[:_SLICE_TEXT_LINES])[:_SLICE_TEXT_CHARS] + "\n…"
+            out["text_lines_total"] = len(lines)
+    for side in ("callers", "callees"):
+        detail = out.get(f"{side}_detail")
+        if isinstance(detail, list):
+            out.pop(side, None)
+            if len(detail) > _SLICE_LINKS:
+                out[f"{side}_detail"] = detail[:_SLICE_LINKS]
+                out[f"{side}_total"] = len(detail)
+        elif isinstance(out.get(side), list) and len(out[side]) > _SLICE_LINKS:
+            out[f"{side}_total"] = len(out[side])
+            out[side] = out[side][:_SLICE_LINKS]
     return out
 
 
@@ -1563,9 +1643,12 @@ class ExoskeletonRuntime:
             res = _impact_of_change(svc, sym_list)
             items += [_in_folder(dict(it), u["root"]) for it in (res.get("data") or {}).get("items", [])]
             by_name += [_in_folder(dict(b), u["root"]) for b in res.get("by_name") or []]
+        files = [it.get("title") or it.get("id") for it in items]
         return {**self._units_status(waiting), "workspace": ws, "queried_symbols": sym_list,
-                "dependent_files": [it.get("title") or it.get("id") for it in items], "items": items,
-                "by_name": by_name, "units": self.units_progress(ws), "source": "local index (units)"}
+                "dependent_files": files, "items": items, "by_name": by_name, "by_name_count": len(by_name),
+                "summary": (f"{len(files)} file(s) use {', '.join(sym_list)} by resolved links"
+                            + (f"; {len(by_name)} more only mention the name (by_name)" if by_name else "")),
+                "units": self.units_progress(ws), "source": "local index (units)"}
 
     @staticmethod
     def _units_status(waiting: list) -> dict:
@@ -1845,9 +1928,12 @@ class ExoskeletonRuntime:
         with ThreadPoolExecutor(max_workers=min(_FOLDER_ASK_THREADS, len(repos))) as pool:
             got = list(pool.map(one, repos))
         for rel, ans, miss in got:
+            key = str(ans.get("repo_key") or "") if isinstance(ans, dict) else ""
+            if key and key in units_by_key:
+                continue        # another checkout of the same repository (a worktree, a copy): answered once
             answers.append((rel, ans))
-            if isinstance(ans, dict) and ans.get("repo_key"):
-                units_by_key[str(ans["repo_key"])] = rel
+            if key:
+                units_by_key[key] = rel
             if ans is None:
                 misses.append(f"{rel}: {miss}")
         for rel in repos:                 # the keys of repositories that did not answer this question too
@@ -2057,8 +2143,8 @@ class ExoskeletonRuntime:
         if ans is not None:
             items = list((ans.get("data") or {}).get("items") or [])
             self._record_read("graph_slice", returned_text=json.dumps(items, ensure_ascii=False))
-            out = {"status": "ok", "workspace": root if target else self.resolve_workspace(root), "symbols": items,
-                   **self._vault_meta(ans)}
+            out = {"status": "ok", "workspace": root if target else self.resolve_workspace(root),
+                   "symbols": [lean_slice_item(i) for i in items], **self._vault_meta(ans)}
             found = {str(i.get("qualname") or i.get("title") or "").rsplit(".", 1)[-1] for i in items} | {
                 str(i.get("qualname") or "") for i in items}
             missing = [s for s in sym_list if s.split("::")[-1] not in found and s.split("::")[-1].rsplit(".", 1)[-1]
@@ -2220,13 +2306,19 @@ class ExoskeletonRuntime:
             baseline_lines=base_l,
             baseline_files=base_f,
         )
-        return {
+        out = {
             "status": "ok",
             "workspace": ws,
             "queried_symbols": sym_list,
             "dependent_files": files,
             "items": items,
         }
+        # the index's own honest parts: files that only name it, uses in its own file, the summary line (live
+        # 2026-11-13: "1 more file only mentions the name" was dropped, so an import-only user read as "nobody")
+        for key in _IMPACT_KEPT:
+            if res.get(key) not in (None, [], ""):
+                out[key] = res[key]
+        return out
 
     def contract_slice(
         self,
@@ -2250,7 +2342,7 @@ class ExoskeletonRuntime:
                 # (field report 06.11 #3: session_for_sid answered nothing -- the endpoint's handler calls it)
                 reached = self._contracts_reached(sym_list, cat.get("endpoints") or [], sl, root, target)
                 seen = {(e.get("repo"), e.get("method"), e.get("route"), e.get("handler")) for e in reached}
-                eps = reached + _one_per_contract([e for e in cat.get("endpoints") or []
+                eps = _one_per_contract(reached + [e for e in cat.get("endpoints") or []
                                                    if ((q and q in json.dumps(e).lower()) or (not q and not sym_list))
                                                    and (e.get("repo"), e.get("method"), e.get("route"),
                                                         e.get("handler")) not in seen])

@@ -230,6 +230,13 @@ class ImperalClient:
         it = dict(items[0])
         it.setdefault("filename", filename)
         it.setdefault("size_bytes", size)
+        if it.get("document_id") in (None, ""):
+            # live 2026-11-13: document_id came back null, and the tool tells the agent to place the file by it -- an
+            # attachment would silently go nowhere. Say so now, with what File Reader did report.
+            if str(it.get("status") or "").lower() == "failed":
+                raise ImperalError(f"upload of {filename} failed in File Reader: {it.get('error') or it}")
+            it["document_id_missing"] = ("File Reader stored the file (file_id above) but returned no document_id; "
+                                         "it cannot be placed into another app by reference yet")
         return it
 
     async def operate(self, app_id: str, function: str, params: dict,

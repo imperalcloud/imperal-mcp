@@ -263,9 +263,13 @@ def current_session(workspace: str, server_parent: int | None = None) -> str:
 
 def session_repo(cwd: str) -> str:
     """The repository a session works in, as its key -- the vault project of the session's memory (owner 2026-10-25:
-    "проект на репо"): the key Webbee computes for the git work tree around ``cwd`` (``webbee.repo.compute_repo_key``:
-    the origin URL, else the tree's path, hashed); "" outside a work tree (a folder of repositories is none -- the
-    session gets a project of its own)."""
+    "проект на репо"); pinned once per session by ``pinned_repo``."""
+    return repo_key_at(cwd)
+
+
+def repo_key_at(cwd: str) -> str:
+    """The key Webbee computes for the git work tree around ``cwd`` (``webbee.repo.compute_repo_key``: the origin
+    URL, else the tree's path, hashed); "" outside a work tree (a folder of repositories is none)."""
     import subprocess
     try:
         top = subprocess.run(["git", "-C", cwd or ".", "rev-parse", "--show-toplevel"], capture_output=True,
@@ -376,6 +380,11 @@ def _command(inp: dict) -> str:
     return str(cmd or "")
 
 
+# tools whose answer is evidence the agent cites: the argument that says what was asked, then the answer
+_WEB_TOOLS = {"webfetch": ("url", "prompt"), "websearch": ("query",), "agent": ("description",),
+              "task": ("description",), "web_fetch": ("url",), "google_web_search": ("query",)}
+
+
 def tool_items(payload: dict) -> list:
     """A shell's tool call as the kernel's exchange items (``[]`` for imperal-mcp's own -- the server has them)."""
     payload = normalize(payload)
@@ -416,8 +425,14 @@ def tool_items(payload: dict) -> list:
     if low in ("grep", "glob", "search_file_content", "ls", "list_directory"):
         return [exchange_item("grep" if low != "glob" else "glob", {k: str(v) for k, v in inp.items()}, ok, text,
                               text_limit=OUTPUT_CHARS)]
-    # any other tool (another MCP server's, a web fetch...): its name and whether it went well -- never its args or
-    # its answer, which may carry anything (final review C1)
+    if low in _WEB_TOOLS:
+        # a web page, a search or a subagent's report IS what the agent then states (live 2026-11-13: every claim from
+        # WebSearch / WebFetch / a subagent was held "unseen" -- the kernel never got the text). Through the one door
+        # that scrubs secrets and personal data, like a command's output.
+        keep = {k: str(inp.get(k) or "")[:500] for k in _WEB_TOOLS[low] if inp.get(k)}
+        return [exchange_item(low, keep, ok, text, text_limit=OUTPUT_CHARS)]
+    # any other tool (another MCP server's...): its name and whether it went well -- never its args or its answer,
+    # which may carry anything (final review C1)
     return [{"app_id": "", "tool": name, "args": {}, "ok": bool(ok), "text": ""}]
 
 
@@ -682,7 +697,9 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
         def _frame(items, memory):
             body = {"session_id": sess, "step": step, "goal": str(st.get("goal") or _clean(prompt))[:4000],
                     "items": list(st.get("items") or []), "exchange": items, "memory": memory,
-                    "repo_key": str(st.get("repo_key") or ""), "cwd": where, "repo_root": where,
+                    # the key of the folder the shell is in NOW (live 2026-11-13: the key an old `frame` call saved
+                    # overrode the path, and the focus sat on a 14-day-old copy of the repository)
+                    "repo_key": repo_key_at(where), "cwd": where, "repo_root": where,
                     "session_repo": repo, "budget": HOOK_FRAME_CHARS}   # the kernel composes it to fit, far blocks first
             got = gateway.frame(body) or {}
             if got.get("refused"):         # not charged: the step is still written (free) and keeps its number (I3)

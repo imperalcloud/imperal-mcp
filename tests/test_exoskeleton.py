@@ -287,7 +287,7 @@ async def test_build_server_registers_exoskeleton_and_memory_tools(sample_worksp
         note_res = await note_fn(note="Monorepo uses ShadowGit", citations=["exoskeleton.py:1"])
         assert note_res["data"]["app_id"] == "memory-index"
         assert note_res["data"]["function"] == "add_note"
-        assert note_res["data"]["params"]["repo"] == "demo_repo"
+        assert note_res["data"]["params"]["repo"].endswith("/demo_repo")  # its key or full path, never a bare name (2026-11-13)
 
 
 def test_cli_login_and_logout_subcommands(monkeypatch, capsys):

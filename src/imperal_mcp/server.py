@@ -49,20 +49,35 @@ def _tools_of(app: dict) -> list[dict]:
     return []
 
 
-async def _resolve_action_type(client: ImperalClient, app_id: str, function: str) -> str | None:
+async def _find_tool(client: ImperalClient, app_id: str, function: str) -> tuple[bool, str | None, list[str]]:
+    """(the app has a tool of this name, its action_type, the names it has): the app's own record first, then the
+    marketplace catalog. Live 2026-11-13: a name the app does not have was told "this MCP runs read-only tools only"
+    -- "not found" and "no action_type" were one None."""
+    names: list[str] = []
     app = await client.get_app(app_id)
     for t in _tools_of(app):
+        names.append(str(t.get("name")))
         if t.get("name") == function:
-            return t.get("action_type")
-    # Fallback: check the marketplace catalog
+            return True, t.get("action_type"), names
     try:
         mkt = await client.get_marketplace_app(app_id)
         for t in (mkt.get("tools") or []):
+            names.append(str(t.get("name")))
             if t.get("name") == function:
-                return t.get("action_type")
+                return True, t.get("action_type"), names
     except Exception:
         pass
-    return None
+    return False, None, [n for n in dict.fromkeys(names) if n and n != "None"]
+
+
+async def _resolve_action_type(client: ImperalClient, app_id: str, function: str) -> str | None:
+    return (await _find_tool(client, app_id, function))[1]
+
+
+def _no_such_tool(app_id: str, function: str, names: list[str]) -> dict:
+    shown = ", ".join(names[:30]) + (f" (+{len(names) - 30} more)" if len(names) > 30 else "")
+    return {"refused": True, "status": "refused",
+            "reason": f"app '{app_id}' has no tool '{function}'" + (f"; its tools: {shown}" if names else "")}
 
 
 _TRANSIENT_MARKERS = (
@@ -94,7 +109,9 @@ async def deploy_ir_logic(client: ImperalClient, app_ir: dict, app_id: str) -> d
 async def run_read_tool_logic(client: ImperalClient, app_id: str, function: str, args: dict) -> Any:
     if is_synthetic(function):
         return {"refused": True, "reason": "synthetic system entry, not a callable tool"}
-    action_type = await _resolve_action_type(client, app_id, function)
+    found, action_type, names = await _find_tool(client, app_id, function)
+    if not found:
+        return _no_such_tool(app_id, function, names)
     if not is_read_only(function, action_type):
         return {"refused": True,
                 "reason": f"tool '{function}' is action_type={action_type!r}; "
@@ -199,7 +216,9 @@ async def run_write_tool_logic(client, ctx, app_id, function, args, autopilot) -
             return _shape(res)
         return {"status": "error", "detail": "unexpected money result"}
     # ── existing read/blocked/write/destructive tiers (Plan 1) unchanged below ──
-    action_type = await _resolve_action_type(client, app_id, function)
+    found, action_type, names = await _find_tool(client, app_id, function)
+    if not found:
+        return _no_such_tool(app_id, function, names)
     tier = classify_tier(function, action_type)
     if tier == "read":
         return {"status": "refused", "reason": "use run_read_tool"}
@@ -261,7 +280,7 @@ PARAM_HINTS: dict = {
     ("checkpoint_rollback", "target"): "A checkpoint's number or id; default: the latest.",
     ("login", "again"): "true: start a new sign-in even though one is saved (an expired session).",
     ("remember_fact", "category"): "directive, preference, infra, convention or identity.",
-    ("remember_fact", "scope"): "Where it applies, e.g. a repository; empty: everywhere.",
+    ("remember_fact", "scope"): "global, task or surface; empty: decided from the fact itself.",
     ("save_repo_note", "repo"): "The repository's name; default: the workspace's folder name.",
     ("save_repo_note", "citations"): "Where the note comes from: file paths, symbols, links.",
     ("recall_context", "include_resolved"): "true: also the notes marked resolved.",
@@ -535,11 +554,12 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         return exo.checkpoint_rollback(target=target, root=root)
 
     @mcp.tool(
-        title="Token Savings",
+        title="Tool Output Totals",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     def token_savings() -> dict:
-        """How many characters and lines the code tools saved this session compared with reading whole files."""
+        """How many calls each code tool answered this session and how many characters and lines they returned. It
+        names no "saved" figure on purpose: a short answer is no proof it was the useful one."""
         return exo.token_savings()
 
     from .auth import AgentLogin
@@ -570,18 +590,25 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         """The user's standing rules, preferences and repository notes that match a query, from Imperal memory shared
         with Webbee, Telegram and the panel."""
         from .exoskeleton import scope_recall
-        return defensive_scrub(scope_recall(
+        want = max(1, int(limit or 5))
+        got = scope_recall(
             await client.run_tool(
                 "memory-index",
                 "recall_context",
                 {
                     "query": query,
-                    "limit": limit,
+                    # another repo's notes are dropped below: ask for more so `limit` of this repo's remain (live
+                    # 2026-11-13: the store cut to `limit` first, the filter then left none)
+                    "limit": want * 3,
                     "include_user_facts": include_user_facts,
                     "include_repo_memory": include_repo_memory,
                     "include_resolved": include_resolved,
                 },
-            ), exo.current_repo_keys()))
+            ), exo.current_repo_keys())
+        data = got.get("data") if isinstance(got, dict) else None
+        if isinstance(data, dict) and isinstance(data.get("snippets"), list):
+            got = {**got, "data": {**data, "snippets": data["snippets"][:want]}}
+        return defensive_scrub(got)
 
     @mcp.tool(
         title="Remember a Fact",
@@ -595,13 +622,17 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
     ) -> dict:
         """Keep a lasting fact, decision or rule about the user in Imperal memory, for every future session and
         surface."""
+        if (scope or "").strip().lower() not in ("", "global", "task", "surface"):
+            return {"ok": False, "status": "error",
+                    "error": f"scope must be one of: global, task, surface (or empty to decide from the fact); got "
+                             f"'{scope}'"}
         payload: dict[str, Any] = {
             "fact": fact,
             "category": category,
             "tags": tags or [],
         }
         if scope:
-            payload["scope"] = scope
+            payload["scope"] = scope.strip().lower()
         return defensive_scrub(await client.run_tool("memory-index", "add_user_fact", payload))
 
     @mcp.tool(
@@ -617,7 +648,17 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         """Keep a lasting note about a repository (a convention, an architecture decision), with citations if you have
         them."""
         import os as _os
-        repo_name = repo or _os.path.basename(exo.resolve_workspace(root))
+        repo_name = repo
+        if not repo_name:
+            # the repository's own key, never its folder name: the store matched a name as a fragment of any path and
+            # took the first (live 2026-11-13: a note of imperal-cloud-main landed on webbee's key, recall then dropped
+            # it as another repo's)
+            exo.loop = asyncio.get_running_loop()
+            try:
+                repo_name = await asyncio.to_thread(exo._repo_key, root, None)
+            except Exception:
+                repo_name = ""
+            repo_name = repo_name or exo.resolve_workspace(root)
         return defensive_scrub(
             await client.run_tool(
                 "memory-index",

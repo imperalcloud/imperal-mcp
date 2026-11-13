@@ -7,7 +7,7 @@ from imperal_sdk.ir.actions import validate_step
 import imperal_sdk.ui as _ui
 
 # Canonical link-saver example — schema-valid (passes validate_ir).
-# Uses real declarative step shape: op + args{kind, data}.
+# Uses the real declarative step shape: {id, op, args{kind, data}}; parameters as {{event.<name>}}.
 LINK_SAVER_EXAMPLE: dict = {
     "ir_version": "1.0",
     "app": {
@@ -27,7 +27,7 @@ LINK_SAVER_EXAMPLE: dict = {
                         {
                             "id": "s1",
                             "op": "store.create",
-                            "args": {"kind": "link", "data": {"url": "{{args.url}}"}},
+                            "args": {"kind": "link", "data": {"url": "{{event.url}}"}},
                         }
                     ],
                 },
@@ -99,14 +99,17 @@ def ir_spec_text() -> str:
         '       "return_schema": {"type": "object"},\n'
         '       "impl": {"kind": "declarative", "steps": [\n'
         '         {"id": "s1", "op": "store.create",\n'
-        '          "args": {"kind": "link", "data": {"url": "{{args.url}}"}}}\n'
+        '          "args": {"kind": "link", "data": {"url": "{{event.url}}"}}}\n'
         "       ]}}\n"
         "    ]\n"
         "  }\n}\n\n"
         "Declarative step vocabulary:\n"
         "- op: store.create / store.list / store.get / store.update / store.delete\n"
-        "- args: {kind, data} for create/update; {kind} for list/get/delete\n"
-        "- Use {{args.<param>}} template syntax to reference function parameters.\n\n"
+        "- Every step: {id, op, args}; id is a unique string. Verb fields go UNDER args, never at the step root.\n"
+        "- args: {kind, data} for create; {kind, id|ids, set} for update; {kind, id} for get/delete; {kind, where?,\n"
+        "  limit?} for list\n"
+        "- Use {{event.<param>}} to reference a function parameter (newer kernels also read {{args.<param>}});\n"
+        "  {{steps.<id>.<field>}} a previous step's result.\n\n"
         "- Every function declares action_type: read | write | destructive.\n"
         "- Validate locally with the validate_ir tool BEFORE deploy.\n"
         "- Render with ui.* components (see the ui-catalog resource)."

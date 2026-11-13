@@ -1,5 +1,6 @@
 """Memory plan Task 4: one `imperal-mcp hook <event>` command for every shell's hooks."""
 import json
+import re
 
 import pytest
 
@@ -580,7 +581,8 @@ def test_a_withheld_output_never_leaves_but_the_answer_s_words_it_held_are_named
     sent = json.dumps(gw.calls)
     assert "bad 7" not in sent and "claims 65 held" not in sent         # the output itself never left
     stored = "".join(p.read_text() for p in spool.iterdir() if p.is_file() and not p.name.endswith(".key"))
-    assert "claims" not in stored and "bad" not in stored               # on disk only fingerprints of its words
+    # on disk only fingerprints of its words -- whole words: a hex fingerprint may hold the letters b-a-d (flaked 1 in 10)
+    assert not re.search(r"\bclaims\b", stored) and not re.search(r"\bbad\b", stored)
 
 
 def test_a_session_with_no_withheld_output_says_so_with_an_empty_list(spool):
