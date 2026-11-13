@@ -235,6 +235,69 @@ async def run_write_tool_logic(client, ctx, app_id, function, args, autopilot) -
 
 _LIST_TOOLS = frozenset({"impact_of_change", "graph_slice", "orient", "search_code", "grep_code", "contract_slice"})
 
+# What a parameter means where its name alone does not say it: (tool, name) first, then the name in any tool.
+# root / target / k / full / path carry none: the protocol says once what root and target are, and a hint
+# repeated in sixteen tools cost 2 521 characters of every session (measured 2026-11-13).
+PARAM_HINTS: dict = {
+    "path_glob": "Only paths matching it, e.g. src/**/*.py.",
+    "kind": "function, class, method or variable.",
+    "symbols": "name, Class.method or path::name each.",
+    "conversation": "Another conversation's id (live_sessions, search_history); empty: this one.",
+    ("read_symbol", "name"): "A symbol (function, Class.method, a section's name) or a line range such as L120-180.",
+    ("grep_code", "pattern"): "The exact text to find; a regular expression when regex=true.",
+    ("graph_slice", "depth"): "How many call hops to follow.",
+    ("task", "items"): "The plan: [{content, status: pending|in_progress|completed}]; a blocked item: status blocked "
+                       "and blocked_on = what it waits for.",
+    ("state_lens", "section"): "law, plan, reality, memory, conversation, path or all.",
+    ("state_lens", "focus"): "A word to narrow the section to.",
+    ("recall", "ref"): "U<n> (a request), A<n> (an answer), last_answers or all.",
+    ("recall", "n"): "How many messages from ref on.",
+    ("vault_log_read", "ref"): "The vault://logs/... reference the frame or a tool gave.",
+    ("vault_log_read", "grep"): "Only the lines holding this text.",
+    ("live_sessions", "minutes"): "Sessions active within this many minutes.",
+    ("checkpoint", "label"): "A short name for the snapshot.",
+    ("checkpoint_diff", "target"): "A checkpoint's number or id; default: the latest.",
+    ("checkpoint_diff", "paths"): "Only these files or folders, relative to root.",
+    ("checkpoint_rollback", "target"): "A checkpoint's number or id; default: the latest.",
+    ("login", "again"): "true: start a new sign-in even though one is saved (an expired session).",
+    ("remember_fact", "category"): "directive, preference, infra, convention or identity.",
+    ("remember_fact", "scope"): "Where it applies, e.g. a repository; empty: everywhere.",
+    ("save_repo_note", "repo"): "The repository's name; default: the workspace's folder name.",
+    ("save_repo_note", "citations"): "Where the note comes from: file paths, symbols, links.",
+    ("recall_context", "include_resolved"): "true: also the notes marked resolved.",
+    ("smoke_ir", "function"): "The function of the app to run.",
+    ("run_read_tool", "function"): "The tool's name as get_app lists it.",
+    ("run_write_tool", "function"): "The tool's name as get_app lists it.",
+    ("run_read_tool", "tool"): "Same as function.",
+    ("run_write_tool", "tool"): "Same as function.",
+    ("upload_file", "path"): "The file's path on this machine.",
+    ("upload_file", "name"): "The name to store it under; default: the file's own name.",
+}
+
+
+def lean_schema(tool: str, schema: dict) -> dict:
+    """The input schema an agent reads, without the generator's noise: no per-field title, an optional field is its
+    type (not anyOf [type, null] with default null), and each field whose name does not say it carries a hint.
+    Arguments are still checked by the function's own signature; this is only what the listing shows.
+
+    Live 2026-11-13: the 35 schemas were 10 801 characters of the 22 214 every session loads."""
+    def one(name: str, field: dict) -> dict:
+        f = {k: v for k, v in field.items() if k != "title"}
+        alts = f.get("anyOf")
+        if isinstance(alts, list) and {"type": "null"} in alts and f.get("default", 0) is None:
+            rest = [a for a in alts if a != {"type": "null"}]
+            f.pop("anyOf")
+            f.pop("default")
+            f.update(rest[0] if len(rest) == 1 else {"anyOf": rest})
+        hint = PARAM_HINTS.get((tool, name)) or PARAM_HINTS.get(name)
+        if hint and "description" not in f:
+            f["description"] = hint
+        return f
+
+    out = {k: v for k, v in schema.items() if k != "title"}
+    out["properties"] = {n: one(n, f) for n, f in (schema.get("properties") or {}).items()}
+    return out
+
 
 def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP:
     mcp = FastMCP("imperal", instructions=EXOSKELETON_INSTRUCTIONS)
@@ -271,11 +334,12 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
     # ── Exoskeleton: Local Code Intelligence & AST Surgery ──────────────────
 
     @mcp.tool(
-        title="Orient on Task",
+        title="Orient on a Task",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def orient(query: str, k: int = 8, root: str | None = None, target: str | None = None) -> dict:
-        """One-call orientation for a task: repo profile + top ranked symbols/snippets from the code graph in Imperal's vault. Call FIRST instead of scanning files blind. `target`: local (default), ssh:<connection_id> or host:<alias> with `root` = the repo path there."""
+        """Start here on a code task: the repository's profile plus the symbols and snippets that best match your
+        query, ranked from the code graph. Then outline or read_symbol what it points at."""
         return await _exo_call(exo.orient, query=query, k=k, root=root, target=target)
 
     @mcp.tool(
@@ -283,11 +347,11 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def repo_profile(root: str | None = None, target: str | None = None) -> dict:
-        """Structured profile of the repository (languages, file count, the most-used definitions) from the code graph."""
+        """The repository at a glance: languages, file count and its most-used definitions."""
         return await _exo_call(exo.repo_profile, root=root, target=target)
 
     @mcp.tool(
-        title="Search Code Graph",
+        title="Search Code",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def search_code(
@@ -298,58 +362,68 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         root: str | None = None,
         target: str | None = None,
     ) -> dict:
-        """Search the code graph: exact names, words and meaning (each hit says how sure it is). Prefer over grep/find."""
+        """Find code by exact name, words or meaning; each hit says how sure it is. Use it instead of grep/find to
+        locate a symbol."""
         return await _exo_call(exo.search_code, query=query, k=k, kind=kind, path_glob=path_glob, root=root, target=target)
 
     @mcp.tool(
-        title="Code File Outline",
+        title="Outline a File",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    async def outline(path: str, root: str | None = None, target: str | None = None) -> dict:
-        """Tree-sitter structural map of a source file (classes, functions, methods, major blocks with exact line ranges). Call before reading large files."""
+    async def outline(path: str, root: str | None = None, target: str | None = None, full: bool = False) -> dict:
+        """A file's structure without its body: classes, functions, methods and sections with their line ranges. Use it
+        before opening a large file; full=true adds the symbols as JSON."""
         # a worker thread like every code tool: its cloud call must never wait for the loop it would block
-        return await _exo_call(exo.outline, path=path, root=root, target=target)
+        out = await _exo_call(exo.outline, path=path, root=root, target=target)
+        if not full and isinstance(out, dict) and out.get("rendered"):
+            # live 2026-11-13: each symbol came twice, as JSON and in `rendered` (exoskeleton.py: 20 562 -> 6 906 chars)
+            out = {k: v for k, v in out.items() if k != "symbols"}
+        return out
 
     @mcp.tool(
-        title="Read Symbol or Span",
+        title="Read a Symbol",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def read_symbol(path: str, name: str, root: str | None = None, target: str | None = None) -> dict:
-        """Read ONE symbol (function, class, Class.method, block name) or line range ('L120-180') from a file without loading the whole file."""
+        """Read one symbol (function, class, Class.method, section) or a line range such as "L120-180" from a file,
+        instead of the whole file."""
         return await _exo_call(exo.read_symbol, path=path, name=name, root=root, target=target)
 
     @mcp.tool(
-        title="Call Graph Slice",
+        title="Callers and Callees",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def graph_slice(symbols: list[str], depth: int = 1, root: str | None = None, target: str | None = None) -> dict:
-        """Return definition locations, signatures, direct callers, and callees for a batch of symbols from the code graph."""
+        """For each symbol: where it is defined, its signature, who calls it and what it calls (depth = how many hops)."""
         return await _exo_call(exo.graph_slice, symbols=symbols, depth=depth, root=root, target=target)
 
     @mcp.tool(
-        title="Contract Slice",
+        title="API Contracts",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def contract_slice(symbols: list[str], root: str | None = None, target: str | None = None) -> dict:
-        """Return the endpoints and route links across the user's repos, plus the given symbols with their callers."""
+        """The endpoints and routes across the user's repositories and who calls them, plus the given symbols with
+        their callers. Use it before changing an API either side depends on."""
         return await _exo_call(exo.contract_slice, symbols=symbols, root=root, target=target)
 
     @mcp.tool(
-        title="Impact of Change",
+        title="Impact of a Change",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def impact_of_change(symbols: list[str], root: str | None = None, target: str | None = None,
                                full: bool = False) -> dict:
-        """Given symbols you plan to modify, return the files and call sites that depend on them (code first, tests after, uses inside the same file listed apart). Bounded to the first entries with their totals unless full=true."""
+        """Before you edit shared code: every file and call site that depends on these symbols, code first and tests
+        after. Bounded to the first entries with totals unless full=true."""
         return await _exo_call(exo.impact_of_change, symbols=symbols, root=root, target=target, full=full)
 
     @mcp.tool(
-        title="Task and Plan",
+        title="Declare Task and Plan",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
     )
     async def task(goal: str, items: list[dict] | None = None, root: str | None = None) -> dict:
-        """Declare what you were asked and your plan (items: {content, status: pending|in_progress|completed}) -- the
-        kernel's frame holds you to it: an item is proven only by what the kernel measured."""
+        """Declare what you were asked and your plan as items {content, status: pending|in_progress|completed}. The
+        kernel marks an item proven only by what it measured (a diff, a check that exits 0, a sourced finding).
+        Needs login."""
         return await _exo_call(exo.task, goal=goal, items=items or [], root=root)
 
     @mcp.tool(
@@ -357,94 +431,89 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
     )
     async def frame(root: str | None = None, target: str | None = None) -> dict:
-        """The kernel's step frame for your work (the same frame a Webbee step gets): your task and plan with what is
-        proven, the code around your focus from the exact graph, what your change reaches, the world, your path.
-        Call it FIRST -- at the start and after each change -- before your shell's own search and read tools."""
+        """Your step frame from the Imperal kernel: the task and plan with what is proven and what is only claimed, the
+        code around your focus, what a change reaches, the machines and repos, your path so far. Call it at the
+        start and after each change. Costs credits; needs login."""
         return await _exo_call(exo.frame, root=root, target=target)
 
-    @mcp.tool(title="Grep Code", annotations=ToolAnnotations(readOnlyHint=True))
+    @mcp.tool(title="Grep Text", annotations=ToolAnnotations(readOnlyHint=True))
     async def grep_code(pattern: str, root: str | None = None, target: str | None = None, path_glob: str | None = None,
                         k: int = 50, regex: bool = False) -> dict:
-        """An exact text (or regex) inside the code -- a string in a function body the symbol search does not index.
-        `target`: local (default), ssh:<connection_id> or host:<alias> with `root` = the repo path there."""
+        """Exact text or a regex in the repository's text files (code, configs, docs): a string inside a function body
+        or a setting the symbol search does not index. Secret files are never searched."""
         return await _exo_call(exo.grep_code, pattern=pattern, root=root, target=target, path_glob=path_glob, k=k,
                                regex=regex)
 
     @mcp.tool(title="State Lens", annotations=ToolAnnotations(readOnlyHint=True))
     async def state_lens(section: str = "all", focus: str = "", offset: int = 0, conversation: str = "") -> dict:
-        """What the kernel holds for your session, by section (law, plan, reality, memory, conversation, path) -- where
-        the frame's counted lines point. ``conversation``: another session of yours working now (an id live_sessions
-        names, e.g. Webbee's) -- its state, its running turn's steps included."""
+        """Open one section of what the kernel holds for this session (law, plan, reality, memory, conversation, path):
+        where the frame's counted lines point. conversation=<id> reads another live session of the user."""
         args: dict = {"section": section, "focus": focus, "offset": offset}
         if conversation:
             args["conversation"] = conversation
         return await _exo_call(exo.lens, tool="state_lens", args=args)
 
-    @mcp.tool(title="Recall", annotations=ToolAnnotations(readOnlyHint=True))
+    @mcp.tool(title="Recall a Message", annotations=ToolAnnotations(readOnlyHint=True))
     async def recall(ref: str, offset: int = 0, n: int = 1, conversation: str = "") -> dict:
-        """A past request or answer whole (ref = A<seq> / U<seq> / last_answers / all) -- of your session, or of
-        another conversation of yours by its id (``conversation``, as search_history names it)."""
+        """A past request or answer in full: ref = U<n>, A<n>, last_answers or all; of this session, or of another
+        conversation by the id search_history gives."""
         args: dict = {"ref": ref, "offset": offset, "n": n}
         if conversation:
             args["conversation"] = conversation
         return await _exo_call(exo.lens, tool="recall", args=args)
 
-    @mcp.tool(title="Search History", annotations=ToolAnnotations(readOnlyHint=True))
+    @mcp.tool(title="Search Past Conversations", annotations=ToolAnnotations(readOnlyHint=True))
     async def search_history(query: str, limit: int = 10) -> dict:
-        """Your past conversations that hold ``query`` -- Webbee, the panel, Telegram, other shells' sessions; each hit
-        names its conversation and message, and recall(ref, conversation=...) opens it whole. Nothing of another
-        conversation enters your frame by itself: ask here."""
+        """Find the user's past conversations (Webbee, the panel, Telegram, other shells) that contain a text; open a
+        hit with recall(ref, conversation=...)."""
         return await _exo_call(exo.lens, tool="search_history", args={"query": query, "limit": limit})
 
     @mcp.tool(title="Live Sessions", annotations=ToolAnnotations(readOnlyHint=True))
     async def live_sessions(minutes: int = 120, limit: int = 8) -> dict:
-        """The user's OTHER sessions active in the last ``minutes`` -- Webbee in a terminal, another shell through
-        imperal-mcp, the panel, Telegram: each with its surface, when it last moved, and its last request, steps and
-        answer, and the newest steps of a turn still running; recall(ref, conversation=...) opens any message whole,
-        state_lens(conversation=...) its state. Read-only, on request: nothing of another session enters your frame by
-        itself."""
+        """The user's other sessions active in the last N minutes (Webbee, other shells, the panel, Telegram): each
+        with its last request, steps and answer. Read-only; open one with recall or state_lens(conversation=...)."""
         return await _exo_call(exo.lens, tool="live_sessions", args={"minutes": minutes, "limit": limit})
 
-    @mcp.tool(title="Message Session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
+    @mcp.tool(title="Message a Live Session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
     async def message_session(conversation: str, text: str) -> dict:
-        """Write to another session of the user that is working now (``live_sessions`` names them -- Webbee in a
-        terminal, another shell): a finding to check, a question, what you are doing so you do not both do it. It
-        reads your words as an AGENT's, never the user's: a message approves nothing and changes no task -- decisions
-        and releases stay the user's. Its answer comes back in your frame as an AGENT MESSAGE. The user sees both."""
+        """Send a note to another live session of the user: a finding to check, a question, what you are doing so you
+        do not both do it. It arrives as an agent's words, never the user's, so it approves nothing. The reply shows
+        up in your frame."""
         return await _exo_call(exo.lens, tool="message_session", args={"conversation": conversation, "text": text})
 
-    @mcp.tool(title="Vault Log Read", annotations=ToolAnnotations(readOnlyHint=True))
+    @mcp.tool(title="Read a Stored Output", annotations=ToolAnnotations(readOnlyHint=True))
     async def vault_log_read(ref: str, offset: int = 0, limit: int = 0, grep: str = "") -> dict:
-        """An output the kernel kept in the vault (ref = vault://logs/...), paged or grepped."""
+        """Read a long output the kernel stored (ref = vault://logs/...), by pages or with grep."""
         return await _exo_call(exo.lens, tool="vault_log_read", args={"ref": ref, "offset": offset, "limit": limit,
                                                                       "grep": grep})
 
     @mcp.tool(
-        title="Check Syntax (Tree-sitter)",
+        title="Check Syntax",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     def check_syntax(path: str, root: str | None = None) -> dict:
-        """Fast local tree-sitter syntax validation of a source file after editing."""
+        """Parse a file after you edit it and list its syntax errors with lines (local and instant)."""
         return exo.check_syntax(path=path, root=root)
 
     @mcp.tool(
-        title="Workspace Coding Context",
+        title="Workspace Overview",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     def coding_context(root: str | None = None) -> dict:
-        """Project file tree and git status snapshot (respecting .gitignore and pruning heavy build/vendor directories)."""
+        """The workspace's file tree (respecting .gitignore, without dependency and build folders) and its git status."""
         return exo.coding_context(root=root)
 
     @mcp.tool(
-        title="ShadowGit Checkpoint",
+        title="Checkpoint",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
     )
     def checkpoint(label: str = "checkpoint", root: str | None = None) -> dict:
-        """Capture an instant, invisible ShadowGit snapshot of the workspace without touching the user's real .git history."""
+        """Snapshot the workspace before a risky edit, in a hidden shadow git: your own .git history is untouched.
+        Returns its id and the recent checkpoints."""
         return exo.checkpoint(label=label, root=root)
 
     @mcp.tool(
-        title="ShadowGit Checkpoint Diff",
+        title="Diff Since a Checkpoint",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     def checkpoint_diff(
@@ -452,23 +521,25 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         paths: list[str] | None = None,
         root: str | None = None,
     ) -> dict:
-        """Show a unified diff between the current workspace state and a ShadowGit checkpoint."""
+        """Unified diff of the workspace since a checkpoint (default: the latest); paths narrows it to those files or
+        folders."""
         return exo.checkpoint_diff(target=target, paths=paths, root=root)
 
     @mcp.tool(
-        title="ShadowGit Checkpoint Rollback",
+        title="Roll Back to a Checkpoint",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True),
     )
     def checkpoint_rollback(target: str | int | None = None, root: str | None = None) -> dict:
-        """Restore the workspace to a previous ShadowGit checkpoint (an auto-safety snapshot is taken first)."""
+        """Restore the workspace to a checkpoint (default: the latest). A safety snapshot is taken first, so the
+        rollback itself can be undone."""
         return exo.checkpoint_rollback(target=target, root=root)
 
     @mcp.tool(
-        title="Context Compression Telemetry",
+        title="Token Savings",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     def token_savings() -> dict:
-        """Return measured characters and lines returned vs. full-file baseline in this session."""
+        """How many characters and lines the code tools saved this session compared with reading whole files."""
         return exo.token_savings()
 
     from .auth import AgentLogin
@@ -476,17 +547,17 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
     mcp._agent_login = agent_login      # tests swap the grant
 
     @mcp.tool(
-        title="Sign In to Imperal",
+        title="Sign In",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
     )
     async def login(again: bool = False) -> dict:
-        """Sign in for the memory tools (recall_context, remember_fact, frame, ...); the code tools need no account.
-        Returns a link and a short code: show both to the user, who approves in any browser. Call it again to see
-        whether the sign-in is done. again=true starts a new sign-in over an expired session."""
+        """Sign in to Imperal for memory and frame; the code tools need no account. Returns a link and a short code:
+        show both to the user, who approves in any browser, then call login again to see that it is done. again=true
+        replaces an expired session."""
         return await agent_login(again=again)
 
     @mcp.tool(
-        title="Recall Cross-Surface Cloud Memory",
+        title="Recall Memory",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def recall_context(
@@ -496,7 +567,8 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         include_repo_memory: bool = True,
         include_resolved: bool = False,
     ) -> dict:
-        """Retrieve relevant user directives, preferences, and repository notes from Imperal Cloud Memory across Webbee, Telegram, and the Panel."""
+        """The user's standing rules, preferences and repository notes that match a query, from Imperal memory shared
+        with Webbee, Telegram and the panel."""
         from .exoskeleton import scope_recall
         return defensive_scrub(scope_recall(
             await client.run_tool(
@@ -512,7 +584,7 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
             ), exo.current_repo_keys()))
 
     @mcp.tool(
-        title="Remember Durable User Fact / Directive",
+        title="Remember a Fact",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
     )
     async def remember_fact(
@@ -521,7 +593,8 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         tags: list[str] | None = None,
         scope: str | None = None,
     ) -> dict:
-        """Persist a durable user fact, architectural decision, or standing directive to Imperal Cloud Memory (shared across all surfaces)."""
+        """Keep a lasting fact, decision or rule about the user in Imperal memory, for every future session and
+        surface."""
         payload: dict[str, Any] = {
             "fact": fact,
             "category": category,
@@ -532,7 +605,7 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         return defensive_scrub(await client.run_tool("memory-index", "add_user_fact", payload))
 
     @mcp.tool(
-        title="Save Durable Repository Note",
+        title="Save a Repository Note",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
     )
     async def save_repo_note(
@@ -541,7 +614,8 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         citations: list[str] | None = None,
         root: str | None = None,
     ) -> dict:
-        """Save a durable repository convention or architectural note to Imperal Cloud Memory."""
+        """Keep a lasting note about a repository (a convention, an architecture decision), with citations if you have
+        them."""
         import os as _os
         repo_name = repo or _os.path.basename(exo.resolve_workspace(root))
         return defensive_scrub(
@@ -560,27 +634,27 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
     #    first is what it came for -- live 2026-11-13 the list opened with eight IR-app tools) ──────────
 
     @mcp.tool(
-        title="Validate IR",
+        title="Validate an App",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     def validate_ir(app_ir: dict) -> dict:
-        """Validate an app.ir.json locally (envelope + every declarative step)."""
+        """Check an Imperal app definition (app.ir.json) locally: its envelope and every declarative step."""
         return _validate_ir(app_ir)
 
     @mcp.tool(
-        title="Smoke-test IR",
+        title="Smoke-Test an App",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def smoke_ir(app_ir: dict, function: str, args: dict | None = None) -> dict:
-        """Run one function of an app.ir.json in an ISOLATED store and report {ok,result,trace}."""
+        """Run one function of an app.ir.json in an isolated store; returns {ok, result, trace}."""
         return await client.smoke_ir(app_ir, function, args or {})
 
     @mcp.tool(
-        title="Deploy IR",
+        title="Deploy an App",
         annotations=ToolAnnotations(destructiveHint=True),
     )
     async def deploy_ir(app_ir: dict, app_id: str) -> dict:
-        """Deploy an app.ir.json into the caller's account (creates the app record if needed)."""
+        """Deploy an app.ir.json to the user's Imperal account; a new app id creates the app."""
         display = (app_ir.get("app", {}) or {}).get("id", app_id)
         await client.ensure_app(app_id, display)
         return await deploy_ir_logic(client, app_ir, app_id)
@@ -590,62 +664,50 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def list_apps() -> Any:
-        """List the caller's developer apps (PII-masked)."""
+        """The user's own Imperal apps (personal data masked)."""
         return defensive_scrub(await client.list_apps())
 
     @mcp.tool(
-        title="Get App",
+        title="Get an App",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def get_app(app_id: str, full: bool = False) -> Any:
-        """One app: what it is and its callable tools (name, action_type, what it does) -- the run_read_tool /
-        run_write_tool ``function`` names; full=true gives the raw record with the whole manifest (PII-masked)."""
+        """One app and its callable tools (name, action type, what it does): the names run_read_tool and run_write_tool
+        take. full=true gives the raw record with the whole manifest."""
         got = defensive_scrub(await client.get_app(app_id))
         return got if full else app_summary(got)
 
     @mcp.tool(
-        title="Run Read Tool",
+        title="Run a Read Tool",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def run_read_tool(app_id: str, function: str = "", args: dict | None = None, tool: str = "") -> Any:
-        """Run a READ-only tool of a deployed app (refuses write/destructive). ``function`` is the tool's name as
-        get_app lists it (``tool`` is taken as the same)."""
+        """Call a read-only tool of a deployed app by the name get_app lists; write and destructive tools are refused
+        here."""
         if not (function or tool):
             return {"ok": False, "error": "name the app's tool: function=<a name get_app lists>"}
         return await run_read_tool_logic(client, app_id, function or tool, args or {})
 
     @mcp.tool(
-        title="Run Write Tool",
+        title="Run a Write Tool",
         annotations=ToolAnnotations(destructiveHint=True),
     )
     async def run_write_tool(app_id: str, function: str = "", args: dict | None = None, ctx: Context = None,
                              tool: str = "") -> Any:
-        """Run a WRITE or DESTRUCTIVE tool of a deployed app. Money tools always go
-        through out-of-band panel approval (never terminal consent or autopilot):
-        re-run this tool after approving in the panel to complete. Write runs
-        directly; destructive requires human consent (elicitation) or session
-        autopilot; read tools are refused (use run_read_tool)."""
+        """Call a write or destructive tool of a deployed app by the name get_app lists. Destructive needs the user's
+        consent; money tools need approval in the Imperal panel, then call again."""
         if not (function or tool):
             return {"ok": False, "error": "name the app's tool: function=<a name get_app lists>"}
         return await run_write_tool_logic(client, ctx, app_id, function or tool, args or {}, _AUTOPILOT)
 
     @mcp.tool(
-        title="Upload Local File",
+        title="Upload a File",
         annotations=ToolAnnotations(destructiveHint=False),
     )
     async def upload_file(path: str, name: str | None = None) -> Any:
-        """Send a file from THIS machine into Imperal and get its ids back.
-
-        Read the file straight off disk -- never paste its bytes into a tool
-        call, that is truncated long before it reaches the gateway.
-
-        Returns {file_id, document_id, filename, size_bytes, status}. To then
-        PLACE that file into any extension (a task attachment, an envelope, a
-        post), call run_write_tool with the sink's own file argument set to
-        {"document_id": <document_id>}: the gateway swaps the reference for the
-        real bytes on the way in, so the file never travels through this
-        conversation.
-        """
+        """Send a file from this machine to Imperal by its path (never paste its bytes) and get {file_id, document_id,
+        filename, size_bytes, status}. To attach it to anything, pass {"document_id": <id>} as that tool's file
+        argument in run_write_tool."""
         return defensive_scrub(await client.upload_file(path, name=name))
 
     @mcp.resource("imperal://exoskeleton-protocol")
@@ -669,6 +731,10 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         """Guidance for building an Imperal app from intent."""
         return build_prompt_text()
 
+    for name, tool in (getattr(getattr(mcp, "_tool_manager", None), "_tools", None) or {}).items():
+        tool.parameters = lean_schema(name, tool.parameters)
+        # a docstring's own indentation reached every agent as runs of spaces after each line break
+        tool.description = " ".join((tool.description or "").split())
     return mcp
 
 

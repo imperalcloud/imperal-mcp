@@ -292,6 +292,75 @@ def _view_for(ws: str, rel: str) -> dict | None:
 _PARSE_CAP = 1024 * 1024       # outline/read_symbol parse a file whole up to this (imperal_sdk RAW_CAP for code)
 
 
+_GREP_FILE_MAX = 2 * 1048576     # a text file bigger than this is data, not something to grep through
+_GREP_EXTRA_MAX = 20000          # text files beyond the code index searched in one call
+_LOCK_FILES = frozenset({"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "uv.lock", "cargo.lock",
+                         "composer.lock", "gemfile.lock", "go.sum", "pipfile.lock"})
+
+
+def _grep_files(ws: str):
+    """The files grep_code reads, code first: the code index's own files, then every other text file git tracks or
+    would track (configs, docs, CI) -- under the rule read_symbol keeps (never a secret by name or place), never a
+    dependency or build folder, a lock file, a binary or a file over 2 MB.
+    Live 2026-11-13: grep_code read only the index's code files, so a version string in server.json was "not found"."""
+    import subprocess
+    from webbee.intel.service import _local_listing
+    from imperal_sdk.code_index import SKIP_DIRS
+    seen = set()
+    for item in _local_listing(ws):
+        seen.add(item["path"])
+        yield item["path"]
+    if not os.path.isdir(os.path.join(ws, ".git")):
+        return
+    try:
+        r = subprocess.run(["git", "-C", ws, "ls-files", "-co", "--exclude-standard", "-z"],
+                           capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return
+    if r.returncode != 0:
+        return
+    extra = 0
+    for rel in r.stdout.decode("utf-8", "surrogateescape").split("\0"):
+        if not rel or rel in seen:
+            continue
+        parts = rel.split("/")
+        if any(d == ".git" or d in SKIP_DIRS for d in parts[:-1]) or parts[-1].lower() in _LOCK_FILES:
+            continue
+        full = os.path.join(ws, rel)
+        if _refused(ws, rel, full):
+            continue
+        try:
+            if os.path.getsize(full) > _GREP_FILE_MAX:
+                continue
+            with open(full, "rb") as f:
+                if b"\0" in f.read(4096):
+                    continue
+        except OSError:
+            continue
+        extra += 1
+        if extra > _GREP_EXTRA_MAX:
+            return
+        yield rel
+
+
+def _diff_for_paths(diff_text: str, paths: list[str] | None) -> str:
+    """Only the files of a unified git diff that lie at or under one of ``paths`` (all of it when none are given).
+    Live 2026-11-13: checkpoint_diff took ``paths`` and echoed them back, yet always answered the whole diff."""
+    wanted = [p.strip().strip("/") for p in (paths or []) if p and p.strip().strip("/")]
+    if not wanted or not diff_text:
+        return diff_text
+    keep: list[str] = []
+    take = False
+    for block in re.split(r"(?m)^(?=diff --git )", diff_text):
+        if block.startswith("diff --git "):
+            m = re.match(r"diff --git a/(.+?) b/(.+)", block.split("\n", 1)[0])
+            names = {m.group(1), m.group(2)} if m else set()
+            take = any(n == w or n.startswith(w + "/") for n in names for w in wanted)
+        if take:
+            keep.append(block)
+    return "".join(keep)
+
+
 def _refused(ws: str, rel: str, full: str) -> str:
     """Why outline / read_symbol never open this file, or "": a secret by its name, by its real path (the workspace
     itself a secret store, a link into one), anything but a regular file (final review 2026-11-04: the tools read
@@ -660,8 +729,8 @@ answer from the exact code graph and the user's memory, so you read less, miss f
    finding with its sources). One you cannot finish: status blocked or cancelled, the reason in blocked_on.
 3. Code, no account needed: `orient(query)` -> `outline(path)` -> `read_symbol(path, name | "L120-180")`;
    `search_code`, `grep_code` for an exact text, `graph_slice`, `contract_slice`, `repo_profile`, `coding_context`;
-   `impact_of_change(symbols)` before editing a shared symbol, `check_syntax` after. A server's repo: the same tools
-   with target="host:<alias>" and root=<path>.
+   `impact_of_change(symbols)` before editing a shared symbol, `check_syntax` after. root is the repository (default:
+   the workspace); a server's repo: the same tools with target="host:<alias>" (or ssh:<connection_id>) and root=<path>.
 4. Undo: `checkpoint` before a risky multi-file edit, then `checkpoint_diff` or `checkpoint_rollback`;
    `token_savings` shows what the graph saved.
 5. Memory: `recall_context(query)`, `recall`, `search_history`, `live_sessions`, `message_session` (as an agent, never
@@ -2289,12 +2358,10 @@ class ExoskeletonRuntime:
             path_glob = f"{sub}/{path_glob}" if path_glob else f"{sub}/*"
             ws = up
         _ensure_webbee_importable()
-        from webbee.intel.service import _local_listing
         rx = re.compile(pattern) if regex else None
         matches: list[dict[str, Any]] = []
         total = 0
-        for item in _local_listing(ws):
-            rel = item["path"]
+        for rel in _grep_files(ws):
             if path_glob and not fnmatch.fnmatch(rel, path_glob):
                 continue
             full = os.path.join(ws, rel)
@@ -2613,7 +2680,7 @@ class ExoskeletonRuntime:
         if not sg.available:
             return {"status": "error", "workspace": ws, "error": "ShadowGit unavailable in this workspace"}
         since = str(target) if target is not None else ""
-        diff_text = sg.diff(since=since)
+        diff_text = _diff_for_paths(sg.diff(since=since), paths)
         return {
             "status": "ok",
             "workspace": ws,

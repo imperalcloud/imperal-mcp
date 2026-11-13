@@ -131,3 +131,65 @@ async def test_not_signed_in_points_at_the_login_tool(tmp_path, monkeypatch):
 def auth_cfg():
     from imperal_mcp.config import Config
     return Config(api_url="http://gw", token=None)
+
+
+# ── what every session loads, and what each answer costs (2026-11-13) ──
+
+@pytest.mark.asyncio
+async def test_the_listing_is_lean_and_says_what_names_do_not(tmp_path):
+    tools = await build_server(None, workspace=str(tmp_path)).list_tools()
+    wire = sum(len(t.model_dump_json(exclude_none=True, by_alias=True)) for t in tools)
+    assert wire <= 18000                       # 0.9.13: 20 239 characters for 34 tools
+    for t in tools:
+        assert "  " not in t.description and "\n" not in t.description, t.name
+        for name, field in t.inputSchema.get("properties", {}).items():
+            assert "title" not in field and {"type": "null"} not in field.get("anyOf", []), (t.name, name)
+    by = {t.name: t for t in tools}
+    assert "L120-180" in by["read_symbol"].inputSchema["properties"]["name"]["description"]
+    assert "blocked_on" in by["task"].inputSchema["properties"]["items"]["description"]
+
+
+@pytest.mark.asyncio
+async def test_a_lean_schema_still_checks_arguments(tmp_path):
+    (tmp_path / "a.py").write_text("def f():\n    return 1\n")
+    srv = build_server(None, workspace=str(tmp_path))
+    with pytest.raises(Exception):
+        await srv.call_tool("outline", {})                     # path is still required
+    assert "f" in _text(await srv.call_tool("outline", {"path": "a.py", "root": None}))   # null still accepted
+
+
+@pytest.mark.asyncio
+async def test_outline_sends_each_symbol_once_unless_asked(tmp_path):
+    (tmp_path / "a.py").write_text("def f():\n    return 1\n\nclass C:\n    def m(self):\n        pass\n")
+    srv = build_server(None, workspace=str(tmp_path))
+    lean = _text(await srv.call_tool("outline", {"path": "a.py"}))
+    whole = _text(await srv.call_tool("outline", {"path": "a.py", "full": True}))
+    assert "rendered" in lean and '"symbols"' not in lean and '"symbols"' in whole
+
+
+def test_checkpoint_diff_paths_narrow_the_diff():
+    from imperal_mcp.exoskeleton import _diff_for_paths
+    diff = ("diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-x\n+y\n"
+            "diff --git a/docs/b.md b/docs/b.md\n--- a/docs/b.md\n+++ b/docs/b.md\n@@ -1 +1 @@\n-p\n+q\n")
+    assert _diff_for_paths(diff, None) == diff
+    assert _diff_for_paths(diff, ["src"]).count("diff --git") == 1 and "src/a.py" in _diff_for_paths(diff, ["src/"])
+    assert "docs/b.md" in _diff_for_paths(diff, ["docs/b.md"]) and "src/a.py" not in _diff_for_paths(diff, ["docs"])
+    assert _diff_for_paths(diff, ["nowhere"]) == ""
+
+
+def test_grep_reads_configs_and_docs_but_never_a_secret_a_lock_or_a_binary(tmp_path):
+    import subprocess
+    from imperal_mcp.exoskeleton import ExoskeletonRuntime
+    (tmp_path / "app.py").write_text("NEEDLE = 1\n")
+    (tmp_path / "server.json").write_text('{"v": "NEEDLE"}\n')
+    (tmp_path / "README.md").write_text("NEEDLE in the docs\n")
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "ci.yml").write_text("run: NEEDLE\n")
+    (tmp_path / ".env").write_text("TOKEN=NEEDLE\n")
+    (tmp_path / "package-lock.json").write_text('{"NEEDLE": 1}\n')
+    (tmp_path / "blob.bin").write_bytes(b"NEEDLE\0\0\0")
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    got = ExoskeletonRuntime(workspace=str(tmp_path)).grep_code("NEEDLE")
+    paths = {m["path"] for m in got["matches"]}
+    assert paths == {"app.py", "server.json", "README.md", ".github/ci.yml"}, paths
+    assert got["matches"][0]["path"] == "app.py"            # code first

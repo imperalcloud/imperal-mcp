@@ -265,8 +265,8 @@ Keep `--with imperal-mcp[code]`: without it the code tools answer with what to i
 | `orient(query, k?)` | One-call orientation: repo profile + top-ranked symbols and matches for the task |
 | `repo_profile()` | Languages, file counts, entry points, test hints, git ref |
 | `search_code(query, k?, path_glob?, kind?)` | Hybrid symbol + semantic + lexical search |
-| `grep_code(pattern, path_glob?, regex?)` | An exact text or regex inside the code |
-| `outline(path)` | A file's structure with exact line ranges, without its body |
+| `grep_code(pattern, path_glob?, regex?)` | An exact text or regex in the repository's text files: code, configs, docs (never a secret file) |
+| `outline(path, full?)` | A file's structure with exact line ranges, without its body (`full` adds the symbols as JSON) |
 | `read_symbol(path, name)` | Only one function, class, method or line range (`L120-180`) |
 | `graph_slice(symbols, depth?)` | Definitions, signatures, callers and callees |
 | `contract_slice(symbols)` | Signatures, returns, raises and real call-site argument shapes |
@@ -280,7 +280,7 @@ Keep `--with imperal-mcp[code]`: without it the code tools answer with what to i
 | Tool | What it does |
 | :--- | :--- |
 | `checkpoint(label?)` | An invisible ShadowGit snapshot - your `.git` history untouched |
-| `checkpoint_diff(target?, paths?)` | Diff of the workspace against a checkpoint |
+| `checkpoint_diff(target?, paths?)` | Diff of the workspace since a checkpoint (default: the latest), `paths` narrows it |
 | `checkpoint_rollback(target?)` | Restore a checkpoint (a safety snapshot is taken first; marked destructive, so your client asks) |
 
 **Apps on Imperal Cloud** (ICNLI)

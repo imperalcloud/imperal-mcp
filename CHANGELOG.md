@@ -18,6 +18,11 @@ A new agent's first minutes, measured on a fresh install from the MCP Registry w
   "No module named 'webbee'". The registry entry now runs `uvx --with imperal-mcp[code] imperal-mcp`, and a code tool
   started without the extra says what to install (pipx, uv tool, or `--with` for uvx) instead of a raw import error.
   The extra stays optional: webbee's own environment carries imperal-mcp without it.
+- `checkpoint_diff` took `paths` and echoed them back, yet always answered the whole diff: `paths` now narrows it to
+  those files and folders.
+- `grep_code` read only the code index's files, so a string in `server.json`, a README or a CI file was "not found".
+  It now reads every text file git tracks, code first, under the rule `read_symbol` keeps (never a secret file), and
+  never a dependency or build folder, a lock file, a binary or a file over 2 MB.
 
 ### Added
 - `login` tool: an agent signs its user in itself. The first call gives a link and a short code to show the user, who
@@ -25,8 +30,15 @@ A new agent's first minutes, measured on a fresh install from the MCP Registry w
   No restart: the client reads the saved credentials on each request. Every "not logged in" now points at it.
 
 ### Changed
+- Every tool's title and description rewritten for an agent: what it returns and when to reach for it, in one or two
+  sentences; parameters whose name does not say it (`read_symbol` name, `task` items, `state_lens` section, ...) carry
+  a short hint. The schemas lost the generator's noise (a title per field, `anyOf [type, null]`), and a docstring's
+  indentation no longer reaches the agent as runs of spaces. What a session loads: 23 945 -> 19 584 characters
+  (tool list 20 239 -> 17 231 with one tool more, protocol 3 706 -> 2 353).
+- `outline` sends each symbol once (the readable map); `full=true` adds the JSON list. On `exoskeleton.py`: 20 562 ->
+  6 906 characters.
 - The tool list opens with the code and memory tools; the eight Imperal-app tools come last.
-- The protocol every session gets is 2 279 characters instead of 3 706: the same loop (frame first, proofs,
+- The protocol every session gets is 2 353 characters instead of 3 706: the same loop (frame first, proofs,
   learned/expect/need), plainer words, no command tone.
 
 ## 0.9.13 - 2026-11-08
