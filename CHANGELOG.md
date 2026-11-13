@@ -7,6 +7,35 @@ a live code map, undo for every change and a hallucination check, as a local std
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.15 - 2026-11-13
+
+The imperal-mcp 0.9.14 field test, fixed in every layer. Needs imperal-sdk 6.6.0 and webbee 0.7.14 (`[code]`), and the
+kernel, vault and extensions of the same day.
+
+### Fixed
+- `run_read_tool` / `run_write_tool`: a tool the app does not have is named as unknown, with the app's tools (was
+  "this MCP runs read-only tools only").
+- `remember_fact`: `scope` is `global | task | surface`, refused otherwise before any call; the vault now keeps scope,
+  tags and lifecycle (every fact read back "global").
+- `save_repo_note` names the repository by its key (or full path), never a bare folder name the store matched as a
+  fragment of another repository's path; `recall_context` asks for three times the limit and cuts after dropping other
+  repositories' notes, so a note just saved is found.
+- `upload_file` says when File Reader returned no `document_id` (it came back null; File Reader now returns it).
+- The IR spec and example: `{id, op, args}`, `update` takes `set`, parameters as `{{event.x}}` -- the shipped example
+  stored an empty url.
+- Search: words of any script; when the index answers only by meaning and no hit holds a query word, the files are read
+  for the words, and the meaning-only hits follow, marked weak (a Russian quote of a comment found unrelated tests).
+- `impact_of_change` passes the index's summary and by-name list through: a file that only imports a name is named.
+- `graph_slice`: a symbol's text is clipped to 80 lines, callers and callees once and at most 15 each with their
+  totals; `bounded()` also cuts inside nested entries (an answer was about 38 KB).
+- `contract_slice`: one contract per method, route and handler (four copies of one repository were four results); one
+  answer per repository key in a folder.
+- Hooks: WebSearch, WebFetch and subagent reports reach the kernel, scrubbed like a command's output -- the stop hook
+  held every claim taken from them; a prompt names the repository key of the shell's current folder (the focus sat on
+  a 14-day-old copy).
+- `token_savings` says what it reports (calls and returned size); it never claimed a saving by design.
+- A hook test that flaked about 1 run in 10 (a hex fingerprint can hold the letters b-a-d).
+
 ## 0.9.14 - 2026-11-13
 
 A new agent's first minutes, measured on a fresh install from the MCP Registry with no account.

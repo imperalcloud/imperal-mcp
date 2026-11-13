@@ -36,10 +36,11 @@ def test_the_pins_carry_what_the_frame_needs():
     2026-11-04: the string-aware tsconfig reader and the parallel SFTP sync are in imperal-sdk 6.3.8+; the universal
     index (any folder, every file kind) is in imperal-sdk 6.4.1+ with its readers and webbee 0.7.0+; 2026-11-06: one
     link resolver for the vault and the clients, a folder of repositories resolved per repository in 6.5.1+; contract_slice
-    through callers (code_links.contracts_reached) in 6.5.3+."""
+    through callers (code_links.contracts_reached) in 6.5.3+; 2026-11-13: Symbol.doc, nested arrow functions,
+    route decorators, one IR step rule in 6.6.0+ and webbee 0.7.14+ (search answers carry doc)."""
     from pathlib import Path
     text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
-    assert "imperal-sdk>=6.5.3" in text and "webbee>=0.7.0" in text and "imperal-sdk[universal-index]>=6.5.3" in text
+    assert "imperal-sdk>=6.6.0" in text and "webbee>=0.7.14" in text and "imperal-sdk[universal-index]>=6.6.0" in text
 
 
 def _pyproject_description() -> str:
