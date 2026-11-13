@@ -554,12 +554,13 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         return exo.checkpoint_rollback(target=target, root=root)
 
     @mcp.tool(
-        title="Tool Output Totals",
+        title="Token Savings",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
     def token_savings() -> dict:
-        """How many calls each code tool answered this session and how many characters and lines they returned. It
-        names no "saved" figure on purpose: a short answer is no proof it was the useful one."""
+        """What the code tools saved this session, measured on the real files: every distinct file the answers pointed to,
+        read whole once, against what the tools returned; tokens estimated at 4 characters each. Answers with no local
+        file behind them are counted apart, never as a saving."""
         return exo.token_savings()
 
     from .auth import AgentLogin

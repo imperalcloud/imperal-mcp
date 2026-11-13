@@ -45,28 +45,56 @@ def _ensure_webbee_importable() -> None:
 
 
 class TokenSavingsTracker:
-    """Per-session telemetry: how many calls each tool answered and how much it returned. No "saved vs. whole
-    files" figure -- a useless answer must never pass for savings (frame phase A, spec A6)."""
+    """What the code tools saved this session, measured on the real files (owner 2026-11-13: as close to the real
+    saving as it can be, without over-engineering). Without the tools the agent opens the files an answer points to,
+    each once: ``would_read`` is the size of every distinct file the answers pointed to, counted the first time;
+    ``returned`` is what the tools gave back. An answer with no local file behind it (a remote server's, a list of
+    contracts) is counted apart as unmeasured, never as a saving. Tokens are estimated at 4 characters each."""
+
+    CHARS_PER_TOKEN = 4
 
     def __init__(self) -> None:
         self.calls: int = 0
         self.lines_returned: int = 0
         self.chars_returned: int = 0
+        self.measured_returned: int = 0
+        self.unmeasured_calls: int = 0
+        self.files: dict[str, int] = {}
         self.by_tool: dict[str, dict[str, int]] = {}
 
-    def record(self, tool: str, *, returned_chars: int, returned_lines: int = 0, **_baseline: Any) -> dict[str, Any]:
+    def record(self, tool: str, *, returned_chars: int, returned_lines: int = 0, files: dict | None = None,
+               **_old: Any) -> dict[str, Any]:
         ret_c, ret_l = max(0, int(returned_chars)), max(0, int(returned_lines))
         self.calls += 1
         self.chars_returned += ret_c
         self.lines_returned += ret_l
-        slot = self.by_tool.setdefault(tool, {"calls": 0, "returned_chars": 0, "returned_lines": 0})
+        slot = self.by_tool.setdefault(tool, {"calls": 0, "returned_chars": 0, "returned_lines": 0,
+                                               "would_read_chars": 0, "unmeasured_calls": 0})
         slot["calls"] += 1
         slot["returned_chars"] += ret_c
         slot["returned_lines"] += ret_l
-        return {"tool": tool, "returned_chars": ret_c, "returned_lines": ret_l}
+        new = {str(k): max(0, int(v)) for k, v in (files or {}).items() if str(k) not in self.files}
+        if files:
+            self.measured_returned += ret_c
+            self.files.update(new)
+            slot["would_read_chars"] += sum(new.values())
+        else:
+            self.unmeasured_calls += 1
+            slot["unmeasured_calls"] += 1
+        return {"tool": tool, "returned_chars": ret_c, "returned_lines": ret_l,
+                "would_read_chars": sum(new.values()) if files else None}
 
     def summary(self) -> dict[str, Any]:
+        would = sum(self.files.values())
+        saved = max(0, would - self.measured_returned)
+        t = self.CHARS_PER_TOKEN
         return {"calls": self.calls, "returned_chars": self.chars_returned, "returned_lines": self.lines_returned,
+                "files_behind_answers": len(self.files), "would_read_chars": would,
+                "saved_chars": saved, "saved_pct": round(100.0 * saved / would, 1) if would else 0.0,
+                "tokens_est": {"would_read": would // t, "returned": self.measured_returned // t, "saved": saved // t},
+                "unmeasured_calls": self.unmeasured_calls,
+                "how": ("would_read = every distinct local file the answers pointed to, whole, once; saved = would_read "
+                        "minus what those answers returned; ~4 characters per token"),
                 "by_tool": {k: dict(v) for k, v in self.by_tool.items()}}
 
 
@@ -713,6 +741,55 @@ def _resolve_in_workspace(workspace_root: str, path: str) -> tuple[str, str]:
     return full, rel
 
 
+def _file_sizes(ws: str, rel_paths) -> dict[str, int]:
+    """``{repo-relative path: characters}`` of the real files ``rel_paths`` name inside ``ws`` (a ``path::symbol``,
+    ``path#chunk`` or ``path:line`` spelling is its file; a path outside the workspace or not on disk is skipped)."""
+    out: dict[str, int] = {}
+    for raw_p in rel_paths or ():
+        if not raw_p or not isinstance(raw_p, str):
+            continue
+        clean_p = raw_p.split("::", 1)[0].split("#", 1)[0].split(":", 1)[0].strip()
+        if not clean_p or clean_p in out:
+            continue
+        try:
+            full, rel = _resolve_in_workspace(ws, clean_p)
+        except (ValueError, OutsideWorkspaceError):
+            continue
+        if rel in out or not os.path.isfile(full):
+            continue
+        try:
+            with open(full, "r", encoding="utf-8", errors="replace") as f:
+                out[rel] = len(f.read())
+        except OSError:
+            continue
+    return out
+
+
+def _answer_paths(text: str) -> list[str]:
+    """The file paths an answer (its JSON) points to: every ``path`` / ``file`` / ``def_path`` value, and an ``id``
+    spelled ``path::symbol``."""
+    try:
+        obj = json.loads(text or "null")
+    except (TypeError, ValueError):
+        return []
+    found: list[str] = []
+
+    def walk(x: Any) -> None:
+        if isinstance(x, dict):
+            for k, v in x.items():
+                if k in ("path", "file", "def_path", "rel_path") and isinstance(v, str):
+                    found.append(v)
+                elif k == "id" and isinstance(v, str) and "::" in v:
+                    found.append(v)
+                elif isinstance(v, (dict, list)):
+                    walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+    walk(obj)
+    return found
+
+
 def _matched_files_stats(ws: str, rel_paths: list[str] | set[str] | tuple[str, ...]) -> tuple[int, int, int]:
     """Measure exact (total_chars, total_lines, file_count) of the real matched files on disk."""
     total_chars = 0
@@ -759,7 +836,7 @@ answer from the exact code graph and the user's memory, so you read less, miss f
    `impact_of_change(symbols)` before editing a shared symbol, `check_syntax` after. root is the repository (default:
    the workspace); a server's repo: the same tools with target="host:<alias>" (or ssh:<connection_id>) and root=<path>.
 4. Undo: `checkpoint` before a risky multi-file edit, then `checkpoint_diff` or `checkpoint_rollback`;
-   `token_savings` counts what the code tools returned.
+   `token_savings` measures what the code tools saved against reading the files whole.
 5. Memory: `recall_context(query)`, `recall`, `search_history`, `live_sessions`, `message_session` (as an agent, never
    the user's words), `state_lens`, `vault_log_read`; keep what lasts with `remember_fact` and `save_repo_note`.
 6. Never state a code name, file or size you did not read: the kernel checks every step and the final answer.
@@ -1614,7 +1691,7 @@ class ExoskeletonRuntime:
         # an exact name first, whatever its score (06.11 report: exact hits carry no score and sank below fuzzy ones)
         uniq.sort(key=lambda m: (str(m.get("title") or "") != query, -float(m.get("score") or 0)))
         matches = uniq[:k]
-        self._record_read("search_code", returned_text=json.dumps(matches, ensure_ascii=False))
+        self._record_read("search_code", returned_text=json.dumps(matches, ensure_ascii=False), root=ws)
         return {**self._units_status(waiting), "workspace": ws, "query": query, "matches": matches,
                 "total": len(matches), "units": self.units_progress(ws), "source": "local index (units)"}
 
@@ -1674,25 +1751,18 @@ class ExoskeletonRuntime:
             sg.ensure()
         return ws, sg
 
-    def _record_read(
-        self,
-        tool: str,
-        *,
-        returned_text: str,
-        baseline_chars: int = 0,
-        baseline_lines: int = 0,
-        baseline_files: int = 1,
-    ) -> None:
+    def _record_read(self, tool: str, *, returned_text: str, paths: Any = None, root: str | None = None,
+                     **_old: Any) -> None:
+        """One answer in token_savings: what it returned against the local files it points to (``paths``, else the
+        ones its JSON names), each file counted once per session."""
         ret_c = len(returned_text or "")
         ret_l = max(1, (returned_text or "").count("\n") + 1) if returned_text else 0
-        self.tracker.record(
-            tool,
-            returned_chars=ret_c,
-            baseline_chars=baseline_chars,
-            returned_lines=ret_l,
-            baseline_lines=baseline_lines,
-            baseline_files=baseline_files,
-        )
+        try:
+            files = _file_sizes(self.resolve_workspace(root), paths if paths is not None
+                                else _answer_paths(returned_text))
+        except Exception:
+            files = {}
+        self.tracker.record(tool, returned_chars=ret_c, returned_lines=ret_l, files=files)
 
     # ── the vault graph: one truth about code (frame phase A) ──
 
@@ -2038,7 +2108,8 @@ class ExoskeletonRuntime:
             out = {"status": "ok", "workspace": root if target else self.resolve_workspace(root), "query": query,
                    "profile": profile, "matches": matches,
                    "semantic": ans.get("semantic"), "best_match": ans.get("best_match"), **self._vault_meta(ans)}
-            self._record_read("orient", returned_text=json.dumps(out, ensure_ascii=False))
+            self._record_read("orient", returned_text=json.dumps(out, ensure_ascii=False), root=root,
+                              paths=[] if target and target != "local" else None)
             return out
         return self._remote_unavailable(target, root) or _coarse(self._local_orient(query, k, root))
 
@@ -2055,14 +2126,7 @@ class ExoskeletonRuntime:
         matches = _normalize_search_matches(raw_matches, ws, query, k=k)
         text = json.dumps({"profile": prof, "matches": matches}, ensure_ascii=False)
         matched_paths = [str(m.get("path") or m.get("file") or "") for m in matches]
-        base_c, base_l, base_f = _matched_files_stats(ws, matched_paths)
-        self._record_read(
-            "orient",
-            returned_text=text,
-            baseline_chars=base_c,
-            baseline_lines=base_l,
-            baseline_files=base_f,
-        )
+        self._record_read("orient", returned_text=text, paths=matched_paths, root=ws)
         return {
             "status": "ok",
             "workspace": ws,
@@ -2101,7 +2165,8 @@ class ExoskeletonRuntime:
         ans = self._vault_search(query, k, kind, path_glob, root, target)
         if ans is not None:
             matches = list((ans.get("data") or {}).get("items") or [])[:k]
-            self._record_read("search_code", returned_text=json.dumps(matches, ensure_ascii=False))
+            self._record_read("search_code", returned_text=json.dumps(matches, ensure_ascii=False), root=root,
+                              paths=[] if target and target != "local" else None)
             return {"status": "ok", "workspace": root if target else self.resolve_workspace(root), "query": query,
                     "matches": matches, "total": len(matches), "semantic": ans.get("semantic"),
                     "best_match": ans.get("best_match"), **self._vault_meta(ans)}
@@ -2120,14 +2185,7 @@ class ExoskeletonRuntime:
         matches = _normalize_search_matches(raw_matches, ws, query, k=k, kind=kind, path_glob=path_glob)
         text = json.dumps(matches, ensure_ascii=False)
         matched_paths = [str(m.get("path") or m.get("file") or "") for m in matches]
-        base_c, base_l, base_f = _matched_files_stats(ws, matched_paths)
-        self._record_read(
-            "search_code",
-            returned_text=text,
-            baseline_chars=base_c,
-            baseline_lines=base_l,
-            baseline_files=base_f,
-        )
+        self._record_read("search_code", returned_text=text, paths=matched_paths, root=ws)
         return {
             "status": "ok",
             "workspace": ws,
@@ -2142,7 +2200,8 @@ class ExoskeletonRuntime:
         ans = self._ask("POST", "/v1/memory/code/slice", root, target, body={"symbols": sym_list, "depth": depth})
         if ans is not None:
             items = list((ans.get("data") or {}).get("items") or [])
-            self._record_read("graph_slice", returned_text=json.dumps(items, ensure_ascii=False))
+            self._record_read("graph_slice", returned_text=json.dumps(items, ensure_ascii=False), root=root,
+                              paths=[] if target and target != "local" else None)
             out = {"status": "ok", "workspace": root if target else self.resolve_workspace(root),
                    "symbols": [lean_slice_item(i) for i in items], **self._vault_meta(ans)}
             found = {str(i.get("qualname") or i.get("title") or "").rsplit(".", 1)[-1] for i in items} | {
@@ -2227,14 +2286,7 @@ class ExoskeletonRuntime:
                 for caller in svc.graph.callers_of(name)[:20]:
                     if getattr(caller, "path", None):
                         matched_paths.append(str(caller.path))
-        base_c, base_l, base_f = _matched_files_stats(ws, matched_paths)
-        self._record_read(
-            "graph_slice",
-            returned_text=text,
-            baseline_chars=base_c,
-            baseline_lines=base_l,
-            baseline_files=base_f,
-        )
+        self._record_read("graph_slice", returned_text=text, paths=matched_paths, root=ws)
         return {"status": "ok", "workspace": ws, "symbols": items}
 
     def impact_of_change(self, symbols: list[str] | str, root: str | None = None,
@@ -2261,7 +2313,8 @@ class ExoskeletonRuntime:
                      or any(str(t).split("::", 1)[0] in near for t in it.get("targets") or [])]
             items = code_first(items)
             files = [it.get("title") or it.get("id") for it in items]
-            self._record_read("impact_of_change", returned_text=json.dumps(items, ensure_ascii=False))
+            self._record_read("impact_of_change", returned_text=json.dumps(items, ensure_ascii=False), root=root,
+                              paths=[] if target and target != "local" else None)
             out = {"status": "ok", "workspace": root if target else self.resolve_workspace(root),
                    "queried_symbols": sym_list, "dependent_files": files, "items": items,
                    "changed_together": [f"{it.get('title') or it.get('id')} ({float(it.get('confidence') or 0):.1f})"
@@ -2298,14 +2351,7 @@ class ExoskeletonRuntime:
                 for sym in svc.graph.symbol_table.get(name, []):
                     if getattr(sym, "path", None):
                         matched_paths.append(str(sym.path))
-        base_c, base_l, base_f = _matched_files_stats(ws, matched_paths)
-        self._record_read(
-            "impact_of_change",
-            returned_text=text,
-            baseline_chars=base_c,
-            baseline_lines=base_l,
-            baseline_files=base_f,
-        )
+        self._record_read("impact_of_change", returned_text=text, paths=matched_paths, root=ws)
         out = {
             "status": "ok",
             "workspace": ws,
@@ -2399,14 +2445,7 @@ class ExoskeletonRuntime:
                 for caller in svc.graph.callers_of(name)[:20]:
                     if getattr(caller, "path", None):
                         matched_paths.append(str(caller.path))
-        base_c, base_l, base_f = _matched_files_stats(ws, matched_paths)
-        self._record_read(
-            "contract_slice",
-            returned_text=text,
-            baseline_chars=base_c,
-            baseline_lines=base_l,
-            baseline_files=base_f,
-        )
+        self._record_read("contract_slice", returned_text=text, paths=matched_paths, root=ws)
         return {"status": "ok", "workspace": ws, **combined}
 
     def grep_code(self, pattern: str, root: str | None = None, target: str | None = None, path_glob: str | None = None,
@@ -2478,7 +2517,10 @@ class ExoskeletonRuntime:
         """A grep's answer, counted in token_savings (MCP audit 2026-10-25: grep_code was never counted); no match for
         a pattern that looks like a regex, searched as an exact text, is said -- never a silent 0 ("def a|def b"
         found nothing and read as "not in the code")."""
-        self._record_read("grep_code", returned_text=json.dumps(out.get("matches") or [], ensure_ascii=False))
+        # a server's grep (source "host:... (searched there)") has no local file to measure against
+        remote = "searched there" in str(out.get("source") or "")
+        self._record_read("grep_code", returned_text=json.dumps(out.get("matches") or [], ensure_ascii=False),
+                          root=None if remote else out.get("workspace"), paths=[] if remote else None)
         if not regex and not out.get("matches") and re.search(r"\||\\[sdwb(]|\.\*|\[[^\]]+\]|\(\?", str(pattern or "")):
             out["note"] = ("searched as an EXACT text -- this pattern looks like a regex: pass regex=true (on a "
                            "server's repo: literal texts joined by |)")
@@ -2531,8 +2573,8 @@ class ExoskeletonRuntime:
             return {"status": "error", "workspace": root, "path": path, "symbol": name,
                     "error": f"lines {lo}-{hi}: past the end of {path} ({len(lines)} lines)"}
         rendered = f"[{path} lines {lo}-{hi} of {len(lines)}, read on {target}]\n" + "\n".join(lines[lo - 1:hi])
-        self.tracker.record("read_symbol", returned_chars=len(rendered), baseline_chars=len(got.get("text") or ""),
-                            returned_lines=hi - lo + 2, baseline_lines=len(lines), baseline_files=1)
+        self.tracker.record("read_symbol", returned_chars=len(rendered), returned_lines=hi - lo + 2,
+                            files={f"{target}:{str(root or '').rstrip('/')}/{path}": len(got.get("text") or "")})
         return {"status": "ok", "workspace": root, "path": path, "symbol": where.get("qualname") or name,
                 "start_line": lo, "end_line": hi, "rendered": rendered, "source": f"{target} (read there)"}
 
@@ -2568,14 +2610,8 @@ class ExoskeletonRuntime:
         total_lines = max(1, source.count("\n") + 1)
         nodes = alt["nodes"] if alt is not None else (_outline(rel, source) or [])
         rendered = render_outline(rel, nodes, total_lines)
-        self.tracker.record(
-            "outline",
-            returned_chars=len(rendered),
-            baseline_chars=len(source),
-            returned_lines=max(1, rendered.count("\n") + 1),
-            baseline_lines=total_lines,
-            baseline_files=1,
-        )
+        self.tracker.record("outline", returned_chars=len(rendered), returned_lines=max(1, rendered.count("\n") + 1),
+                            files={rel: len(source)})
         return {
             "status": "ok",
             "workspace": ws,
@@ -2618,9 +2654,8 @@ class ExoskeletonRuntime:
                 return {"status": "error", "workspace": ws, "path": rel, "symbol": name,
                         "error": f"Span '{name}' is past the end of {rel} ({total} lines)"}
             rendered = read_card(rel, total, a, b, body)
-            self.tracker.record("read_symbol", returned_chars=len(rendered), baseline_chars=os.path.getsize(full),
-                                returned_lines=max(1, rendered.count("\n") + 1), baseline_lines=total,
-                                baseline_files=1)
+            self.tracker.record("read_symbol", returned_chars=len(rendered),
+                                returned_lines=max(1, rendered.count("\n") + 1), files={rel: os.path.getsize(full)})
             return {"status": "ok", "workspace": ws, "path": rel, "symbol": f"L{a}-{b}", "kind": "lines",
                     "start_line": a, "end_line": b, "rendered": rendered}
         if alt is not None and alt["skipped"]:
@@ -2655,14 +2690,8 @@ class ExoskeletonRuntime:
         if hit.get("kind") == "lines":
             sym_label = f"L{hit['start']}-{hit['end']}"
         rendered = read_card(rel, total_lines, hit["start"], hit["end"], hit["body"])
-        self.tracker.record(
-            "read_symbol",
-            returned_chars=len(rendered),
-            baseline_chars=len(source),
-            returned_lines=max(1, rendered.count("\n") + 1),
-            baseline_lines=total_lines,
-            baseline_files=1,
-        )
+        self.tracker.record("read_symbol", returned_chars=len(rendered),
+                            returned_lines=max(1, rendered.count("\n") + 1), files={rel: len(source)})
         return {
             "status": "ok",
             "workspace": ws,

@@ -80,15 +80,27 @@ def sample_workspace(tmp_path: Path) -> Path:
     return ws
 
 
-def test_token_savings_has_no_baseline_claim():
-    """frame phase A (spec A6): a useless list must never pass for savings -- calls and returned size only."""
+def test_token_savings_counts_each_file_once_against_what_came_back():
+    """Owner 2026-11-13 (replaces spec A6's "no saved figure"): as close to the real saving as it can be -- without the
+    tools the agent opens each file an answer points to once; an answer with no local file behind it is apart."""
     tracker = TokenSavingsTracker()
-    rec = tracker.record("outline", returned_chars=400, baseline_chars=4000, returned_lines=15,
-                         baseline_lines=150, baseline_files=1)
-    assert rec == {"tool": "outline", "returned_chars": 400, "returned_lines": 15}
-    summary = tracker.summary()
-    assert summary == {"calls": 1, "returned_chars": 400, "returned_lines": 15,
-                       "by_tool": {"outline": {"calls": 1, "returned_chars": 400, "returned_lines": 15}}}
+    tracker.record("outline", returned_chars=400, returned_lines=15, files={"a.py": 4000})
+    tracker.record("read_symbol", returned_chars=300, returned_lines=10, files={"a.py": 4000})   # the same file again
+    tracker.record("search_code", returned_chars=200, files={"b.py": 1000, "a.py": 4000})
+    tracker.record("grep_code", returned_chars=50, files={})                                    # nothing local behind it
+    s = tracker.summary()
+    assert s["would_read_chars"] == 5000 and s["files_behind_answers"] == 2
+    assert s["saved_chars"] == 5000 - (400 + 300 + 200) and s["saved_pct"] == 82.0
+    assert s["tokens_est"] == {"would_read": 1250, "returned": 225, "saved": 1025}
+    assert s["unmeasured_calls"] == 1 and s["returned_chars"] == 950
+    assert s["by_tool"]["read_symbol"]["would_read_chars"] == 0          # its file was already counted by outline
+    assert s["by_tool"]["search_code"]["would_read_chars"] == 1000
+
+
+def test_a_tool_answer_longer_than_its_files_saves_nothing_never_less():
+    tracker = TokenSavingsTracker()
+    tracker.record("graph_slice", returned_chars=9000, files={"tiny.py": 100})
+    assert tracker.summary()["saved_chars"] == 0
 
 
 def test_exoskeleton_code_graph_and_ast_tools(sample_workspace: Path):
@@ -166,7 +178,7 @@ def test_exoskeleton_code_graph_and_ast_tools(sample_workspace: Path):
     savings = exo.token_savings()
     assert savings["status"] == "ok"
     assert savings["calls"] >= 7
-    assert "baseline_basis" not in savings and "saved_chars" not in savings      # spec A6: no savings claim
+    assert savings["would_read_chars"] > 0 and savings["saved_chars"] >= 0 and "how" in savings   # owner 2026-11-13
     assert savings["by_tool"]["outline"]["calls"] >= 1 and savings["by_tool"]["outline"]["returned_chars"] > 0
 
 

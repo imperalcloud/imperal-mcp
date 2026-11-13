@@ -33,7 +33,10 @@ kernel, vault and extensions of the same day.
 - Hooks: WebSearch, WebFetch and subagent reports reach the kernel, scrubbed like a command's output -- the stop hook
   held every claim taken from them; a prompt names the repository key of the shell's current folder (the focus sat on
   a 14-day-old copy).
-- `token_savings` says what it reports (calls and returned size); it never claimed a saving by design.
+- `token_savings` measures the saving on the real files (owner 2026-11-13, replacing spec A6's "no saved figure"):
+  every distinct local file the answers pointed to, read whole once, against what the tools returned, with a token
+  estimate (4 characters each); answers with no local file behind them (a server's) are counted apart, never as a
+  saving. Live on this repository: 4 calls, 2 files, 192 798 characters a whole read against 11 450 returned (94.1%).
 - A hook test that flaked about 1 run in 10 (a hex fingerprint can hold the letters b-a-d).
 
 ## 0.9.14 - 2026-11-13
