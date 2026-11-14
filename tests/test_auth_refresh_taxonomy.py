@@ -47,6 +47,7 @@ async def test_refresh_network_error_is_transient():
 @pytest.mark.asyncio
 async def test_force_refresh_ignores_unexpired_access_token(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     auth.save_creds({"access_token": "OLD", "refresh_token": "rt", "access_expires_at": 9999999999})
 
     async def _fake_refresh(api_url, rt):

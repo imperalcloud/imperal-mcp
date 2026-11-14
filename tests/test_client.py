@@ -16,6 +16,7 @@ async def test_requires_token(tmp_path, monkeypatch):
     # With no token and no stored credentials, the client raises an auth-related error.
     # Use a clean tmp home so real on-disk creds don't interfere.
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     c = ImperalClient(Config(api_url="http://gw", token=None))
     with pytest.raises((ImperalAuthError, NotLoggedInError)):
         await c.whoami()

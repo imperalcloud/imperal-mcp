@@ -1,4 +1,5 @@
 import asyncio
+import os
 import base64, hashlib, stat
 import httpx, pytest, respx
 from imperal_mcp.config import Config
@@ -13,21 +14,26 @@ def test_gen_pkce_s256():
 
 def test_save_creds_is_0600(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     auth.save_creds({"refresh_token": "r", "access_token": "a", "access_expires_at": 1})
     p = auth.creds_path()
     assert p.exists()
-    assert stat.S_IMODE(p.stat().st_mode) == 0o600
-    assert stat.S_IMODE(auth.creds_path().parent.stat().st_mode) == 0o700
+    if os.name != "nt":              # Windows: the profile folder's ACL, no POSIX mode bits
+        assert stat.S_IMODE(p.stat().st_mode) == 0o600
+    if os.name != "nt":              # Windows: the profile folder's ACL, no POSIX mode bits
+        assert stat.S_IMODE(auth.creds_path().parent.stat().st_mode) == 0o700
     assert auth.load_creds()["refresh_token"] == "r"
 
 def test_load_creds_none_when_absent(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     assert auth.load_creds() is None
 
 @respx.mock
 @pytest.mark.asyncio
 async def test_ensure_access_token_refreshes_when_expired(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     auth.save_creds({"refresh_token": "r0", "access_token": "old", "access_expires_at": 0})  # expired
     respx.post("http://gw/v1/auth/refresh").mock(return_value=httpx.Response(200, json={
         "access_token": "new", "refresh_token": "r1", "token_type": "bearer", "expires_in": 900}))
@@ -38,6 +44,7 @@ async def test_ensure_access_token_refreshes_when_expired(tmp_path, monkeypatch)
 @pytest.mark.asyncio
 async def test_ensure_access_token_not_logged_in(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     with pytest.raises(auth.NotLoggedInError):
         await auth.ensure_access_token(Config(api_url="http://gw", token=None))
 
@@ -45,6 +52,7 @@ async def test_ensure_access_token_not_logged_in(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_ensure_access_token_refresh_401_tells_user_to_login(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     auth.save_creds({"refresh_token": "bad", "access_token": "old", "access_expires_at": 0})
     respx.post("http://gw/v1/auth/refresh").mock(return_value=httpx.Response(401, json={"detail": "x"}))
     with pytest.raises(auth.NotLoggedInError):
@@ -60,6 +68,7 @@ async def test_ensure_access_token_refresh_401_tells_user_to_login(tmp_path, mon
 @pytest.mark.asyncio
 async def test_ensure_access_token_concurrent_callers_refresh_exactly_once(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     auth.save_creds({"refresh_token": "r0", "access_token": "old", "access_expires_at": 0})  # expired
 
     calls = {"n": 0, "concurrent": 0, "max_concurrent": 0}
@@ -89,6 +98,7 @@ async def test_ensure_access_token_retries_with_sibling_rotated_token(tmp_path, 
     refresh_token on disk has moved — that's not a real logout, so we retry
     once with the fresh one and succeed."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     auth.save_creds({"refresh_token": "r0", "access_token": "old", "access_expires_at": 0})
 
     async def _no_sleep(_):
@@ -120,6 +130,7 @@ async def test_ensure_access_token_no_retry_when_disk_token_unchanged(tmp_path, 
     attempt is the SAME one we just presented. That's a genuine logout:
     raise without a pointless second attempt."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     auth.save_creds({"refresh_token": "bad", "access_token": "old", "access_expires_at": 0})
 
     async def _no_sleep(_):
@@ -140,9 +151,11 @@ async def test_ensure_access_token_no_retry_when_disk_token_unchanged(tmp_path, 
 
 def test_save_creds_no_leftover_temp_files(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     auth.save_creds({"refresh_token": "r0"})
     p = auth.creds_path()
-    assert stat.S_IMODE(p.stat().st_mode) == 0o600
+    if os.name != "nt":              # Windows: the profile folder's ACL, no POSIX mode bits
+        assert stat.S_IMODE(p.stat().st_mode) == 0o600
     leftovers = [f.name for f in p.parent.iterdir() if f.name != p.name]
     assert leftovers == []  # the temp file was renamed away, not left behind
 
@@ -152,6 +165,7 @@ def test_save_creds_atomic_old_file_survives_write_failure(tmp_path, monkeypatch
     must be untouched (atomic replace never ran) and no temp litter remains —
     proving save_creds can't leave a truncated/partial creds file on disk."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     auth.save_creds({"refresh_token": "r0"})
     original = auth.creds_path().read_text()
 
@@ -180,6 +194,7 @@ _AUTHORIZE = {
 @pytest.mark.asyncio
 async def test_login_device_polls_until_approved(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
 
     async def _no_sleep(_):  # no real waiting between polls
         return None
@@ -212,6 +227,7 @@ async def test_login_device_polls_until_approved(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_login_device_backs_off_on_slow_down(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     slept: list = []
 
     async def _rec_sleep(n):
@@ -235,6 +251,7 @@ async def test_login_device_backs_off_on_slow_down(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_login_device_access_denied_raises(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
 
     async def _no_sleep(_):
         return None
@@ -253,6 +270,7 @@ async def test_login_device_access_denied_raises(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_logout_revokes_and_wipes(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     auth.save_creds({"refresh_token": "r", "access_token": "a", "access_expires_at": 9e9})
     respx.post("http://gw/v1/auth/logout").mock(return_value=httpx.Response(200, json={"message": "Logged out"}))
     await auth.logout(Config(api_url="http://gw", token=None))
@@ -264,6 +282,7 @@ async def test_logout_revokes_and_wipes(tmp_path, monkeypatch):
 async def test_logout_wipes_local_creds_even_when_server_errors(tmp_path, monkeypatch):
     """Best-effort revoke: a 500 from the server must NOT prevent local creds deletion."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     auth.save_creds({"refresh_token": "r", "access_token": "a", "access_expires_at": 9e9})
     respx.post("http://gw/v1/auth/logout").mock(return_value=httpx.Response(500, text="internal error"))
     await auth.logout(Config(api_url="http://gw", token=None))
@@ -276,6 +295,7 @@ async def test_device_login_survives_a_non_json_poll_answer(tmp_path, monkeypatc
     """Live 2026-11-04: the token poll got a body that was not JSON (a balancer's page) and the login crashed with
     JSONDecodeError -- a non-JSON, empty, 5xx or 429 answer or a network error is not a verdict: polling goes on."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
 
     async def _no_sleep(_):
         return None
@@ -301,6 +321,7 @@ async def test_device_login_survives_a_non_json_poll_answer(tmp_path, monkeypatc
 async def test_device_login_reads_the_gateways_detail_verdict(tmp_path, monkeypatch):
     """The gateway answers ``{"detail": "expired_token"}`` (measured 2026-11-04), not ``{"error": ...}``."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
 
     async def _no_sleep(_):
         return None
@@ -320,6 +341,7 @@ async def test_device_login_reads_the_gateways_detail_verdict(tmp_path, monkeypa
 @respx.mock
 async def test_a_sign_in_whose_email_lookup_breaks_is_still_signed_in(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     respx.post("http://gw/v1/auth/cli/device/authorize").mock(return_value=httpx.Response(200, json={
         "device_code": "d", "user_code": "U", "verification_uri": "http://gw/d", "interval": 0, "expires_in": 60}))
     respx.post("http://gw/v1/auth/cli/device/token").mock(return_value=httpx.Response(200, json={
@@ -334,6 +356,7 @@ async def test_a_sign_in_whose_email_lookup_breaks_is_still_signed_in(tmp_path, 
 @respx.mock
 async def test_an_unreachable_gateway_is_said_as_a_sign_in_failure(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     respx.post("http://gw/v1/auth/cli/device/authorize").mock(side_effect=httpx.ConnectError("reset"))
     with pytest.raises(RuntimeError, match="could not reach http://gw to start the sign-in"):
         await auth.login_device(Config(api_url="http://gw", token=None), on_prompt=lambda *a: None,
@@ -342,6 +365,7 @@ async def test_an_unreachable_gateway_is_said_as_a_sign_in_failure(tmp_path, mon
 
 def test_the_credentials_file_held_by_another_process_is_waited_for_on_windows(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     monkeypatch.setattr(auth, "_IS_WINDOWS", True)
     monkeypatch.setattr(auth.time, "sleep", lambda s: None)
     real, calls = auth.os.replace, []
@@ -358,6 +382,7 @@ def test_the_credentials_file_held_by_another_process_is_waited_for_on_windows(t
 
 def test_elsewhere_a_permission_error_is_not_retried(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     monkeypatch.setattr(auth, "_IS_WINDOWS", False)
     monkeypatch.setattr(auth.os, "replace", lambda s, d: (_ for _ in ()).throw(PermissionError(13, "denied")))
     with pytest.raises(PermissionError):

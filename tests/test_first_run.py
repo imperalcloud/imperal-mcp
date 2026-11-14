@@ -74,6 +74,7 @@ class _Grant:
 @pytest.mark.asyncio
 async def test_an_agent_signs_in_by_showing_a_link_and_a_code(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     grant = _Grant()
     login = auth.AgentLogin(cfg_factory=lambda: None, login=grant)
 
@@ -91,6 +92,7 @@ async def test_an_agent_signs_in_by_showing_a_link_and_a_code(tmp_path, monkeypa
 @pytest.mark.asyncio
 async def test_a_declined_sign_in_says_so_and_the_next_call_starts_again(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     grant = _Grant()
     login = auth.AgentLogin(cfg_factory=lambda: None, login=grant)
     await login()
@@ -104,6 +106,7 @@ async def test_a_declined_sign_in_says_so_and_the_next_call_starts_again(tmp_pat
 @pytest.mark.asyncio
 async def test_signed_in_already_starts_no_grant_unless_asked(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     auth.save_creds({"refresh_token": "r", "access_token": "a", "access_expires_at": 0})
     grant = _Grant()
     login = auth.AgentLogin(cfg_factory=lambda: None, login=grant)
@@ -114,6 +117,7 @@ async def test_signed_in_already_starts_no_grant_unless_asked(tmp_path, monkeypa
 @pytest.mark.asyncio
 async def test_the_login_tool_is_served(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     srv = build_server(None, workspace=str(tmp_path))
     grant = _Grant()
     srv._agent_login._login = grant
@@ -124,6 +128,7 @@ async def test_the_login_tool_is_served(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_not_signed_in_points_at_the_login_tool(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))      # Windows resolves "~" by it
     with pytest.raises(auth.NotLoggedInError, match="`login` tool"):
         await auth.ensure_access_token(auth_cfg())
 
