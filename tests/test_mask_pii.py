@@ -112,3 +112,11 @@ def test_two_real_numbers_side_by_side_stay_masked():
     from imperal_mcp.mask import defensive_scrub
     assert defensive_scrub("a 380991234567 380991234568 b") == "a <PHONE> <PHONE> b"
     assert defensive_scrub("x 4111111111111111 4111111111111111") == "x <CARD> <CARD>"
+
+
+def test_a_date_beside_a_number_is_not_a_phone():
+    from imperal_mcp.mask import defensive_scrub
+    assert defensive_scrub("RELEASED package 4 2026-11-14: kernel") == "RELEASED package 4 2026-11-14: kernel"
+    assert defensive_scrub("v 3 10.0.0.1 up") == "v 3 10.0.0.1 up"
+    assert defensive_scrub("call +1 415 555 2671 now") == "call <PHONE> now"
+    assert defensive_scrub("on 2026-11-14 call 380991234567") == "on 2026-11-14 call <PHONE>"

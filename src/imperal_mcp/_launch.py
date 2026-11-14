@@ -31,15 +31,24 @@ _WINDOWS = os.name == "nt"
 def _version():
     """This install's release (the light install on an old Python and its runtime are one
     release). importlib.metadata is 3.8+; on 3.7 read our own dist-info next to the package."""
+    # our own dist-info next to the package first: the metadata search takes the first copy on sys.path, and a
+    # left-over older install ahead of this one (a user site-packages) named its release instead (live 2026-11-14,
+    # Windows: a runtime for the old release, "a newer version is out" to someone who had installed the newest)
+    site = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        mine = [n[len("imperal_mcp-"):-len(".dist-info")] for n in os.listdir(site)
+                if n.startswith("imperal_mcp-") and n.endswith(".dist-info")]
+    except OSError:
+        mine = []
+    if len(mine) == 1:
+        return mine[0]
     try:
         from importlib.metadata import version
         return version(DIST)
     except ImportError:
         pass
-    site = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for name in os.listdir(site):
-        if name.startswith("imperal_mcp-") and name.endswith(".dist-info"):
-            return name[len("imperal_mcp-"):-len(".dist-info")]
+    if mine:
+        return mine[0]
     raise RuntimeError("cannot tell which imperal-mcp release this is")
 
 

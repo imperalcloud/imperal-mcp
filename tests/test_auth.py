@@ -312,3 +312,53 @@ async def test_device_login_reads_the_gateways_detail_verdict(tmp_path, monkeypa
     with pytest.raises(RuntimeError, match="expired"):
         await auth.login_device(Config(api_url="http://gw", token=None), on_prompt=lambda *a: None,
                                 open_browser=False)
+
+
+# live 2026-11-14 (Windows, Python 3.11): "sign-in often does not work until the program is restarted"
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_sign_in_whose_email_lookup_breaks_is_still_signed_in(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    respx.post("http://gw/v1/auth/cli/device/authorize").mock(return_value=httpx.Response(200, json={
+        "device_code": "d", "user_code": "U", "verification_uri": "http://gw/d", "interval": 0, "expires_in": 60}))
+    respx.post("http://gw/v1/auth/cli/device/token").mock(return_value=httpx.Response(200, json={
+        "access_token": "a", "refresh_token": "r", "expires_in": 900}))
+    respx.get("http://gw/v1/auth/me").mock(side_effect=httpx.ReadError("WinError 10054"))
+    email = await auth.login_device(Config(api_url="http://gw", token=None), on_prompt=lambda *a: None,
+                                    open_browser=False)
+    assert email == "(unknown)" and auth.load_creds()["refresh_token"] == "r"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_an_unreachable_gateway_is_said_as_a_sign_in_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    respx.post("http://gw/v1/auth/cli/device/authorize").mock(side_effect=httpx.ConnectError("reset"))
+    with pytest.raises(RuntimeError, match="could not reach http://gw to start the sign-in"):
+        await auth.login_device(Config(api_url="http://gw", token=None), on_prompt=lambda *a: None,
+                                open_browser=False)
+
+
+def test_the_credentials_file_held_by_another_process_is_waited_for_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(auth, "_IS_WINDOWS", True)
+    monkeypatch.setattr(auth.time, "sleep", lambda s: None)
+    real, calls = auth.os.replace, []
+
+    def flaky(src, dst):
+        calls.append(1)
+        if len(calls) < 3:
+            raise PermissionError(32, "The process cannot access the file because it is being used")
+        real(src, dst)
+    monkeypatch.setattr(auth.os, "replace", flaky)
+    auth.save_creds({"refresh_token": "r2"})
+    assert len(calls) == 3 and auth.load_creds()["refresh_token"] == "r2"
+
+
+def test_elsewhere_a_permission_error_is_not_retried(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(auth, "_IS_WINDOWS", False)
+    monkeypatch.setattr(auth.os, "replace", lambda s, d: (_ for _ in ()).throw(PermissionError(13, "denied")))
+    with pytest.raises(PermissionError):
+        auth.save_creds({"refresh_token": "r3"})

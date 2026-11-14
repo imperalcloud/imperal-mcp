@@ -51,6 +51,25 @@ def creds_path() -> Path:
     return Path(os.path.expanduser("~")) / ".imperal" / "credentials.json"
 
 
+REPLACE_TRIES = 6       # Windows: ~1.5 s in all for another process to let go of the file
+_IS_WINDOWS = os.name == "nt"
+
+
+def _replace(src: str, dst: Path) -> None:
+    """``os.replace``, retried on Windows while another process holds ``dst`` open (live 2026-11-14: on Windows the
+    rename fails with PermissionError -- WinError 5/32 -- while the MCP server, a hook, a second webbee or an antivirus
+    scan has the credentials open, and a sign-in or a token refresh failed for good: the gateway had already rotated the
+    refresh token, the disk kept the revoked one)."""
+    for i in range(REPLACE_TRIES):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if not _IS_WINDOWS or i == REPLACE_TRIES - 1:
+                raise
+            time.sleep(0.1 * (i + 1))
+
+
 def save_creds(d: dict) -> None:
     """Write credentials atomically: temp file in the same directory, then
     ``os.replace`` onto the real path.
@@ -71,7 +90,7 @@ def save_creds(d: dict) -> None:
         with os.fdopen(fd, "w") as f:
             json.dump(d, f)
         os.chmod(tmp_name, 0o600)
-        os.replace(tmp_name, p)
+        _replace(tmp_name, p)
     except Exception:
         try:
             os.unlink(tmp_name)
@@ -211,10 +230,14 @@ async def login_device(cfg, *, on_prompt=None, open_browser: bool = True) -> str
     verifier, challenge = gen_pkce()
 
     async with httpx.AsyncClient(timeout=30) as cli:
-        resp = await cli.post(
-            f"{cfg.api_url}/v1/auth/cli/device/authorize",
-            json={"code_challenge": challenge, "code_challenge_method": "S256"},
-        )
+        try:
+            resp = await cli.post(
+                f"{cfg.api_url}/v1/auth/cli/device/authorize",
+                json={"code_challenge": challenge, "code_challenge_method": "S256"},
+            )
+        except (httpx.HTTPError, OSError) as exc:      # the network, said as a sign-in failure, never a raw traceback
+            raise RuntimeError(f"could not reach {cfg.api_url} to start the sign-in ({type(exc).__name__}) "
+                               "-- check the connection and try again") from exc
         start = _json_or_none(resp) if resp.status_code == 200 else None
         if not start or "device_code" not in start:
             raise RuntimeError(f"could not start login: {resp.status_code} {resp.text[:200]} -- try again in a minute")
@@ -271,7 +294,12 @@ async def login_device(cfg, *, on_prompt=None, open_browser: bool = True) -> str
         "refresh_token": tok["refresh_token"],
         "access_expires_at": time.time() + int(tok.get("expires_in", 900)),
     })
-    return await _whoami_email(cfg.api_url, tok["access_token"])
+    try:
+        return await _whoami_email(cfg.api_url, tok["access_token"])
+    except (httpx.HTTPError, OSError):
+        # signed in: the tokens are saved; only the e-mail lookup failed (live 2026-11-14, Windows: a reset connection
+        # here made a working sign-in look failed until the program was restarted)
+        return "(unknown)"
 
 
 async def _whoami_email(api_url: str, access_token: str) -> str:

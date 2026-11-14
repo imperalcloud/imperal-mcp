@@ -27,6 +27,8 @@ _NOT_A_PHONE = re.compile(
     r"|\d{2,5}-\d{2,5})"                         # port range
 )
 _US_DOTTED_PHONE = re.compile(r"\d{3}\.\d{3}\.\d{4}")
+# never part of a phone: an ISO date, an IPv4 address (a port range "123-4567" CAN be one: +1 (555) 123-4567)
+_DATE_OR_IP = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?")
 _CELL_GAP = re.compile(r" {2,}|\t|\n")      # columns of a table (two spaces or more, a tab, a line): never one number
 # a date-time stamp ("20261025-094552", "20261025T094552" -- a release directory's name) is neither phone nor card
 # only the separated shape (date, -/_/T, time) -- a bare or grouped number keeps every card check (security review)
@@ -56,6 +58,11 @@ def _phone_or_keep(m: "re.Match[str]") -> str:
     apart = _separate_numbers(m.group(0), _PHONE_RE, _phone_or_keep)
     if apart is not None:
         return apart
+    words = m.group(0).split(" ")
+    if len(words) > 1 and any(_DATE_OR_IP.fullmatch(w.strip(":,;")) for w in words):
+        # an ISO date or an IPv4 address beside a number is two things, each judged on its own (live 2026-11-14:
+        # "package 4 2026-11-14" reached the kernel as "package <PHONE>")
+        return " ".join(_PHONE_RE.sub(_phone_or_keep, w) for w in words)
     pieces = m.group(0).split()
     if _STAMP.fullmatch(m.group(0).strip()) or pieces and all(
             _NOT_A_PHONE.fullmatch(p) and not _US_DOTTED_PHONE.fullmatch(p) for p in pieces):

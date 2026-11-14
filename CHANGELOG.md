@@ -7,6 +7,20 @@ a live code map, undo for every change and a fact check of every name, file and 
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.19 - 2026-11-14
+
+Found by the live check of 0.9.18, with the kernel of the same day. Floors unchanged.
+
+### Fixed
+- A number beside an ISO date or an IPv4 address is judged apart from it: "package 4 2026-11-14" reached the kernel
+  as "package <PHONE>". A phone in groups (+1 (555) 123-4567) is still masked.
+- Sign-in on Windows: a signed-in session no longer looks failed when the e-mail lookup after it breaks (a reset
+  connection, WinError 10054) -- the tokens are saved, the answer is "(unknown)"; an unreachable gateway at the start
+  is said as a sign-in failure, never a raw traceback; saving the credentials waits (up to ~1.5 s) while another
+  process or a virus scan holds the file -- a refresh no longer leaves a revoked token on disk.
+- On Python 3.7-3.9 the launcher reads this install's release from the dist-info beside the package: the metadata
+  search took a left-over older install first on sys.path and set up a runtime of that old release.
+
 ## 0.9.18 - 2026-11-14
 
 Found by the live check of 0.9.17, fixed with the kernel of the same day. Floors unchanged (imperal-sdk 6.6.1, webbee

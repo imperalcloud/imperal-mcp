@@ -220,3 +220,14 @@ def test_a_repository_config_cannot_steer_the_runtime_install(monkeypatch, tmp_p
     L.runtime("1.2.3")
     assert len(seen) == 2
     assert all("--no-config" in cmd and cwd == str(tmp_path) for cmd, cwd in seen)
+
+
+def test_the_release_is_read_from_the_dist_info_beside_the_package(monkeypatch):
+    # live 2026-11-14 (Windows): a left-over older install first on sys.path named its release through the metadata
+    import importlib.metadata as md
+    from imperal_mcp import _launch
+    monkeypatch.setattr(md, "version", lambda name: "0.3.49")
+    monkeypatch.setattr(_launch.os, "listdir", lambda d: ["imperal_mcp", "imperal_mcp-0.9.19.dist-info", "x"])
+    assert _launch._version() == "0.9.19"
+    monkeypatch.setattr(_launch.os, "listdir", lambda d: ["imperal_mcp"])        # no dist-info beside it
+    assert _launch._version() == "0.3.49"
