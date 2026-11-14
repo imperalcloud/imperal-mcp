@@ -37,10 +37,11 @@ def test_the_pins_carry_what_the_frame_needs():
     index (any folder, every file kind) is in imperal-sdk 6.4.1+ with its readers and webbee 0.7.0+; 2026-11-06: one
     link resolver for the vault and the clients, a folder of repositories resolved per repository in 6.5.1+; contract_slice
     through callers (code_links.contracts_reached) in 6.5.3+; 2026-11-13: Symbol.doc, nested arrow functions,
-    route decorators, one IR step rule in 6.6.0+ and webbee 0.7.14+ (search answers carry doc)."""
+    route decorators, one IR step rule in 6.6.0+ and webbee 0.7.14+ (search answers carry doc); 2026-11-14: an unknown
+    IR step field named in 6.6.1+, webbee 0.7.15+ (rollback guard, root honoured, read_file window said)."""
     from pathlib import Path
     text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
-    assert "imperal-sdk>=6.6.0" in text and "webbee>=0.7.14" in text and "imperal-sdk[universal-index]>=6.6.0" in text
+    assert "imperal-sdk>=6.6.1" in text and "webbee>=0.7.15" in text and "imperal-sdk[universal-index]>=6.6.1" in text
 
 
 def _pyproject_description() -> str:

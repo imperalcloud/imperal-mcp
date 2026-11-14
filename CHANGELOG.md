@@ -1,11 +1,31 @@
 # Changelog
 
 All notable changes to **`imperal-mcp`** - the exoskeleton for your AI coding agent: memory across sessions,
-a live code map, undo for every change and a hallucination check, as a local stdio MCP server for any agent
+a live code map, undo for every change and a fact check of every name, file and number it states, as a local stdio MCP server for any agent
 (and Imperal apps built and run from it) - are documented here. Depends on `imperal-sdk`.
 
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
+
+## 0.9.16 - 2026-11-14
+
+The imperal-mcp 0.9.15 field test (report 2, 13.11), fixed in every layer. Needs imperal-sdk 6.6.1 and webbee 0.7.15
+(`[code]`), and the kernel and Tenant Vault of the same day.
+
+### Fixed
+- A `root` that is not there is refused; it was answered as the whole workspace.
+- A folder that holds git repositories is answered per repository even with a project manifest at its top (its own
+  old map answered).
+- `grep_code`: a bad regular expression says what is wrong, where, and how to match literally.
+- `live_sessions`: an overview within 6000 characters (`full=true` for the whole; it was 13.5 KB).
+- `vault_log_read`: `offset` and `limit` count characters, and say so.
+- `remember_fact`: a fact about one project is pointed to `save_repo_note`.
+- `token_savings`: `graph_slice` counts the files of the definitions, never every caller's; `impact_of_change`,
+  `contract_slice` and `grep_code` claim no saving (their alternative is a grep).
+- Hooks: a delivered agent message is a fact of the session (the final's check called it "nothing shows it"); each
+  prompt measures the HEAD of the folder's repositories and sends a changed one (WORLD kept a HEAD 9 hours old).
+- ssh identity is read per simple command (`2>&1`, `|`, `&&` no longer withhold the whole call); single-quoted remote
+  scripts are literal; reading a key is still withheld.
 
 ## 0.9.15 - 2026-11-13
 
