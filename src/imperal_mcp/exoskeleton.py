@@ -765,6 +765,26 @@ def _file_sizes(ws: str, rel_paths) -> dict[str, int]:
     return out
 
 
+_NO_SAVING_TOOLS = frozenset({"impact_of_change", "contract_slice", "grep_code"})
+
+
+def _top_level_paths(text: str) -> list[str]:
+    """The files of the answer's own entries (a list of definitions, or a dict holding one), never what is nested in
+    them (callers, callees)."""
+    try:
+        obj = json.loads(text or "null")
+    except (TypeError, ValueError):
+        return []
+    items = obj if isinstance(obj, list) else (obj.get("symbols") or obj.get("items") or [] if isinstance(obj, dict) else [])
+    out = []
+    for it in items:
+        if isinstance(it, dict):
+            p = it.get("path") or it.get("file") or (str(it.get("id") or "").split("::")[0] if "::" in str(it.get("id") or "") else "")
+            if p:
+                out.append(str(p))
+    return out
+
+
 def _answer_paths(text: str) -> list[str]:
     """The file paths an answer (its JSON) points to: every ``path`` / ``file`` / ``def_path`` value, and an ``id``
     spelled ``path::symbol``."""
@@ -1465,6 +1485,11 @@ class ExoskeletonRuntime:
             raise OutsideWorkspaceError(
                 f"Root '{root}' is not a directory inside workspace '{ws_real}'"
             )
+        if not os.path.isdir(candidate):
+            # a root that is not there is never answered as another folder (field test 2026-11-13: root="non_existent_dir"
+            # came back as the whole workspace's profile -- the agent believed it looked at one repository)
+            raise OutsideWorkspaceError(f"Root '{root}' does not exist (looked for {candidate}); a relative root is "
+                                        f"taken from the workspace {ws_real}")
         return candidate
 
     def resolve_root(self, root: str | None = None) -> str:
@@ -1757,11 +1782,18 @@ class ExoskeletonRuntime:
         ones its JSON names), each file counted once per session."""
         ret_c = len(returned_text or "")
         ret_l = max(1, (returned_text or "").count("\n") + 1) if returned_text else 0
-        try:
-            files = _file_sizes(self.resolve_workspace(root), paths if paths is not None
-                                else _answer_paths(returned_text))
-        except Exception:
-            files = {}
+        if tool in _NO_SAVING_TOOLS:
+            files: dict = {}        # their alternative is a grep, about as long as the answer: no saving is claimed
+        else:
+            if tool == "graph_slice":
+                # the alternative opens each definition's file -- never every caller's (live 2026-11-14: one
+                # graph_slice counted 15 whole caller files, 350 706 characters, as "would read")
+                paths = _top_level_paths(returned_text)
+            try:
+                files = _file_sizes(self.resolve_workspace(root), paths if paths is not None
+                                    else _answer_paths(returned_text))
+            except Exception:
+                files = {}
         self.tracker.record(tool, returned_chars=ret_c, returned_lines=ret_l, files=files)
 
     # ── the vault graph: one truth about code (frame phase A) ──
@@ -2280,13 +2312,7 @@ class ExoskeletonRuntime:
         res = _graph_slice(svc, sym_list, depth=depth)
         items = list((res.get("data") or {}).get("items", []))
         text = json.dumps(items, ensure_ascii=False)
-        matched_paths = [str(it.get("path") or "") for it in items]
-        if getattr(svc, "graph", None) is not None:
-            for name in sym_list:
-                for caller in svc.graph.callers_of(name)[:20]:
-                    if getattr(caller, "path", None):
-                        matched_paths.append(str(caller.path))
-        self._record_read("graph_slice", returned_text=text, paths=matched_paths, root=ws)
+        self._record_read("graph_slice", returned_text=text, root=ws)      # the definitions' files (token_savings)
         return {"status": "ok", "workspace": ws, "symbols": items}
 
     def impact_of_change(self, symbols: list[str] | str, root: str | None = None,
@@ -2489,7 +2515,15 @@ class ExoskeletonRuntime:
             path_glob = f"{sub}/{path_glob}" if path_glob else f"{sub}/*"
             ws = up
         _ensure_webbee_importable()
-        rx = re.compile(pattern) if regex else None
+        try:
+            rx = re.compile(pattern) if regex else None
+        except re.error as exc:
+            # the engine's own words ("missing ), unterminated subpattern at position 4") with where and how to fix it
+            # (field test 2026-11-13: the raw error came back alone)
+            at = f" at position {exc.pos}: {pattern[:exc.pos]}<HERE>{pattern[exc.pos:]}" if exc.pos is not None else ""
+            return {"status": "error", "workspace": self.resolve_workspace(root), "pattern": pattern,
+                    "error": f"not a valid regular expression ({exc.msg}){at} -- escape ( ) [ ] . * + ? with a backslash "
+                             "to match them literally, or pass regex=false for an exact text"}
         matches: list[dict[str, Any]] = []
         total = 0
         for rel in _grep_files(ws):

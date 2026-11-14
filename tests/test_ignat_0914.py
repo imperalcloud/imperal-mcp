@@ -164,3 +164,66 @@ def test_a_web_search_fetch_or_subagent_report_reaches_the_kernel_scrubbed():
     assert "ghp_abcdefghijklmnopqrstuvwxyz1234567890" not in item["text"]
     (other,) = H.tool_items({"tool_name": "mcp__other__thing", "tool_input": {"x": 1}, "tool_response": "secret"})
     assert other["text"] == "" and other["args"] == {}
+
+
+# ── field test report 2, 2026-11-13 ──
+
+def test_a_root_that_is_not_there_is_refused_never_answered_as_the_workspace(tmp_path):
+    from imperal_mcp.exoskeleton import ExoskeletonRuntime, OutsideWorkspaceError
+    (tmp_path / "sub").mkdir()
+    exo = ExoskeletonRuntime(workspace=str(tmp_path))
+    assert exo.resolve_workspace("sub") == str((tmp_path / "sub").resolve())          # relative: from the workspace
+    with pytest.raises(OutsideWorkspaceError, match="does not exist"):
+        exo.resolve_workspace("non_existent_dir")
+
+
+def test_a_bad_regex_says_where_and_how_to_fix_it(tmp_path):
+    import subprocess
+    from imperal_mcp.exoskeleton import ExoskeletonRuntime
+    (tmp_path / "a.py").write_text("x = (1)\n")
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    got = ExoskeletonRuntime(workspace=str(tmp_path)).grep_code("(1", regex=True)
+    assert got["status"] == "error" and "not a valid regular expression" in got["error"]
+    assert "<HERE>" in got["error"] and "regex=false" in got["error"]
+
+
+def test_token_savings_claims_nothing_for_grep_like_tools_and_only_definitions_for_graph_slice(tmp_path):
+    import json
+    from imperal_mcp.exoskeleton import ExoskeletonRuntime
+    (tmp_path / "defs.py").write_text("def f():\n    return 1\n" * 50)
+    (tmp_path / "caller.py").write_text("from defs import f\nf()\n" * 200)
+    exo = ExoskeletonRuntime(workspace=str(tmp_path))
+    exo._record_read("impact_of_change", returned_text=json.dumps([{"id": "caller.py"}]))
+    exo._record_read("graph_slice", returned_text=json.dumps(
+        [{"path": "defs.py", "callers_detail": [{"path": "caller.py"}]}]))
+    s = exo.token_savings()
+    assert s["unmeasured_calls"] == 1 and s["files_behind_answers"] == 1
+    assert s["would_read_chars"] == len((tmp_path / "defs.py").read_text())
+
+
+@pytest.mark.asyncio
+async def test_live_sessions_is_an_overview_unless_asked_whole(tmp_path, monkeypatch):
+    import json
+    from imperal_mcp import server as S
+    srv = build_server(None, workspace=str(tmp_path))
+    big = {"sessions": [{"id": f"s{i}", "last_answer": "x" * 3000} for i in range(8)]}
+    def lens(**kw):          # the server knows the runtime's lens by its name
+        return big
+    monkeypatch.setattr(srv._exoskeleton, "lens", lens)
+    lean = _text_of(await srv.call_tool("live_sessions", {}))
+    whole = _text_of(await srv.call_tool("live_sessions", {"full": True}))
+    assert len(lean) < S.LIVE_SESSIONS_CHARS + 2000 < len(whole)
+
+
+def _text_of(res):
+    content = res[0] if isinstance(res, tuple) else res
+    return " ".join(getattr(c, "text", "") for c in content) if not isinstance(content, dict) else str(content)
+
+
+@pytest.mark.asyncio
+async def test_a_project_scope_is_pointed_to_repository_notes(tmp_path):
+    class _NoCall:
+        async def run_tool(self, *a, **k):
+            raise AssertionError("no call")
+    srv = build_server(_NoCall(), workspace=str(tmp_path))
+    assert "save_repo_note" in _text_of(await srv.call_tool("remember_fact", {"fact": "x", "scope": "wpanel"}))

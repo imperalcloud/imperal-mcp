@@ -252,6 +252,7 @@ async def run_write_tool_logic(client, ctx, app_id, function, args, autopilot) -
     return out
 
 
+LIVE_SESSIONS_CHARS = 6000   # live_sessions' overview bound; the field test's answer was 13 500 characters
 _LIST_TOOLS = frozenset({"impact_of_change", "graph_slice", "orient", "search_code", "grep_code", "contract_slice"})
 
 # What a parameter means where its name alone does not say it: (tool, name) first, then the name in any tool.
@@ -273,6 +274,7 @@ PARAM_HINTS: dict = {
     ("recall", "n"): "How many messages from ref on.",
     ("vault_log_read", "ref"): "The vault://logs/... reference the frame or a tool gave.",
     ("vault_log_read", "grep"): "Only the lines holding this text.",
+    ("vault_log_read", "limit"): "Characters to read (0: the default page).",
     ("live_sessions", "minutes"): "Sessions active within this many minutes.",
     ("checkpoint", "label"): "A short name for the snapshot.",
     ("checkpoint_diff", "target"): "A checkpoint's number or id; default: the latest.",
@@ -488,10 +490,16 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         return await _exo_call(exo.lens, tool="search_history", args={"query": query, "limit": limit})
 
     @mcp.tool(title="Live Sessions", annotations=ToolAnnotations(readOnlyHint=True))
-    async def live_sessions(minutes: int = 120, limit: int = 8) -> dict:
+    async def live_sessions(minutes: int = 120, limit: int = 8, full: bool = False) -> dict:
         """The user's other sessions active in the last N minutes (Webbee, other shells, the panel, Telegram): each
-        with its last request, steps and answer. Read-only; open one with recall or state_lens(conversation=...)."""
-        return await _exo_call(exo.lens, tool="live_sessions", args={"minutes": minutes, "limit": limit})
+        with its last request, steps and answer, shortened (full=true: whole). Read-only; open one with recall or
+        state_lens(conversation=...)."""
+        out = await _exo_call(exo.lens, tool="live_sessions", args={"minutes": minutes, "limit": limit})
+        if full:
+            return out
+        from .exoskeleton import bounded
+        # an overview, not the sessions' transcripts (field test 2026-11-13: 13.5 KB for one call)
+        return bounded(out, limit=LIVE_SESSIONS_CHARS)
 
     @mcp.tool(title="Message a Live Session", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
     async def message_session(conversation: str, text: str) -> dict:
@@ -502,7 +510,8 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
 
     @mcp.tool(title="Read a Stored Output", annotations=ToolAnnotations(readOnlyHint=True))
     async def vault_log_read(ref: str, offset: int = 0, limit: int = 0, grep: str = "") -> dict:
-        """Read a long output the kernel stored (ref = vault://logs/...), by pages or with grep."""
+        """Read a long output the kernel stored (ref = vault://logs/...), by pages or with grep; offset and limit count
+        characters, not lines."""
         return await _exo_call(exo.lens, tool="vault_log_read", args={"ref": ref, "offset": offset, "limit": limit,
                                                                       "grep": grep})
 
@@ -626,7 +635,8 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         if (scope or "").strip().lower() not in ("", "global", "task", "surface"):
             return {"ok": False, "status": "error",
                     "error": f"scope must be one of: global, task, surface (or empty to decide from the fact); got "
-                             f"'{scope}'"}
+                             f"'{scope}'. A fact about one project or repository: save_repo_note(note, root=<it>) keeps "
+                             "it with that repository"}
         payload: dict[str, Any] = {
             "fact": fact,
             "category": category,

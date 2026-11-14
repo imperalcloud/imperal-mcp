@@ -19,7 +19,7 @@ def test_a_big_answer_is_bounded_and_counted():
 
 def test_an_extra_root_is_allowed_and_nothing_else(tmp_path, monkeypatch):
     ws, extra, other = tmp_path / "ws", tmp_path / "mirror", tmp_path / "other"
-    for d in (ws, extra, other):
+    for d in (ws, extra, other, extra / "sub"):
         d.mkdir()
     monkeypatch.setenv("IMPERAL_MCP_EXTRA_ROOTS", str(extra))
     exo = ExoskeletonRuntime(workspace=str(ws))
