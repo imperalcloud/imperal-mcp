@@ -26,6 +26,10 @@ The imperal-mcp 0.9.15 field test (report 2, 13.11), fixed in every layer. Needs
   prompt measures the HEAD of the folder's repositories and sends a changed one (WORLD kept a HEAD 9 hours old).
 - ssh identity is read per simple command (`2>&1`, `|`, `&&` no longer withhold the whole call); single-quoted remote
   scripts are literal; reading a key is still withheld.
+- A shell command carries the folder it started in: Claude Code drops a leading `cd` into the folder it is in and
+  sends the folder after the command, so one repository's HEAD was shown as another's in WORLD.
+- The final's check gets the time left of the stop hook's budget (it waited 40 s; 4 of 77 live checks took longer
+  and were never checked).
 
 ## 0.9.15 - 2026-11-13
 
