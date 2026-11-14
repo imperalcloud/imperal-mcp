@@ -227,3 +227,84 @@ async def test_a_project_scope_is_pointed_to_repository_notes(tmp_path):
             raise AssertionError("no call")
     srv = build_server(_NoCall(), workspace=str(tmp_path))
     assert "save_repo_note" in _text_of(await srv.call_tool("remember_fact", {"fact": "x", "scope": "wpanel"}))
+
+
+@pytest.mark.parametrize("cmd", [
+    "ssh -i ~/.ssh/k -J jump root@1.2.3.4 'sh -c \"x=$(cat /etc/hostname); echo \\$x\"'",
+    "ssh -i ~/.ssh/k host uptime 2>&1 | tail -5",
+    "cd /tmp && ssh -i ~/.ssh/k h x",
+])
+def test_an_ssh_identity_is_used_not_read_so_the_output_is_kept(cmd):
+    from imperal_mcp.exoskeleton import exchange_item
+    assert exchange_item("bash", {"command": cmd}, True, "the output")["text"] == "the output"
+
+
+@pytest.mark.parametrize("cmd", ["cat ~/.ssh/k", "ssh -i ~/.ssh/k h x; cat ~/.ssh/k",
+                                 "ssh -i ~/.ssh/k h \"$(cat ~/.ssh/k)\""])
+def test_reading_the_key_is_still_withheld(cmd):
+    from imperal_mcp.exoskeleton import exchange_item
+    assert exchange_item("bash", {"command": cmd}, True, "the output")["text"].startswith("(withheld")
+
+
+def test_a_folder_with_a_manifest_that_holds_git_repositories_is_answered_per_repository(tmp_path):
+    import subprocess
+    from imperal_mcp.exoskeleton import ExoskeletonRuntime
+    (tmp_path / "package.json").write_text("{}")
+    for name in ("core/gateway", "frontend/web"):
+        (tmp_path / name).mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(tmp_path / name)], check=True)
+    assert ExoskeletonRuntime(workspace=str(tmp_path))._is_units_workspace(str(tmp_path))
+    assert not ExoskeletonRuntime(workspace=str(tmp_path))._is_units_workspace(str(tmp_path / "core/gateway"))
+
+
+def test_a_prompt_measures_the_heads_of_the_shells_repositories_and_sends_only_changes(tmp_path):
+    import subprocess
+    from imperal_mcp import hooks as H
+    repo = tmp_path / "gw"
+    repo.mkdir()
+    run = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)
+    run("init", "-q")
+    (repo / "a.txt").write_text("1")
+    run("add", "-A")
+    run("-c", "user.name=u", "-c", "user.email=u@x", "commit", "-qm", "first")
+
+    class _Spool:
+        def __init__(self):
+            self.st = {}
+
+        def state(self):
+            return self.st
+
+        def update(self, **kw):
+            self.st.update(kw)
+    sp = _Spool()
+    first = H.head_items(sp, str(tmp_path))
+    assert len(first) == 1 and first[0]["args"]["command"].endswith("log --oneline -1") and "first" in first[0]["text"]
+    assert H.head_items(sp, str(tmp_path)) == []                                   # unchanged: nothing sent again
+    run("-c", "user.name=u", "-c", "user.email=u@x", "commit", "-q", "--allow-empty", "-m", "second")
+    assert "second" in H.head_items(sp, str(tmp_path))[0]["text"]
+
+
+def test_a_delivered_agent_message_is_a_fact_of_the_session(monkeypatch):
+    from imperal_mcp import hooks as H
+    added = []
+
+    class _Spool:
+        def state(self):
+            return {"me": "imp_u_ME"}
+
+        def update(self, **kw):
+            pass
+
+        def add_items(self, items):
+            added.extend(items)
+
+    class _Gw:
+        n = 0
+
+        def pending(self, conv):
+            self.n += 1
+            return {"items": [{"text": "Webbee: the gateway tests pass", "surface": "terminal"}]} if self.n == 1 else {}
+    text = H._inbox({"session_id": "s1"}, _Spool(), _Gw())
+    assert "the gateway tests pass" in text
+    assert added and added[0]["tool"] == "agent_message" and "the gateway tests pass" in added[0]["text"]

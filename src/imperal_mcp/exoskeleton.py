@@ -491,6 +491,21 @@ _ICLOUD_DRIVE = "Library/Mobile Documents/com~apple~CloudDocs"
 _REPO_DEPTH = 4               # repositories are looked for this deep (~/Projects/<org>/<repo>)
 
 
+_holds_cache: dict = {}
+
+
+def _holds_repos(ws: str) -> bool:
+    """``ws`` is no git work tree itself and holds git repositories inside it (looked up once per process)."""
+    if os.path.exists(os.path.join(ws, ".git")):
+        return False
+    if ws not in _holds_cache:
+        try:
+            _holds_cache[ws] = bool(_find_repos(ws))
+        except Exception:
+            _holds_cache[ws] = False
+    return _holds_cache[ws]
+
+
 def _repo_above(path: str) -> bool:
     up = os.path.dirname(path)
     while up and up != os.path.dirname(up):
@@ -1156,8 +1171,11 @@ def _ssh_identity_slots(cmd: str) -> list:
     this table does not know or a value that is itself an option (fail closed, security review)."""
     import shlex
     cmd = str(cmd or "")
-    # an escape (the shell and this parser may read it apart), a function or an alias that may BE "ssh": no exemption
-    if re.search(r"[\n\r`\\]|\$\(|[<>]\(|\balias\b|\bfunction\b|\b(?:ssh|scp|sftp)\s*\(\s*\)", cmd):
+    # an escape (the shell and this parser may read it apart), a function or an alias that may BE "ssh": no exemption.
+    # Text in single quotes is literal to the local shell (the remote script of `ssh host '...'`): it is not looked
+    # at (field test 2026-11-13: a `$(...)` inside the remote script withheld the whole ssh call)
+    if re.search(r"[\n\r`\\]|\$\(|[<>]\(|\balias\b|\bfunction\b|\b(?:ssh|scp|sftp)\s*\(\s*\)",
+                 re.sub(r"'[^']*'", "''", cmd)):
         return []
     try:
         lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|")
@@ -1166,10 +1184,22 @@ def _ssh_identity_slots(cmd: str) -> list:
         tokens = list(lex)
     except ValueError:
         return []
-    if any(t and set(t) <= set(";&|") for t in tokens):
-        return []           # one simple command only: no separator outside quotes, so every reading agrees (review)
+    # each simple command apart (`cd x && ssh -i k h y | tail -5`): a separator outside quotes splits, a `2>&1` style
+    # redirect does not (field test 2026-11-13: any `|` or `2>&1` withheld the whole call); every segment is read
+    # with the same fail-closed rules below
+    segments: list = [[]]
+    for i, t in enumerate(tokens):
+        if t == "&" and i > 0 and tokens[i - 1].endswith((">", "<")) and i + 1 < len(tokens) \
+                and re.fullmatch(r"\d+|-", tokens[i + 1]):
+            segments[-1].append(t)                           # part of a redirect (2>&1, >&2), never a separator
+        elif t and set(t) <= set(";&|"):
+            if t not in (";", "&&", "||", "|", "&"):
+                return []                                    # an odd run (;;, |&, &&&): no exemption
+            segments.append([])
+        else:
+            segments[-1].append(t)
     slots: list = []
-    for argv in [tokens]:
+    for argv in [seg for seg in segments if seg]:
         # the program itself: its bare name (found on PATH) or a system path -- never ./ssh or a lookalike
         prog = argv[0] if argv and argv[0] in _SSH_OPT_ARG else (
             argv[0].rsplit("/", 1)[-1] if argv and re.fullmatch(r"/(?:usr/(?:local/)?)?bin/(?:ssh|scp|sftp)", argv[0])
@@ -1630,7 +1660,12 @@ class ExoskeletonRuntime:
     # ---- units: a workspace that is no repository (a home folder) ----
 
     def _is_units_workspace(self, ws: str) -> bool:
-        return not _is_repository(ws) and not _repo_above(ws)
+        """A folder answered per repository inside it, never from a map of its own: one that is no repository, or one
+        that is no git work tree itself yet holds git repositories (a project manifest at the top of a folder of
+        repositories made it "a repository": its own whole-folder map, 19 days old, answered -- field test 2026-11-13)."""
+        if not _is_repository(ws) and not _repo_above(ws):
+            return True
+        return _holds_repos(ws)
 
     def _unit_services(self, ws: str) -> list:
         """The workspace's units with their indexes; the first call plans them and starts one background builder
