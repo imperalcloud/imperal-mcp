@@ -345,6 +345,13 @@ def main(argv=None) -> None:
     p_watch.add_argument("--workspace", default="", help="The folder the shell works in (default: current directory)")
     p_watch.add_argument("--once", action="store_true", help="Drain what is queued now and exit")
 
+    p_sync = sub.add_parser(
+        "sync-host",
+        help="Sync the code map of a repository on a server you reach with ssh (only one the map already holds)",
+    )
+    p_sync.add_argument("alias", help="The ssh alias of the server")
+    p_sync.add_argument("root", help="The repository's folder on the server")
+
     args = parser.parse_args(argv)
     cfg = Config.from_env()
 
@@ -377,6 +384,20 @@ def main(argv=None) -> None:
         return
     if args.cmd == "hook":
         raise SystemExit(run_shell_hook(args.event, args.workspace, shell=args.shell))
+    if args.cmd == "sync-host":
+        from .client import ImperalClient
+        exo = ExoskeletonRuntime(client=ImperalClient(cfg))
+        root = args.root.rstrip("/") or "/"
+        if not exo._catalog_row(args.alias, root, strict=True):
+            # only a repository the map holds: a commit in any folder never adds a new copy to the vault
+            print(json.dumps({"status": "skipped", "why": f"{root} on {args.alias} is not in the code map"}))
+            raise SystemExit(0)
+        memo = f"host:{args.alias}:{root}"
+        exo._run_host_sync(memo, args.alias, root)
+        err = exo._sync_errors.get(memo)
+        print(json.dumps({"status": "error" if err else "ok", **({"error": err} if err else
+                                                                 {"repo_key": exo._repo_keys.get(memo, "")})}))
+        raise SystemExit(1 if err else 0)
     if args.cmd == "watch":
         from .client import ImperalClient
         from .watch import run as _watch

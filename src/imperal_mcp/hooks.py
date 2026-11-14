@@ -341,8 +341,10 @@ def head_items(spool: "Spool", where: str) -> list:
             continue
         now[top] = line
         if seen.get(top) != line:
+            # a measure, not the agent's call: the kernel takes it as a WORLD fact only (live 2026-11-14: these reads
+            # were counted as the agent's "12 calls: bash x12" and called REPEATED by the step review)
             out.append(exchange_item("bash", {"command": f"git -C {top} log --oneline -1", "cwd": top}, True, line,
-                                     text_limit=OUTPUT_CHARS))
+                                     text_limit=OUTPUT_CHARS) | {"measure": True})
     if now != {k: v for k, v in seen.items() if k in now} or len(now) != len(seen):
         spool.update(heads=now)
     return out
@@ -439,6 +441,12 @@ def _command(inp: dict) -> str:
 # tools whose answer is evidence the agent cites: the argument that says what was asked, then the answer
 _WEB_TOOLS = {"webfetch": ("url", "prompt"), "websearch": ("query",), "agent": ("description",),
               "task": ("description",), "web_fetch": ("url",), "google_web_search": ("query",)}
+# the shell's own bookkeeping tools: the argument that tells one call from another, never an answer (live 2026-11-14:
+# two ToolSearch calls with different queries were recorded alike, and the kernel called them one call made twice)
+_OWN_TOOLS = {"toolsearch": ("query",), "skill": ("skill",), "todowrite": (), "askuserquestion": ()}
+# a line the shell adds after a command's own output, not the command's (live 2026-11-14: "Shell cwd was reset to ..."
+# after every command made writes with no output look like the same output again)
+_HARNESS_LINE = re.compile(r"^Shell cwd was reset to .*$\n?", re.M)
 
 
 def tool_items(payload: dict) -> list:
@@ -468,6 +476,7 @@ def tool_items(payload: dict) -> list:
         # with the folder the shell ran it in: a `git log` without its own cd is that folder's repository's (live
         # 2026-10-25: keyed "." in a folder of repositories, the new HEAD was dropped and WORLD kept the old one)
         cwd = str(inp.get("cwd") or inp.get("workdir") or payload.get("cwd") or "")
+        text = _HARNESS_LINE.sub("", text).strip("\n") if text else text
         return [exchange_item("bash", {"command": _command(inp), **({"cwd": cwd} if cwd else {})}, ok, text,
                               text_limit=OUTPUT_CHARS)]
     if low in _EDIT_TOOLS:
@@ -487,6 +496,9 @@ def tool_items(payload: dict) -> list:
         # that scrubs secrets and personal data, like a command's output.
         keep = {k: str(inp.get(k) or "")[:500] for k in _WEB_TOOLS[low] if inp.get(k)}
         return [exchange_item(low, keep, ok, text, text_limit=OUTPUT_CHARS)]
+    if low in _OWN_TOOLS:
+        keep = {k: str(inp.get(k) or "")[:300] for k in _OWN_TOOLS[low] if inp.get(k)}
+        return [exchange_item(name, keep, ok, "")]
     # any other tool (another MCP server's...): its name and whether it went well -- never its args or its answer,
     # which may carry anything (final review C1)
     return [{"app_id": "", "tool": name, "args": {}, "ok": bool(ok), "text": ""}]
@@ -723,6 +735,88 @@ def _started_in(spool: "Spool", payload: dict) -> dict:
     return {**payload, "cwd": before} if before and before != now else payload
 
 
+_SSH_ARG_OPTS = set("bcDEeFIiJLlmOoPpQRSWw")       # ssh options that take a value
+_GIT_MOVES = re.compile(r"\bgit\b(?:\s+-C\s+\S+)?[^;&|]*?\s(?:commit|push|pull|merge|reset|checkout|switch|rebase|am"
+                        r"|cherry-pick|revert)\b")
+_REMOTE_ROOT = re.compile(r"(?:\bcd\s+|\bgit\s+-C\s+)([~/][^\s;&|'\"]*)")
+HOST_SYNC_EVERY_S = 20.0      # one detached sync per repository at most this often
+
+
+def host_git_moves(command: str) -> list:
+    """``[(alias, root)]``: the repositories on a server a command's ssh moved HEAD in (`ssh h 'cd /r && git commit'`,
+    `git -C /r pull`) -- their code map is synced after it (live 2026-11-14: the map of /home/ipw-repo said "synced 11h
+    ago" after two commits and a push made over ssh; only a code tool with target=host: ever synced it)."""
+    import shlex
+    try:
+        words = shlex.split(str(command or ""))
+    except ValueError:
+        return []
+    out = []
+    for i, w in enumerate(words):
+        if os.path.basename(w) != "ssh":
+            continue
+        j = i + 1
+        while j < len(words) and words[j].startswith("-"):
+            opt = words[j]
+            j += 2 if len(opt) == 2 and opt[1] in _SSH_ARG_OPTS else 1
+        if j >= len(words):
+            continue
+        alias = words[j].rsplit("@", 1)[-1]
+        remote = " ".join(words[j + 1:])
+        if alias and _GIT_MOVES.search(remote):
+            for root in dict.fromkeys(m.group(1).rstrip("/") for m in _REMOTE_ROOT.finditer(remote)):
+                if root and (alias, root) not in out:
+                    out.append((alias, root))
+    return out
+
+
+def sync_moved_hosts(spool: "Spool", items: list) -> int:
+    """For each server repository a command's git moved: one detached ``imperal-mcp sync-host`` (the hook process ends
+    at once; the sync must outlive it). Returns how many were started."""
+    import subprocess
+    import sys
+    started = 0
+    now = time.time()
+    seen = dict(spool.state().get("host_sync_at") or {})
+    for it in items or []:
+        if it.get("tool") != "bash" or it.get("ok") is False:
+            continue
+        for alias, root in host_git_moves(str((it.get("args") or {}).get("command") or "")):
+            key = f"{alias}:{root}"
+            if now - float(seen.get(key) or 0.0) < HOST_SYNC_EVERY_S:
+                continue
+            try:
+                subprocess.Popen([sys.executable, "-m", "imperal_mcp.cli", "sync-host", alias, root],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+            except OSError:
+                continue
+            seen[key] = now
+            started += 1
+    if started:
+        spool.update(host_sync_at=seen)
+    return started
+
+
+STEP_SECONDS_MAX = 3600.0      # a gap longer than an hour is a pause, not a call's time
+
+
+def _timed(spool: "Spool", items: list) -> list:
+    """Each call with the seconds since the session's previous event (its request or the call before): what the work
+    cost in time -- the kernel sums it into the request's time (live 2026-11-14: every frame said "0m00s spent", the
+    hooks sent no duration)."""
+    now = time.time()
+    try:
+        last = float(spool.state().get("last_event_at") or 0.0)
+    except (TypeError, ValueError):
+        last = 0.0
+    spool.update(last_event_at=now)
+    if not last or not items:
+        return items
+    d = round(min(max(0.0, now - last), STEP_SECONDS_MAX), 2)
+    return [dict(i, duration_s=d) if k == 0 else i for k, i in enumerate(items)]   # one gap, counted once
+
+
 def _run(event: str, payload: dict, gateway) -> dict | None:
     shell_session = str(payload.get("session_id") or "default")
     if ignored(str(payload.get("cwd") or os.getcwd())):   # an ignored folder: nothing recorded, announced or asked
@@ -739,8 +833,10 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
         sub.add_items(tool_items(_started_in(sub, payload)))
         return None
     if event == "post-tool":
-        items = tool_items(_started_in(spool, payload))
+        items = _timed(spool, tool_items(_started_in(spool, payload)))
         spool.add_items(items)
+        with contextlib.suppress(Exception):
+            sync_moved_hosts(spool, items)      # a code map follows a commit made over ssh; never stops the hook
         if any(str(i.get("text") or "").startswith("(withheld") for i in items):
             # the output stays on this machine; fingerprints of its words let the final name the answer's words it held
             raw, _ok = _text_of(normalize(payload).get("tool_response"))
@@ -770,6 +866,7 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
             return None
         if prompt.strip():
             spool.add_memory({"kind": "user_request", "content": _clean(prompt)[:MEMORY_CHARS]})
+        spool.update(last_event_at=time.time())    # the work's clock starts at the request, not at the user's pause
         spool, _ss, sess = _session_of(payload, gateway)
         where = os.path.realpath(str(payload.get("cwd") or os.getcwd()))   # the code map follows the shell's folder
         repo = pinned_repo(spool, where)

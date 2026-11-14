@@ -11,7 +11,7 @@
       "name": "imperal-mcp",
       "displayName": "Imperal MCP",
       "description": "The exoskeleton for your AI coding agent: memory across sessions, a live code map, undo for every change and a fact check of every name, file and number it states. MCP server for Claude Code, Cursor, Codex, Gemini CLI. Install first: pipx install \"imperal-mcp[code]\" (or uv tool install \"imperal-mcp[code]\"; any Python from 3.7).",
-      "version": "0.9.16",
+      "version": "0.9.17",
       "source": {
         "source": "github",
         "repo": "imperalcloud/imperal-mcp"

@@ -88,3 +88,12 @@ def test_a_phone_beside_a_date_time_is_still_masked():
     out = apply_pii_redaction("2026-11-07 12:15:12 call +1 (555) 123-4567", PIIRedactionLevel.MASK_PII)
     assert out.startswith("2026-11-07 12:15:12 ") and "555" not in out and "<PHONE>" in out
     assert apply_pii_redaction("call 380991234567", PIIRedactionLevel.MASK_PII) == "call <PHONE>"
+
+
+def test_a_tables_columns_are_not_one_phone():
+    # live 2026-11-14: `ps` printed "3846258       00:55 ..." and the PID reached the kernel as "<PHONE>:55"
+    from imperal_mcp.mask import defensive_scrub
+    assert defensive_scrub("3846258       00:55 /opt/x -m pytest -q") == "3846258       00:55 /opt/x -m pytest -q"
+    assert defensive_scrub("3846251\t00:03 bash") == "3846251\t00:03 bash"
+    assert defensive_scrub("call +1 415 555 2671 or 380991234567") == "call <PHONE> or <PHONE>"
+    assert "<PHONE>" in defensive_scrub("phone:  +1 415 555 2671")      # a phone in its own column is still a phone

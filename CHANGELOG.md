@@ -7,6 +7,28 @@ a live code map, undo for every change and a fact check of every name, file and 
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.17 - 2026-11-14
+
+What 0.9.16 showed in use, fixed with the kernel of the same day. Floors unchanged (imperal-sdk 6.6.1, webbee 0.7.15).
+
+### Fixed
+- A prompt's HEAD reads are sent as the hook's own measure (`"measure": true`): WORLD takes them, the request's
+  calls, the path and the step review never do (a frame said "12 calls: bash x12" before the agent ran anything, and
+  the review called the agent repeated and "not moving" for them).
+- `ToolSearch` and `Skill` keep the argument that tells one call from another (two different searches were called
+  one call made twice); another server's tools still send only their name.
+- The shell's "Shell cwd was reset to ..." line is no longer part of a command's output (a write with no output read
+  as "the same output again").
+- Each call carries `duration_s`, the seconds since the session's previous event: a request's time is measured (every
+  frame said "0m00s spent").
+- A git commit, push, pull, reset or checkout run over ssh in a server repository the code map holds starts one
+  detached `imperal-mcp sync-host <alias> <root>`: the map follows it (it said "synced 11h ago" after two commits).
+- The personal-data mask reads a table's columns apart: `ps` printing "3846258       00:55" reached the kernel as
+  "<PHONE>:55", and the final's check said no output showed the PID the agent had read. Phones are still masked.
+
+### Added
+- `imperal-mcp sync-host <alias> <root>`: sync the code map of a server repository the map already holds.
+
 ## 0.9.16 - 2026-11-14
 
 The imperal-mcp 0.9.15 field test (report 2, 13.11), fixed in every layer. Needs imperal-sdk 6.6.1 and webbee 0.7.15
