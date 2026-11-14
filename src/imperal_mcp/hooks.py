@@ -26,6 +26,9 @@ from typing import Any, Callable
 from .exoskeleton import EXOSKELETON_INSTRUCTIONS, WITHHELD_SEEN_MAX, exchange_item, withheld_words, word_marks
 
 EXCHANGE_MAX, MEMORY_MAX, MEMORY_CHARS = 60, 20, 4000     # the gateway's bounds on one step
+# the final's check (live 2026-11-13/14, 77 checks: p50 23.7 s, p90 33.6 s, max 50 s; 4 ran past the old 40 s wait and
+# were never checked): the time left of the stop hook's 90 s after the record, kept 5 s under it
+STOP_BUDGET_S, FINAL_WAIT_S, FINAL_WAIT_MIN_S = 85.0, 75.0, 20.0
 REQUEST_CHARS = 300_000                                   # one step's exchange, well under Temporal's 2 MB payload
 SPOOL_ITEMS_MAX, SPOOL_MEMORY_MAX = 200, 50               # what a spool keeps while nothing can be sent
 WITHHELD_MARKS_MAX = 50_000      # word fingerprints of a session's withheld outputs kept (16 hex each: under 1 MB)
@@ -702,6 +705,24 @@ def _inbox(payload: dict, spool: "Spool", gateway, *, every: float = 0.0) -> str
     return text if len(text) <= INBOX_CHARS else text[:INBOX_CHARS].rstrip() + " … [more: recall in this conversation]"
 
 
+def _final_wait(began: float) -> float:
+    """The seconds the final's check may take: what is left of the stop hook's budget after the record."""
+    return max(FINAL_WAIT_MIN_S, STOP_BUDGET_S - (time.monotonic() - began))
+
+
+def _started_in(spool: "Spool", payload: dict) -> dict:
+    """The tool call's payload with the folder its command STARTED in: the one the shell was in after the call before
+    (live 2026-11-14: Claude Code drops a leading `cd <the folder it is in> &&` from the command it hands the hook and
+    sends the folder the shell is in AFTER the command, so `cd webbee && git log -1; cd ../imperal-mcp && pytest`
+    reached the kernel as `git log -1; cd ../imperal-mcp ...` run in imperal-mcp -- webbee's HEAD became imperal-mcp's).
+    The folder after it is kept for the next call."""
+    now = str(payload.get("cwd") or "")
+    before = str(spool.state().get("shell_cwd") or "")
+    if now:
+        spool.update(shell_cwd=now)
+    return {**payload, "cwd": before} if before and before != now else payload
+
+
 def _run(event: str, payload: dict, gateway) -> dict | None:
     shell_session = str(payload.get("session_id") or "default")
     if ignored(str(payload.get("cwd") or os.getcwd())):   # an ignored folder: nothing recorded, announced or asked
@@ -709,13 +730,16 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
     announce(str(payload.get("cwd") or os.getcwd()), shell_session)
     spool = Spool(shell_session)
     agent = str(payload.get("agent_id") or "")
+    if event in ("prompt", "session-start") and payload.get("cwd"):
+        spool.update(shell_cwd=str(payload["cwd"]))      # where the turn's first command starts
     if event == "post-tool" and agent:
         # a subagent's call (Claude Code sends agent_id only for those): its own spool and kernel session, never the
         # parent's task facts (live 2026-11-08: a subagent's grep became the parent's "last check" at the final)
-        Spool(_agent_session(shell_session, agent)).add_items(tool_items(payload))
+        sub = Spool(_agent_session(shell_session, agent))
+        sub.add_items(tool_items(_started_in(sub, payload)))
         return None
     if event == "post-tool":
-        items = tool_items(payload)
+        items = tool_items(_started_in(spool, payload))
         spool.add_items(items)
         if any(str(i.get("text") or "").startswith("(withheld") for i in items):
             # the output stays on this machine; fingerprints of its words let the final name the answer's words it held
@@ -783,6 +807,7 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
             frame = frame[: HOOK_FRAME_CHARS - len(note)] + note
         return context_output(payload, frame) if frame.strip() else None
     if event == "stop":
+        began = time.monotonic()
         said = _inbox(payload, spool, gateway)
         if said:
             # a message came while the turn ran: the turn sees it before it ends -- once; a turn the stop hook already
@@ -813,7 +838,8 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
         seen = [w for w, m in zip(words, word_marks(words)) if m in marks]
         got = gateway.final({"session_id": sess, "final_text": sent_text, "step": int(st.get("step") or 0),
                              "repo_key": str(st.get("repo_key") or ""), "session_repo": repo,
-                             "tools": list(MCP_TOOL_NAMES), "withheld_seen": seen[:WITHHELD_SEEN_MAX]})
+                             "tools": list(MCP_TOOL_NAMES), "withheld_seen": seen[:WITHHELD_SEEN_MAX]},
+                            timeout=_final_wait(began))
         if (got or {}).get("hold") and str(got.get("reason") or "").strip():
             return block_output(payload, str(got["reason"]))
         opened = [str(x) for x in (got or {}).get("open") or [] if str(x).strip()]
@@ -862,8 +888,8 @@ class _Gateway:
         drains; a short wait: a hook never stalls the shell on it."""
         return self._call("GET", f"/v1/agent/sessions/{conversation}/pending-steer", timeout=4.0) or {}
 
-    def final(self, body: dict) -> dict:
-        return self._call("POST", "/v1/memory/frame/final", body, timeout=40.0) or {}
+    def final(self, body: dict, timeout: float = FINAL_WAIT_S) -> dict:
+        return self._call("POST", "/v1/memory/frame/final", body, timeout=timeout) or {}
 
     def recall_context(self, query: str) -> str:
         """The user's directives and this work's notes (the ``recall_context`` tool's own source: memory-index)."""

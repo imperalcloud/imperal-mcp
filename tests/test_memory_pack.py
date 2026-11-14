@@ -88,7 +88,7 @@ def test_the_repo_is_pinned_once_and_sent_on_every_door(spool, tmp_path, monkeyp
             self.calls.append(("record", body))
             return {}
 
-        def final(self, body):
+        def final(self, body, timeout=None):
             self.calls.append(("final", body))
             return {"hold": False, "open": []}
     gw = _Gw()
@@ -148,7 +148,7 @@ def test_a_final_names_its_step(spool, tmp_path, monkeypatch):
         def record(self, body):
             return {}
 
-        def final(self, body):
+        def final(self, body, timeout=None):
             self.calls.append(body)
             return {"hold": False, "open": []}
     gw = _Gw()

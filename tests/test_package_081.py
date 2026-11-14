@@ -26,7 +26,7 @@ class _Gw:
         self.calls.append(("record", body))
         return {}
 
-    def final(self, body):
+    def final(self, body, timeout=None):
         self.calls.append(("final", body))
         return {"hold": False, "open": []}
 

@@ -41,7 +41,7 @@ class _Gateway:
         self._go("record", body)
         return {"ok": True, "recorded": True}
 
-    def final(self, body):
+    def final(self, body, timeout=None):
         self._go("final", body)
         return {"hold": self.hold, "reason": "2 item(s) still open -- prove or name them in blocked_on", "open": ["b"]}
 
@@ -369,7 +369,7 @@ def test_the_spool_keeps_a_bounded_tail(spool):
 
 def test_past_the_holds_the_open_items_are_named(spool):
     class _Pass(_Gateway):
-        def final(self, body):
+        def final(self, body, timeout=None):
             self._go("final", body)
             return {"hold": False, "reason": "", "open": ["edit beta", "deploy"]}
     out = H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "done"},
@@ -480,7 +480,7 @@ def test_a_subagent_hand_back_is_an_observation_never_a_user_request(spool):
 def test_a_name_not_in_the_code_is_named_never_held(spool):
     """10-28: the kernel names the answer's names that the code map does not find in the work's repos."""
     class _Unfound(_Gateway):
-        def final(self, body):
+        def final(self, body, timeout=None):
             self._go("final", body)
             return {"hold": False, "open": [], "unfound": ["admin_only", "allowed_roles"]}
     out = H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "done"},
@@ -488,7 +488,7 @@ def test_a_name_not_in_the_code_is_named_never_held(spool):
     assert out == {"systemMessage": "Imperal: not in the code -- `admin_only`, `allowed_roles`"}
 
     class _Both(_Gateway):
-        def final(self, body):
+        def final(self, body, timeout=None):
             self._go("final", body)
             return {"hold": False, "open": ["b"], "unfound": ["x_y"]}
     out = H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "done"},
@@ -621,3 +621,26 @@ def test_a_subagent_s_calls_go_to_its_own_session_never_the_parent_s(spool):
     assert len(theirs) == 1 and theirs[0]["session_id"] == H.mcp_session("imp_u_ME", "s1.agent.a1")
     assert [i["args"]["command"] for i in theirs[0]["exchange"]] == ["grep -n x sub.py"]
     assert [n for n, _ in gw.calls if n != "me"][-1] == "final"
+
+
+def test_a_command_carries_the_folder_it_started_in(spool):
+    # live 2026-11-14: Claude Code drops `cd <the folder it is in> &&` and sends the folder AFTER the command -- the
+    # kernel read `git log -1; cd ../mcp && pytest` as run in mcp and gave webbee's HEAD to mcp
+    H.run_hook("prompt", {**CLAUDE_BASH, "hook_event_name": "UserPromptSubmit", "prompt": "x", "cwd": "/p/webbee"},
+               gateway=_Gateway())
+    H.Spool("s1").drain()
+    first = {**CLAUDE_BASH, "cwd": "/p/mcp",
+             "tool_input": {"command": "git log --oneline -1; cd ../mcp && pytest -q"}}
+    H.run_hook("post-tool", first, gateway=_Gateway())
+    H.run_hook("post-tool", {**CLAUDE_BASH, "cwd": "/p/mcp", "tool_input": {"command": "git status"}},
+               gateway=_Gateway())
+    items, _m = H.Spool("s1").drain()
+    assert [i["args"]["cwd"] for i in items] == ["/p/webbee", "/p/mcp"]
+
+
+def test_the_final_check_gets_the_time_left_of_the_stop_budget(monkeypatch):
+    # live 2026-11-13/14: 4 of 77 final checks ran past the old 40 s wait and were never checked
+    clock = iter([100.0, 130.0, 100.0, 200.0])
+    monkeypatch.setattr(H.time, "monotonic", lambda: next(clock))
+    assert H._final_wait(H.time.monotonic()) == H.STOP_BUDGET_S - 30.0
+    assert H._final_wait(H.time.monotonic()) == H.FINAL_WAIT_MIN_S
