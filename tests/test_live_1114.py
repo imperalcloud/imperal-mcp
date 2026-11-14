@@ -82,3 +82,9 @@ def test_a_moved_server_repository_gets_one_detached_sync(monkeypatch):
     assert started == [(["sync-host", "whm-jump", "/home/ipw-repo"], True)]
     assert H.sync_moved_hosts(sp, [item]) == 0                           # once per window
     assert H.sync_moved_hosts(_Spool(), [dict(item, ok=False)]) == 0     # a failed command moved nothing
+
+
+def test_listagents_output_reaches_the_kernel():
+    got = H.tool_items({"tool_name": "ListAgents", "tool_input": {},
+                        "tool_response": "Subagents (3):\n  ad05  ·  fork  ·  running  ·  started 1m ago"})
+    assert got[0]["tool"] == "listagents" and "started 1m ago" in got[0]["text"]

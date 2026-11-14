@@ -97,3 +97,18 @@ def test_a_tables_columns_are_not_one_phone():
     assert defensive_scrub("3846251\t00:03 bash") == "3846251\t00:03 bash"
     assert defensive_scrub("call +1 415 555 2671 or 380991234567") == "call <PHONE> or <PHONE>"
     assert "<PHONE>" in defensive_scrub("phone:  +1 415 555 2671")      # a phone in its own column is still a phone
+
+
+def test_two_process_ids_are_not_a_card():
+    # live 2026-11-14: `kill 3846252 3846258` reached the kernel as `kill <CARD>`
+    from imperal_mcp.mask import defensive_scrub
+    assert defensive_scrub("kill 3846252 3846258; sleep 2") == "kill 3846252 3846258; sleep 2"
+    assert defensive_scrub("card 4111 1111 1111 1111") == "card <CARD>"
+    assert defensive_scrub("amex 3782-822463-10005") == "amex <CARD>"
+    assert defensive_scrub("pan 4111111111111111") == "pan <CARD>"          # unbroken: still masked
+
+
+def test_two_real_numbers_side_by_side_stay_masked():
+    from imperal_mcp.mask import defensive_scrub
+    assert defensive_scrub("a 380991234567 380991234568 b") == "a <PHONE> <PHONE> b"
+    assert defensive_scrub("x 4111111111111111 4111111111111111") == "x <CARD> <CARD>"

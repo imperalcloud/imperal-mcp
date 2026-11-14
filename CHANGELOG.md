@@ -7,6 +7,19 @@ a live code map, undo for every change and a fact check of every name, file and 
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.18 - 2026-11-14
+
+Found by the live check of 0.9.17, fixed with the kernel of the same day. Floors unchanged (imperal-sdk 6.6.1, webbee
+0.7.15).
+
+### Fixed
+- Numbers of six digits or more side by side (`kill 3846252 3846258`: two process ids) are separate numbers, each
+  judged on its own: they reached the kernel as `kill <CARD>`. A phone or card number written in groups or unbroken is
+  still masked, and so are two of them side by side.
+- A masked card number keeps the space after it (`<CARD> <CARD>`, not `<CARD><CARD>`).
+- `ListAgents` and `TaskOutput` send their answer, like `Agent` and `WebFetch`: what the agent read about its
+  agents reached the kernel as a name only, and the final's check said nothing showed it.
+
 ## 0.9.17 - 2026-11-14
 
 What 0.9.16 showed in use, fixed with the kernel of the same day. Floors unchanged (imperal-sdk 6.6.1, webbee 0.7.15).

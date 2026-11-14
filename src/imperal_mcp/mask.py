@@ -33,6 +33,17 @@ _CELL_GAP = re.compile(r" {2,}|\t|\n")      # columns of a table (two spaces or 
 _STAMP = re.compile(r"(?:19|20)\d\d(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[-_T](?:[01]\d|2[0-3])[0-5]\d[0-5]\d")
 
 
+def _separate_numbers(text: str, rx: "re.Pattern[str]", judge) -> "str | None":
+    """Numbers of six digits or more side by side ("3846252 3846258": two process ids) are separate numbers, each judged
+    on its own -- None when ``text`` is not that (live 2026-11-14: `kill 3846252 3846258` reached the kernel as
+    `kill <CARD>`, then `kill <PHONE>`). A phone or card number is written in shorter groups (+1 415 555 2671, 4111 1111
+    1111 1111) or unbroken, so it is still masked."""
+    words = text.split(" ")
+    if len(words) < 2 or not all(w.isdigit() and len(w) >= 6 for w in words):
+        return None
+    return " ".join(rx.sub(judge, w) for w in words)
+
+
 def _phone_or_keep(m: "re.Match[str]") -> str:
     """<PHONE> unless every whitespace-separated piece of the match is a certain non-phone."""
     cells = _CELL_GAP.split(m.group(0))
@@ -42,6 +53,9 @@ def _phone_or_keep(m: "re.Match[str]") -> str:
         gaps = _CELL_GAP.findall(m.group(0))
         return _PHONE_RE.sub(_phone_or_keep, cells[0]) + "".join(
             gap + _PHONE_RE.sub(_phone_or_keep, cell) for gap, cell in zip(gaps, cells[1:]))
+    apart = _separate_numbers(m.group(0), _PHONE_RE, _phone_or_keep)
+    if apart is not None:
+        return apart
     pieces = m.group(0).split()
     if _STAMP.fullmatch(m.group(0).strip()) or pieces and all(
             _NOT_A_PHONE.fullmatch(p) and not _US_DOTTED_PHONE.fullmatch(p) for p in pieces):
@@ -62,7 +76,12 @@ _CC_RE = re.compile(r"\b(?:\d[ -]?){13,19}\b")
 
 
 def _card_or_keep(m: "re.Match[str]") -> str:
-    return m.group(0) if _STAMP.fullmatch(m.group(0).strip(" -")) else "<CARD>"
+    if _STAMP.fullmatch(m.group(0).strip(" -")):
+        return m.group(0)
+    core = m.group(0).rstrip(" -")
+    tail = m.group(0)[len(core):]        # the separator after the number is the text's, never the card's
+    apart = _separate_numbers(core, _CC_RE, _card_or_keep)
+    return ("<CARD>" if apart is None else apart) + tail
 
 
 ALLOWLIST_KEYS = frozenset({

@@ -440,7 +440,10 @@ def _command(inp: dict) -> str:
 
 # tools whose answer is evidence the agent cites: the argument that says what was asked, then the answer
 _WEB_TOOLS = {"webfetch": ("url", "prompt"), "websearch": ("query",), "agent": ("description",),
-              "task": ("description",), "web_fetch": ("url",), "google_web_search": ("query",)}
+              "task": ("description",), "web_fetch": ("url",), "google_web_search": ("query",),
+              # the shell's own reads of its agents (live 2026-11-14: "three forks running, started 1m ago" read off
+              # ListAgents was "nothing shows it" -- only the tool's name had reached the kernel)
+              "listagents": (), "taskoutput": ("task_id",)}
 # the shell's own bookkeeping tools: the argument that tells one call from another, never an answer (live 2026-11-14:
 # two ToolSearch calls with different queries were recorded alike, and the kernel called them one call made twice)
 _OWN_TOOLS = {"toolsearch": ("query",), "skill": ("skill",), "todowrite": (), "askuserquestion": ()}
