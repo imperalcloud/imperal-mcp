@@ -420,7 +420,35 @@ def main(argv=None) -> None:
     from .client import ImperalClient
 
     mcp = build_server(ImperalClient(cfg))
+    isolate_stdio()
     mcp.run()
+
+
+def isolate_stdio() -> None:
+    """The MCP channel is this process's stdin/stdout: no child (git, a code-index pool worker, a shell) may inherit it.
+    Field gate 2026-11-15 (Windows): every git child of the server held the protocol's pipe -- `git init` of a
+    checkpoint waited its 60 s timeout, the index never finished. The transport keeps private duplicates; fd 0 becomes
+    the null device and fd 1 stderr, so a child reads nothing and anything it prints goes to the log, never the
+    protocol. On Windows the process's standard handles follow (a child gets those, not the C runtime's fds)."""
+    import io
+    import sys
+    try:
+        sys.stdout.flush()
+        proto_in, proto_out = os.dup(0), os.dup(1)        # non-inheritable (PEP 446): no child gets them
+        null = os.open(os.devnull, os.O_RDONLY)
+        os.dup2(null, 0)
+        os.close(null)
+        os.dup2(2, 1)
+        sys.stdin = io.TextIOWrapper(io.FileIO(proto_in, "rb"), encoding="utf-8", errors="replace")
+        sys.stdout = io.TextIOWrapper(io.FileIO(proto_out, "wb"), encoding="utf-8", write_through=True)
+        if os.name == "nt":
+            import ctypes
+            import msvcrt
+            k32 = ctypes.windll.kernel32
+            k32.SetStdHandle(-10, msvcrt.get_osfhandle(0))     # STD_INPUT_HANDLE -> the null device
+            k32.SetStdHandle(-11, msvcrt.get_osfhandle(1))     # STD_OUTPUT_HANDLE -> stderr
+    except (OSError, ValueError, AttributeError):
+        pass                                              # an odd host: the server still runs as before
 
 
 if __name__ == "__main__":

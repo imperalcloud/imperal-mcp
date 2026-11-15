@@ -190,3 +190,16 @@ def test_a_failed_write_keeps_the_calls_for_the_next_frame(tmp_path: Path):
     exo.record_call("grep_code", {"pattern": "x"}, True, "hit")
     out = exo.lens("message_session", {"conversation": "c", "text": "t"})
     assert out == {"ok": True} and [i["tool"] for i in exo._exchange] == ["grep_code"]   # sent, and nothing lost
+
+
+def test_state_lens_first_writes_the_calls_of_this_turn(tmp_path: Path):
+    """Field gate 2026-11-15 frame-counts-steps: state_lens(path) said "0 steps" -- three calls since the frame sat in
+    the spool. A lens on this session answers from what the kernel holds, so the calls go first."""
+    from tests.test_exoskeleton import _Cloud
+    cloud = _Cloud({"/v1/auth/me": {"imperal_id": "imp_u_ME"},
+                    "/v1/memory/frame/record": {"ok": True}, "/v1/memory/frame/lens": {"ok": True}})
+    exo = ExoskeletonRuntime(workspace=str(tmp_path), client=cloud)
+    exo.record_call("search_code", {"query": "x"}, True, "a.py:1")
+    exo.lens("state_lens", {"section": "path"})
+    assert [c[1] for c in cloud.calls if c[1].startswith("/v1/memory/frame/")] == \
+        ["/v1/memory/frame/record", "/v1/memory/frame/lens"]

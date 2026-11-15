@@ -1345,7 +1345,9 @@ class ExoskeletonRuntime:
         return self._own_repo
 
     # the lens tools whose answer the kernel checks against what this session saw (the truth door)
-    _CHECKED_LENS = frozenset({"message_session"})
+    # a lens on THIS session answers from what the kernel holds: this turn's calls are written first (field gate
+    # 2026-11-15 frame-counts-steps: state_lens(path) said "0 steps" -- three calls since the frame sat in the spool)
+    _CHECKED_LENS = frozenset({"message_session", "state_lens"})
 
     def _flush_calls(self, ws: str) -> None:
         """This turn's calls so far -- the shell's spooled ones and this server's own -- written to the kernel now, as
