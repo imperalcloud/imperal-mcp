@@ -21,9 +21,10 @@ import json
 import os
 import re
 import time
+import uuid
 from typing import Any, Callable
 
-from .exoskeleton import EXOSKELETON_INSTRUCTIONS, WITHHELD_SEEN_MAX, exchange_item, withheld_words, word_marks
+from .exoskeleton import EXOSKELETON_INSTRUCTIONS, exchange_item
 
 EXCHANGE_MAX, MEMORY_MAX, MEMORY_CHARS = 60, 20, 4000     # the gateway's bounds on one step
 # the final's check (live 2026-11-13/14, 77 checks: p50 23.7 s, p90 33.6 s, max 50 s; 4 ran past the old 40 s wait and
@@ -31,7 +32,6 @@ EXCHANGE_MAX, MEMORY_MAX, MEMORY_CHARS = 60, 20, 4000     # the gateway's bounds
 STOP_BUDGET_S, FINAL_WAIT_S, FINAL_WAIT_MIN_S = 85.0, 75.0, 20.0
 REQUEST_CHARS = 300_000                                   # one step's exchange, well under Temporal's 2 MB payload
 SPOOL_ITEMS_MAX, SPOOL_MEMORY_MAX = 200, 50               # what a spool keeps while nothing can be sent
-WITHHELD_MARKS_MAX = 50_000      # word fingerprints of a session's withheld outputs kept (16 hex each: under 1 MB)
 # Claude Code keeps 10 000 characters of a hook's context (more becomes a file the model is not told to read):
 # the frame a hook gives fits, DECISION first (final review I1)
 HOOK_FRAME_CHARS = 9500
@@ -44,6 +44,7 @@ _HANDBACK = ("Another Claude session sent a message", "<agent-message")
 # what of a read / an output reaches the kernel -- an output as much as a read (live 2026-10-25: the Stop check
 # called names "never seen" that stood past 8000 chars of a 14K output the model had read whole)
 READ_CHARS, OUTPUT_CHARS = 20000, 20000
+GIVEN_CHARS = 60000      # the user's request whole -- the gateway's FrameFinalIn.given and the kernel take the same
 _IMPERAL_TOOL = re.compile(r"^mcp_{1,2}imperal_{1,2}")    # imperal-mcp's own calls: the server records those
 _SHELL_TOOLS = {"bash", "shell", "run_shell_command", "run_command", "exec_command", "execute_command", "terminal"}
 _EDIT_TOOLS = {"edit", "multiedit", "replace", "edit_file", "str_replace"}
@@ -52,14 +53,11 @@ _READ_TOOLS = {"read", "read_file", "view", "view_file", "read_many_files"}
 _PATCH_FILE = re.compile(r"^\*\*\* (?:Update|Add|Delete) File: (.+)$", re.M)
 
 
-# the MCP server's own tools (tests/test_memory_pack.py holds them equal to the server's list): a final that names one
-# names what the agent was given, never a made-up name (live 2026-10-25: `search_history` in an answer was held)
-MCP_TOOL_NAMES = ("check_syntax", "checkpoint", "checkpoint_diff", "checkpoint_rollback", "coding_context",
-                  "contract_slice", "deploy_ir", "frame", "get_app", "graph_slice", "grep_code", "impact_of_change",
-                  "list_apps", "live_sessions", "login", "message_session", "orient", "outline", "read_symbol", "recall",
-                  "recall_context", "remember_fact",
-                  "repo_profile", "run_read_tool", "run_write_tool", "save_repo_note", "search_code", "search_history",
-                  "smoke_ir", "state_lens", "task", "token_savings", "upload_file", "validate_ir", "vault_log_read")
+def mcp_tool_names() -> tuple:
+    """The MCP server's own tools -- the SDK contract's (ICNLI §3.5): a final that names one names what the agent was
+    given, never a made-up name (live 2026-10-25: `search_history` in an answer was held)."""
+    from imperal_sdk import tool_contract
+    return tuple(t.name for t in tool_contract.shell_tools("mcp"))
 
 
 def spool_dir() -> str:
@@ -156,28 +154,25 @@ class Spool:
                 newer = ""
             self._write(items, memory, newer)
 
-    def add_withheld_marks(self, marks) -> None:
-        """Fingerprints of the words of an output withheld as a secret file's (``exoskeleton.word_marks``): the
-        session's own, newest kept -- the output itself is never on disk."""
-        if not marks:
-            return
-        with _locked(self.base):
-            path = self.base + ".withheld"
-            try:
-                with open(path, encoding="utf-8") as f:
-                    old = f.read().split()
-            except FileNotFoundError:
-                old = []
-            keep = list(dict.fromkeys(old + sorted(marks)))[-WITHHELD_MARKS_MAX:]
-            with _private(path, "w") as f:
-                f.write("\n".join(keep) + "\n")
-
-    def withheld_marks(self) -> set:
+    def inflight(self) -> dict | None:
+        """The batch sent last whose acknowledgement never came: ``{id, items, memory}``."""
         try:
-            with open(self.base + ".withheld", encoding="utf-8") as f:
-                return set(f.read().split())
-        except OSError:
-            return set()
+            with open(self.base + ".inflight.json", encoding="utf-8") as f:
+                got = json.load(f)
+            return got if isinstance(got, dict) and got.get("id") else None
+        except (OSError, ValueError):
+            return None
+
+    def hold(self, batch: dict) -> None:
+        with _locked(self.base):
+            tmp = self.base + ".inflight.tmp"
+            with _private(tmp, "w") as f:
+                json.dump(batch, f, ensure_ascii=False)
+            os.replace(tmp, self.base + ".inflight.json")
+
+    def release(self) -> None:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(self.base + ".inflight.json")
 
     def state(self) -> dict:
         try:
@@ -502,9 +497,10 @@ def tool_items(payload: dict) -> list:
     if low in _OWN_TOOLS:
         keep = {k: str(inp.get(k) or "")[:300] for k in _OWN_TOOLS[low] if inp.get(k)}
         return [exchange_item(name, keep, ok, "")]
-    # any other tool (another MCP server's...): its name and whether it went well -- never its args or its answer,
-    # which may carry anything (final review C1)
-    return [{"app_id": "", "tool": name, "args": {}, "ok": bool(ok), "text": ""}]
+    # any other tool (SendMessage, another MCP server's ...): its words and its answer through the one door that withholds
+    # secret files and masks secrets and personal data (spec I, 2026-11-15: a message sent to another session was a
+    # bare name, and the answer quoting it was "not shown")
+    return [exchange_item(name, {k: str(v)[:2000] for k, v in inp.items()}, ok, text, text_limit=OUTPUT_CHARS)]
 
 
 def last_answer(payload: dict) -> str:
@@ -592,9 +588,10 @@ def _flush_agents(shell_session: str, me: str, gateway) -> None:
         agent = name[len(prefix):]
         step = int(sub.state().get("step") or 0) + 1
         try:
-            _send(sub, lambda items, memory: gateway.record({
+            _send(sub, lambda items, memory, cid: gateway.record({
                 "session_id": mcp_session(me, _agent_session(shell_session, agent)), "step": step,
-                "goal": "", "items": [], "exchange": items, "memory": memory, "repo_key": "", "session_repo": ""}))
+                "goal": "", "items": [], "exchange": items, "memory": memory, "repo_key": "", "session_repo": "",
+                "client_event_id": cid}))
             sub.update(step=step)
         except Exception:
             continue
@@ -612,18 +609,27 @@ def _bounded_items(items: list) -> list:
     return list(reversed(out))
 
 
-def _send(spool: Spool, send: Callable[[list, list], Any]) -> Any:
-    items, memory = spool.drain()
-    sent = _bounded_items(items)
+def _send(spool: Spool, send: Callable[[list, list, str], Any]) -> Any:
+    """The outbox (spec III.2, 2026-11-15): a batch goes out with its client_event_id and stays held until the answer
+    comes; a lost answer resends the SAME batch under the same id -- the vault writes it once and says so (replay).
+    Newer calls wait in the spool behind it."""
+    held = spool.inflight()
+    if held:
+        items, memory, cid = list(held.get("items") or []), list(held.get("memory") or []), str(held["id"])
+    else:
+        everything, all_memory = spool.drain()
+        items, memory, cid = _bounded_items(everything), all_memory[-MEMORY_MAX:], uuid.uuid4().hex[:24]
+        if len(items) < len(everything):      # the older calls past one request's size go with the next one
+            spool.restore(everything[:len(everything) - len(items)], [])
+        spool.hold({"id": cid, "items": items, "memory": memory})
     try:
-        got = send(sent, memory[-MEMORY_MAX:])
+        got = send(items, memory, cid)
     except Exception as exc:
         code = getattr(exc, "status_code", None)
-        if not (isinstance(code, int) and 400 <= code < 500 and code not in (401, 402, 408, 429)):
-            spool.restore(items, memory)      # a passing failure: sent next time; a refusal for good: dropped (I5)
+        if isinstance(code, int) and 400 <= code < 500 and code not in (401, 402, 408, 429):
+            spool.release()                   # a refusal for good: dropped (I5); a passing failure: held, resent
         raise
-    if len(sent) < len(items):                # the older calls past one request's size go with the next one
-        spool.restore(items[:len(items) - len(sent)], [])
+    spool.release()
     return got
 
 
@@ -637,8 +643,8 @@ def run_hook(event: str, payload: dict, gateway=None) -> dict | None:
 
 def _clean(text: str) -> str:
     """A prompt or an answer as it may leave the machine: PII masked, credentials redacted (final review C1)."""
+    from imperal_sdk.secret_mask import scrub_secrets
     from .mask import defensive_scrub
-    from .secrets_scrub import scrub_secrets
     return str(scrub_secrets(str(defensive_scrub(str(text or "")))))
 
 
@@ -840,10 +846,6 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
         spool.add_items(items)
         with contextlib.suppress(Exception):
             sync_moved_hosts(spool, items)      # a code map follows a commit made over ssh; never stops the hook
-        if any(str(i.get("text") or "").startswith("(withheld") for i in items):
-            # the output stays on this machine; fingerprints of its words let the final name the answer's words it held
-            raw, _ok = _text_of(normalize(payload).get("tool_response"))
-            spool.add_withheld_marks(word_marks(withheld_words(raw)))
         said = _inbox(payload, spool, gateway, every=INBOX_EVERY_S)
         return context_output(payload, said) if said else None
     if event == "session-start":
@@ -869,7 +871,9 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
             return None
         if prompt.strip():
             spool.add_memory({"kind": "user_request", "content": _clean(prompt)[:MEMORY_CHARS]})
-        spool.update(last_event_at=time.time())    # the work's clock starts at the request, not at the user's pause
+        # the request whole -- a pasted report included -- is a source the answer may quote (ICNLI §7.2 "user"); the
+        # memory entry above stays bounded, the final carries it whole (field test 2026-11-14: quotes were "not shown")
+        spool.update(last_event_at=time.time(), given=_clean(prompt)[:GIVEN_CHARS] if prompt.strip() else "")    # the work's clock starts at the request, not at the user's pause
         spool, _ss, sess = _session_of(payload, gateway)
         where = os.path.realpath(str(payload.get("cwd") or os.getcwd()))   # the code map follows the shell's folder
         repo = pinned_repo(spool, where)
@@ -882,7 +886,7 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
         st = spool.state()
         step = int(st.get("step") or 0) + 1
 
-        def _frame(items, memory):
+        def _frame(items, memory, cid):
             body = {"session_id": sess, "step": step, "goal": str(st.get("goal") or _clean(prompt))[:4000],
                     "items": list(st.get("items") or []), "exchange": items, "memory": memory,
                     # the key of the folder the shell is in NOW (live 2026-11-13: the key an old `frame` call saved
@@ -923,7 +927,8 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
         st = spool.state()
         # the turn's record carries the plan as it stands: the kernel accounts it with the calls that prove it (a
         # status changed by task() since the frame, a blocked item's reason) -- before, only the next frame did
-        _send(spool, lambda items, memory: gateway.record({"session_id": sess, "step": int(st.get("step") or 0),
+        _send(spool, lambda items, memory, cid: gateway.record({"session_id": sess, "step": int(st.get("step") or 0),
+                                                                "client_event_id": cid,
                                                            "goal": str(st.get("goal") or "")[:4000],
                                                            "items": list(st.get("items") or [])[:50],
                                                            "exchange": items, "memory": memory,
@@ -931,22 +936,20 @@ def _run(event: str, payload: dict, gateway) -> dict | None:
                                                            "session_repo": repo}))
         _flush_agents(shell_session, str(spool.state().get("me") or ""), gateway)
         sent_text = _clean(final)[:20000]
-        marks = spool.withheld_marks()
-        # the answer's own words (as sent) that an output withheld as a secret file held: the kernel cannot see those
-        # outputs, and without this it called such a word unseen (live 2026-11-07); [] -- none held any
-        words = withheld_words(sent_text) if marks else []
-        seen = [w for w, m in zip(words, word_marks(words)) if m in marks]
         got = gateway.final({"session_id": sess, "final_text": sent_text, "step": int(st.get("step") or 0),
                              "repo_key": str(st.get("repo_key") or ""), "session_repo": repo,
-                             "tools": list(MCP_TOOL_NAMES), "withheld_seen": seen[:WITHHELD_SEEN_MAX]},
+                             "tools": list(mcp_tool_names()), "given": str(st.get("given") or "")[:GIVEN_CHARS]},
                             timeout=_final_wait(began))
         if (got or {}).get("hold") and str(got.get("reason") or "").strip():
             return block_output(payload, str(got["reason"]))
         opened = [str(x) for x in (got or {}).get("open") or [] if str(x).strip()]
         # 2026-10-28: a name the answer gives that the code map does not find in the work's repos -- named, never held
         unfound = [str(x) for x in (got or {}).get("unfound") or [] if str(x).strip()]
+        # what the answer says that the kernel's facts do not show -- beside the answer, never a hold (spec II)
+        marked = [str(x) for x in (got or {}).get("marks") or [] if str(x).strip()]
         said = (["still open -- " + "; ".join(o[:160] for o in opened[:8])] if opened else []) + \
-            (["not in the code -- " + ", ".join(f"`{n[:80]}`" for n in unfound[:6])] if unfound else [])
+            (["not in the code -- " + ", ".join(f"`{n[:80]}`" for n in unfound[:6])] if unfound else []) + \
+            (["not shown by what ran -- " + "; ".join(m[:200] for m in marked[:6])] if marked else [])
         if said and _shell(payload) in ("claude", "gemini"):   # past the holds: what is open is named (I6)
             return {"systemMessage": "Imperal: " + " · ".join(said)}
         return None

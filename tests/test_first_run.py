@@ -144,7 +144,9 @@ def auth_cfg():
 async def test_the_listing_is_lean_and_says_what_names_do_not(tmp_path):
     tools = await build_server(None, workspace=str(tmp_path)).list_tools()
     wire = sum(len(t.model_dump_json(exclude_none=True, by_alias=True)) for t in tools)
-    assert wire <= 18000                       # 0.9.13: 20 239 characters for 34 tools
+    # 0.9.13: 20 239 for 34 tools; 0.9.14 lean 18 000; 2026-11-15 the SDK's one contract (the kernel's and Webbee's
+    # words with the hints mcp kept apart, root/target said once in the instructions): 20 070 measured
+    assert wire <= 20100
     for t in tools:
         assert "  " not in t.description and "\n" not in t.description, t.name
         for name, field in t.inputSchema.get("properties", {}).items():
@@ -172,16 +174,6 @@ async def test_outline_sends_each_symbol_once_unless_asked(tmp_path):
     assert "rendered" in lean and '"symbols"' not in lean and '"symbols"' in whole
 
 
-def test_checkpoint_diff_paths_narrow_the_diff():
-    from imperal_mcp.exoskeleton import _diff_for_paths
-    diff = ("diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n@@ -1 +1 @@\n-x\n+y\n"
-            "diff --git a/docs/b.md b/docs/b.md\n--- a/docs/b.md\n+++ b/docs/b.md\n@@ -1 +1 @@\n-p\n+q\n")
-    assert _diff_for_paths(diff, None) == diff
-    assert _diff_for_paths(diff, ["src"]).count("diff --git") == 1 and "src/a.py" in _diff_for_paths(diff, ["src/"])
-    assert "docs/b.md" in _diff_for_paths(diff, ["docs/b.md"]) and "src/a.py" not in _diff_for_paths(diff, ["docs"])
-    assert _diff_for_paths(diff, ["nowhere"]) == ""
-
-
 def test_grep_reads_configs_and_docs_but_never_a_secret_a_lock_or_a_binary(tmp_path):
     import subprocess
     from imperal_mcp.exoskeleton import ExoskeletonRuntime
@@ -198,3 +190,19 @@ def test_grep_reads_configs_and_docs_but_never_a_secret_a_lock_or_a_binary(tmp_p
     paths = {m["path"] for m in got["matches"]}
     assert paths == {"app.py", "server.json", "README.md", ".github/ci.yml"}, paths
     assert got["matches"][0]["path"] == "app.py"            # code first
+
+
+
+def test_every_tool_is_the_sdk_contract_s():
+    """ICNLI §3.5 (2026-11-15): the tool set and each tool's parameters are the SDK contract's -- the listing comes from
+    it and the function takes exactly its parameters (the gate found checkpoint_rollback without paths, contract_slice
+    without query)."""
+    import inspect
+    from imperal_sdk import tool_contract as tc
+    srv = build_server(None, workspace=".")
+    tools = srv._tool_manager._tools
+    contract = {t.name: t for t in tc.shell_tools("mcp")}
+    assert set(tools) == set(contract)
+    for name, t in tools.items():
+        assert set(inspect.signature(t.fn).parameters) - {"ctx"} == set(contract[name].params), name
+        assert t.description == contract[name].description

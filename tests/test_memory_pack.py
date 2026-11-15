@@ -33,14 +33,15 @@ def test_an_ssh_key_given_to_ssh_is_used_not_read():
     it = exchange_item("bash", {"command": cmd}, True, "commit b05e9b5 running")
     assert it["args"]["command"] == cmd and it["text"] == "commit b05e9b5 running"
     glued = exchange_item("bash", {"command": "ssh -i ~/.ssh/k h;cat ~/.ssh/k"}, True, "KEY")
-    assert "withheld" in glued["text"]                     # a separator: no exemption at all (security review)
+    assert glued["text"] == "<redacted:secret-file-line>"  # a separator: no exemption at all (security review)
     scp = exchange_item("bash", {"command": "scp -i ~/.ssh/k -o IdentityFile=~/.ssh/k2 a.txt h:/tmp/"}, True, "ok")
     assert scp["text"] == "ok"
     sys_ssh = exchange_item("bash", {"command": "/usr/bin/ssh -i ~/.ssh/k h uptime"}, True, "up 3 days")
     assert sys_ssh["text"] == "up 3 days"
 
 
-def test_a_secret_file_named_beside_the_key_is_still_withheld():
+def test_a_secret_file_named_beside_the_key_is_still_masked(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))      # no key of this machine: the output goes as a settings file
     for cmd in ("ssh -i ~/.ssh/k h cat ~/.ssh/authorized_keys", "cat ~/.ssh/id_rsa", "ssh h 'cat /srv/app/.env'",
                 "sed -i s/a/b/ .env",
                 # the key's own path outside its -i slot is a read of the key (security review)
@@ -57,8 +58,8 @@ def test_a_secret_file_named_beside_the_key_is_still_withheld():
                 # an escape, a look-alike program, a function or an alias give no exemption (security review)
                 "ssh -i ~/.ssh/k h true; cat ~/.ssh/\\k", "./ssh -i ~/.ssh/k x", "ssh(){ cat \"$2\"; }; ssh -i ~/.ssh/k h",
                 "alias ssh=cat; ssh -i ~/.ssh/k h", "function ssh { cat $2; }; ssh -i ~/.ssh/k h"):
-        it = exchange_item("bash", {"command": cmd}, True, "SECRET=1")
-        assert "SECRET" not in it["text"] and "withheld" in it["text"], cmd
+        it = exchange_item("bash", {"command": cmd}, True, "KEYDATA\nSECRET=hunter2")
+        assert it["text"] == "<redacted:secret-file-line>\nSECRET=<redacted:secret-file-value>", cmd
 
 
 def test_the_session_s_repo_is_its_git_work_tree_or_none(tmp_path):
@@ -130,7 +131,7 @@ def test_what_does_not_fit_one_request_waits_for_the_next(spool):
     sp = H.Spool("big")
     sp.add_items([{"tool": "bash", "args": {}, "ok": True, "text": "x" * 19000, "n": i} for i in range(40)])
     sent = []
-    H._send(sp, lambda items, memory: sent.append(items))
+    H._send(sp, lambda items, memory, cid: sent.append(items))
     left, _mem = sp.drain()
     assert 0 < len(sent[0]) < 40 and len(sent[0]) + len(left) == 40
     assert [i["n"] for i in left] == list(range(40 - len(sent[0])))           # the older ones, in order

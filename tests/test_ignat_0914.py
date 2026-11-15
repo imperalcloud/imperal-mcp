@@ -162,8 +162,10 @@ def test_a_web_search_fetch_or_subagent_report_reaches_the_kernel_scrubbed():
     (item,) = H.tool_items({"tool_name": "WebFetch", "tool_input": {"url": "https://x"},
                             "tool_response": {"result": "token ghp_abcdefghijklmnopqrstuvwxyz1234567890"}})
     assert "ghp_abcdefghijklmnopqrstuvwxyz1234567890" not in item["text"]
-    (other,) = H.tool_items({"tool_name": "mcp__other__thing", "tool_input": {"x": 1}, "tool_response": "secret"})
-    assert other["text"] == "" and other["args"] == {}
+    # 2026-11-15: another server's tool goes through the same scrubbing door with its words (spec I)
+    (other,) = H.tool_items({"tool_name": "mcp__other__thing", "tool_input": {"x": 1},
+                             "tool_response": "token ghp_abcdefghijklmnopqrstuvwxyz1234567890"})
+    assert other["args"] == {"x": "1"} and "ghp_abcdefghijklmnopqrstuvwxyz1234567890" not in other["text"]
 
 
 # ── field test report 2, 2026-11-13 ──
@@ -241,9 +243,19 @@ def test_an_ssh_identity_is_used_not_read_so_the_output_is_kept(cmd):
 
 @pytest.mark.parametrize("cmd", ["cat ~/.ssh/k", "ssh -i ~/.ssh/k h x; cat ~/.ssh/k",
                                  "ssh -i ~/.ssh/k h \"$(cat ~/.ssh/k)\""])
-def test_reading_the_key_is_still_withheld(cmd):
+def test_reading_the_key_is_still_masked(cmd, tmp_path, monkeypatch):
     from imperal_mcp.exoskeleton import exchange_item
-    assert exchange_item("bash", {"command": cmd}, True, "the output")["text"].startswith("(withheld")
+    monkeypatch.setenv("HOME", str(tmp_path))      # no key of this machine: the output goes as a settings file
+    assert exchange_item("bash", {"command": cmd}, True, "the output")["text"] == "<redacted:secret-file-line>"
+
+
+def test_reading_a_key_of_this_machine_masks_its_lines(tmp_path, monkeypatch):
+    from imperal_mcp.exoskeleton import exchange_item
+    (tmp_path / ".ssh").mkdir()
+    (tmp_path / ".ssh" / "k").write_text("-----BEGIN KEY-----\nAAAAkeybody\n-----END KEY-----\n")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    out = exchange_item("bash", {"command": "cat ~/.ssh/k"}, True, "-----BEGIN KEY-----\nAAAAkeybody\n")["text"]
+    assert "AAAAkeybody" not in out and "BEGIN KEY" not in out
 
 
 def test_a_folder_with_a_manifest_that_holds_git_repositories_is_answered_per_repository(tmp_path):
@@ -308,3 +320,23 @@ def test_a_delivered_agent_message_is_a_fact_of_the_session(monkeypatch):
     text = H._inbox({"session_id": "s1"}, _Spool(), _Gw())
     assert "the gateway tests pass" in text
     assert added and added[0]["tool"] == "agent_message" and "the gateway tests pass" in added[0]["text"]
+
+
+class _SystemApp(_Apps):
+    """A system extension: not the caller's own app (404 there), its tools only in the catalog."""
+    async def get_app(self, app_id):
+        from imperal_mcp.client import ImperalError
+        raise ImperalError(f"GET /v1/developer/apps/{app_id} -> 404", status_code=404)
+
+    async def get_marketplace_app(self, app_id):
+        return {"tools": [{"name": "list_notes", "action_type": "read"}]}
+
+
+@pytest.mark.asyncio
+async def test_a_system_extension_s_tool_is_found_in_the_catalog():
+    """Gate 2026-11-15: get_app's 404 for a system extension escaped _find_tool before the catalog was asked."""
+    c = _SystemApp([])
+    out = await run_read_tool_logic(c, "notes", "list_notes", {})
+    assert not out.get("refused") and c.ran, out
+    gone = await run_read_tool_logic(c, "notes", "no_such_tool", {})
+    assert gone["refused"] and "list_notes" in gone["reason"]

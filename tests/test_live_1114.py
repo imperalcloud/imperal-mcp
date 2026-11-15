@@ -36,9 +36,11 @@ def test_toolsearch_keeps_its_query_so_two_searches_are_two_calls():
     assert a[0]["text"] == ""                       # never the answer of a tool the hooks do not know
 
 
-def test_another_servers_tool_still_sends_nothing_but_its_name():
-    got = H.tool_items({"tool_name": "mcp__other__thing", "tool_input": {"secret": "x"}, "tool_response": "y"})
-    assert got == [{"app_id": "", "tool": "mcp__other__thing", "args": {}, "ok": True, "text": ""}]
+def test_another_servers_tool_goes_through_the_scrubbing_door():
+    """Spec I (2026-11-15, supersedes 11-14): its words and answer reach the kernel, credentials masked."""
+    got = H.tool_items({"tool_name": "mcp__other__thing", "tool_input": {"note": "password=hunter2hunter2"},
+                        "tool_response": "y"})
+    assert got[0]["tool"] == "mcp__other__thing" and got[0]["text"] == "y" and "hunter2" not in got[0]["args"]["note"]
 
 
 def test_the_shells_cwd_line_is_not_the_commands_output():

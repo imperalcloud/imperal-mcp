@@ -33,7 +33,14 @@ permissions:
   id-token: write   # GitHub OIDC for MCP Registry (tokenless)
 
 jobs:
+  # nothing reaches PyPI before the field gate passes on every system (ICNLI §13.5: verified, not self-declared)
+  gate:
+    uses: imperalcloud/webbee-code/.github/workflows/os-check.yml@main
+    with:
+      webbee_ref: main
+      mcp_ref: ${{ github.sha }}
   release:
+    needs: gate
     runs-on: ubuntu-latest
 
     steps:

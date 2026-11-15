@@ -49,7 +49,7 @@ async def test_the_tool_names_the_hooks_send_are_the_server_s(tmp_path: Path):
     from imperal_mcp.server import build_server
     from tests.test_exoskeleton import MemoryFakeClient
     srv = build_server(MemoryFakeClient(), workspace=str(tmp_path))
-    assert set(H.MCP_TOOL_NAMES) == set(srv._tool_manager._tools)
+    assert set(H.mcp_tool_names()) == set(srv._tool_manager._tools)
 
 
 def test_task_records_the_plan_at_once_with_the_calls_before_it(spool, tmp_path, monkeypatch):

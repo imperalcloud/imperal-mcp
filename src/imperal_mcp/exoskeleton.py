@@ -187,7 +187,6 @@ def _normalize_search_matches(
     kind: str | None = None,
     path_glob: str | None = None,
 ) -> list[dict[str, Any]]:
-    import fnmatch
 
     normalized: list[dict[str, Any]] = []
     for raw in matches or []:
@@ -245,7 +244,7 @@ def _normalize_search_matches(
         for fname in sorted(filenames):
             full_p = Path(dirpath) / fname
             rel_p = full_p.relative_to(root_path).as_posix()
-            if path_glob and not fnmatch.fnmatch(rel_p, path_glob):
+            if path_glob and not path_matches(rel_p, path_glob):
                 continue
             try:
                 if full_p.stat().st_size > 512_000:
@@ -341,96 +340,16 @@ def _view_for(ws: str, rel: str) -> dict | None:
 _PARSE_CAP = 1024 * 1024       # outline/read_symbol parse a file whole up to this (imperal_sdk RAW_CAP for code)
 
 
-_GREP_FILE_MAX = 2 * 1048576     # a text file bigger than this is data, not something to grep through
-_GREP_EXTRA_MAX = 20000          # text files beyond the code index searched in one call
-_LOCK_FILES = frozenset({"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "uv.lock", "cargo.lock",
-                         "composer.lock", "gemfile.lock", "go.sum", "pipfile.lock"})
 
 
-def _grep_files(ws: str):
-    """The files grep_code reads, code first: the code index's own files, then every other text file git tracks or
-    would track (configs, docs, CI) -- under the rule read_symbol keeps (never a secret by name or place), never a
-    dependency or build folder, a lock file, a binary or a file over 2 MB.
-    Live 2026-11-13: grep_code read only the index's code files, so a version string in server.json was "not found"."""
-    import subprocess
-    from webbee.intel.service import _local_listing
-    from imperal_sdk.code_index import SKIP_DIRS
-    seen = set()
-    for item in _local_listing(ws):
-        seen.add(item["path"])
-        yield item["path"]
-    if not os.path.isdir(os.path.join(ws, ".git")):
-        return
-    try:
-        r = subprocess.run(["git", "-C", ws, "ls-files", "-co", "--exclude-standard", "-z"],
-                           capture_output=True, timeout=60)
-    except (OSError, subprocess.SubprocessError):
-        return
-    if r.returncode != 0:
-        return
-    extra = 0
-    for rel in r.stdout.decode("utf-8", "surrogateescape").split("\0"):
-        if not rel or rel in seen:
-            continue
-        parts = rel.split("/")
-        if any(d == ".git" or d in SKIP_DIRS for d in parts[:-1]) or parts[-1].lower() in _LOCK_FILES:
-            continue
-        full = os.path.join(ws, rel)
-        if _refused(ws, rel, full):
-            continue
-        try:
-            if os.path.getsize(full) > _GREP_FILE_MAX:
-                continue
-            with open(full, "rb") as f:
-                if b"\0" in f.read(4096):
-                    continue
-        except OSError:
-            continue
-        extra += 1
-        if extra > _GREP_EXTRA_MAX:
-            return
-        yield rel
 
-
-def _diff_for_paths(diff_text: str, paths: list[str] | None) -> str:
-    """Only the files of a unified git diff that lie at or under one of ``paths`` (all of it when none are given).
-    Live 2026-11-13: checkpoint_diff took ``paths`` and echoed them back, yet always answered the whole diff."""
-    wanted = [p.strip().strip("/") for p in (paths or []) if p and p.strip().strip("/")]
-    if not wanted or not diff_text:
-        return diff_text
-    keep: list[str] = []
-    take = False
-    for block in re.split(r"(?m)^(?=diff --git )", diff_text):
-        if block.startswith("diff --git "):
-            m = re.match(r"diff --git a/(.+?) b/(.+)", block.split("\n", 1)[0])
-            names = {m.group(1), m.group(2)} if m else set()
-            take = any(n == w or n.startswith(w + "/") for n in names for w in wanted)
-        if take:
-            keep.append(block)
-    return "".join(keep)
 
 
 def _refused(ws: str, rel: str, full: str) -> str:
-    """Why outline / read_symbol never open this file, or "": a secret by its name, by its real path (the workspace
-    itself a secret store, a link into one), anything but a regular file (final review 2026-11-04: the tools read
-    ``.env`` and ``~/.aws/credentials`` the index never reads)."""
-    from imperal_sdk.universal.kinds import never_read_at
-    if never_read_at(ws, rel):
-        return f"{rel}: this file is never read (a secret by its name or where it lies)"
-    try:
-        st = os.stat(full)
-    except OSError as exc:
-        return f"{rel}: {exc}"
-    import stat as _stat
-    if not _stat.S_ISREG(st.st_mode):
-        return f"{rel}: not a regular file"
-    try:
-        from imperal_sdk.universal.index import is_placeholder
-        if is_placeholder(rel, st):
-            return f"{rel}: a cloud placeholder (reading it would download it)"
-    except ImportError:
-        pass
-    return ""
+    """Why outline / read_symbol never open this file, or "" -- the one rule of every local tool (webbee.tools)."""
+    _ensure_webbee_importable()
+    from webbee.tools import refused_local
+    return refused_local(ws, rel, full)
 
 
 def _lines_of(full: str, a: int, b: int) -> tuple[str, int]:
@@ -616,20 +535,6 @@ def _cross_in_folder(item, unit: str, units_by_key: dict):
     return it
 
 
-def _one_path_each(items: list) -> list:
-    """A file found again through an overlapping repository key (``outside_folder``, its path named from a parent
-    folder) is the same file as its in-folder copy -- kept once (Ignat 06.11 §4.4: 5 callers counted twice)."""
-    inside = [str(x.get("path") or "") for x in items if isinstance(x, dict) and not x.get("outside_folder")]
-    out = []
-    for x in items:
-        p = str(x.get("path") or "") if isinstance(x, dict) else ""
-        if isinstance(x, dict) and x.get("outside_folder") and any(p.endswith("/" + q) or q.endswith("/" + p)
-                                                                   for q in inside if q):
-            continue
-        out.append(x)
-    return out
-
-
 def _merge_folder_answers(answers: list, query: str = "", k: int = 0, units_by_key: dict | None = None) -> dict | None:
     """The vault's answers for each repository of a folder as one answer, or None when none answered.
     A search (``query``) puts exact-name hits first, then takes each repo's ranked list in turn."""
@@ -664,7 +569,8 @@ def _merge_folder_answers(answers: list, query: str = "", k: int = 0, units_by_k
         if k:
             items = items[:max(k, len(exact))]
     else:
-        items = _one_path_each(code_first([x for lst in lists for x in lst]))
+        # one identity per repository (the vault, 2026-11-15): no file comes twice through overlapping keys
+        items = code_first([x for lst in lists for x in lst])
     out = {"ok": True, "data": {"items": items, "total": len(items),
                                 "has_more": any((a.get("data") or {}).get("has_more") for _u, a in ok)},
            "repo_key": ",".join(str(a.get("repo_key") or "") for _u, a in ok),
@@ -851,7 +757,7 @@ def _matched_files_stats(ws: str, rel_paths: list[str] | set[str] | tuple[str, .
             continue
         measured += 1
         total_chars += len(content)
-        total_lines += max(1, content.count("\n") + 1) if content else 0
+        total_lines += line_count(content)
     return total_chars, total_lines, measured
 
 
@@ -886,7 +792,6 @@ Pricing: a `frame` costs credits; every other tool is free.
 
 _EXCHANGE_MAX = 60     # the gateway's bound on one frame's exchange
 # a group repeated around a repeated piece -- (a+)+, (a*)*, (x|xy)+ -- backtracks without end (the vault refuses it too)
-_NESTED_QUANTIFIER = re.compile(r"\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)\s*[+*{]|\((?:[^()\\]|\\.)*\|(?:[^()\\]|\\.)*\)\s*[+*{]")
 _TOGETHER_SHOWN = 8         # files that changed together with a symbol, named under impact_of_change (not its users)
 _HOST_SYNC_REUSE_S = 60.0   # a remote repo is listed over SFTP at most once a minute (only changed files are read)
 _HOST_HEAD_REUSE_S = 15.0   # the server's HEAD (a few small SFTP reads) is asked again after this many seconds
@@ -1063,34 +968,6 @@ def _withhold_key() -> bytes:
     return key
 
 
-_WORD_EDGE = "\"'`.,;:!?()[]{}<>«»“”"
-_WORD_NUM = re.compile(r"\d+(?:\.\d+)?")
-WITHHELD_SEEN_MAX = 400          # the gateway's bound on the words a final may report
-
-
-def withheld_words(text: str) -> list:
-    """The words of a text as the kernel's claim check reads them: each whitespace word trimmed of its punctuation, its
-    parts (``65–72`` -> 65, 72; ``a=b``), its numbers (``28s`` -> 28) -- the same cut for an output and an answer."""
-    out: list = []
-    for w in str(text or "").split():
-        w = w.strip(_WORD_EDGE)
-        if not w:
-            continue
-        out.append(w)
-        out += [p for p in re.split(r"[^\w.\-]+", w) if p.strip(".-")]
-        out += _WORD_NUM.findall(w)
-    return list(dict.fromkeys(x[:120] for x in out if x.strip(".-")))
-
-
-def word_marks(words) -> list:
-    """Keyed fingerprints of words, one per word in order (this machine's own key): what a withheld output held,
-    never what it said."""
-    import hashlib
-    import hmac
-    key = _withhold_key()
-    return [hmac.new(key, str(w).encode(), hashlib.sha256).hexdigest()[:16] for w in words]
-
-
 def _only_safe_args(a: dict, cmd: str) -> dict:
     """A call on a secret file keeps only where it acted (its path, target) -- never a value that may hold it."""
     out = {k: v for k, v in a.items() if k in _SAFE_ARGS}
@@ -1103,8 +980,64 @@ def _only_safe_args(a: dict, cmd: str) -> dict:
     return out
 
 
+def path_matches(path: str, glob: str) -> bool:
+    """The SDK's one path-glob rule (``{a,b}``, ``**/`` at any depth)."""
+    from imperal_sdk.code_index import path_matches as match
+    return match(path, glob)
+
+
+def line_count(text: str) -> int:
+    """The SDK's count of lines (``wc -l``, CRLF one break) -- the one definition (gate 2026-11-15: a 600-line file
+    was told 601 here)."""
+    from imperal_sdk.code_index import line_count as count
+    return count(text)
+
+
+# a command that may read its files somewhere else (another machine, a container, another folder) or another version
+# of them (git diff / show / log -p print a secret file's OLD values): the secret file it names cannot be told from this
+# machine's file as it is now, so its output goes as a settings file (every value masked; security review 2026-11-15)
+_RUNS_ELSEWHERE = re.compile(r"(?:^|[\s;&|(`/])(?:ssh|scp|sftp|rsync|docker|podman|kubectl|lxc|lxc-attach|pct|nsenter|"
+                             r"chroot|vagrant|cd|pushd|git|-C)(?=[\s;&|)]|$)")
+SECRET_READ_MAX = 256 * 1024     # a bigger "secret file" is no settings file this door reads for its values
+SECRET_FILES_MAX = 50            # files of one secret folder read for their values
+
+
+def _local_secret_values(used: list, cmd: str, cwd: str) -> list | None:
+    """The values of the secret files a command names, read on this machine -- ``None`` when any of them may not be
+    this machine's file (the command runs elsewhere or changes folder, the file is missing, a pattern, too big)."""
+    from imperal_sdk.secret_mask import secret_file_values
+    if _RUNS_ELSEWHERE.search(cmd):
+        return None
+    vals: list = []
+    for w in dict.fromkeys(used):
+        p = os.path.expanduser(w)
+        if not os.path.isabs(p):
+            if not cwd or not os.path.isabs(cwd):
+                return None
+            p = os.path.join(cwd, p)
+        if os.path.isdir(p):
+            files = []
+            for top, dirs, names in os.walk(p):
+                files += [os.path.join(top, n) for n in names]
+                if len(files) > SECRET_FILES_MAX:
+                    return None
+        elif os.path.isfile(p):
+            files = [p]
+        else:
+            return None
+        for f in files:
+            try:
+                if os.path.getsize(f) > SECRET_READ_MAX:
+                    return None
+                with open(f, encoding="utf-8", errors="replace") as fh:
+                    vals += secret_file_values(fh.read(), f)
+            except OSError:
+                return None
+    return vals
+
+
 def exchange_item(tool: str, args: dict | None, ok: bool = True, text: str = "", text_limit: int = 2000) -> dict:
-    """One tool call in the kernel's exchange shape -- a secret file's content never, PII masked (the server's own
+    """One tool call in the kernel's exchange shape -- a secret file by its form (values masked), PII masked (the server's own
     calls and the shell's hooks record through this one door)."""
     a = {str(k): str(v)[:8000] for k, v in (args or {}).items() if v is not None}     # cut after the scrub, below
     if str(a.get("target") or "").startswith(("host:", "ssh:")) and a.get("root") and a.get("path") \
@@ -1112,11 +1045,11 @@ def exchange_item(tool: str, args: dict | None, ok: bool = True, text: str = "",
         # the kernel finds a server's repo by the full path there (resolve_path)
         a["path"] = a["root"].rstrip("/") + "/" + a["path"]
     try:
-        import fnmatch
         import shlex
-        from imperal_sdk.code_index import SECRET_PATTERNS
+        # one rule of secrets for every surface: the SDK's (2026-11-15: this door imported a name the SDK had moved,
+        # the import failed and every call went out "withheld")
+        from imperal_sdk.secret_mask import is_code_path, is_secret_file, scrub_secret_file, scrub_secrets
         from .mask import defensive_scrub
-        from .secrets_scrub import is_code_path, scrub_secrets
         joined = "/".join(x for x in (a.get("root", ""), a.get("path", "")) if x)   # a root may name the folder
         cmd = a.get("command", "")
         # an identity given to ssh / scp / sftp in its own slot is USED to sign in, never printed (live 2026-10-25:
@@ -1126,27 +1059,45 @@ def exchange_item(tool: str, args: dict | None, ok: bool = True, text: str = "",
             words = shlex.split(cmd)                         # a command that reads a secret file (security review)
         except ValueError:
             words = []
-        # ... and every piece between the shell's punctuation (cat<.env, x=$(cat .env), a|b;c)
-        pieces = [w for w in re.split(r"[\s<>|;&()`$=\"']+", cmd) if w]
+        # ... and every piece between the shell's punctuation (cat<.env, x=$(cat .env), a|b;c) and a revision or host
+        # before a colon (git show HEAD:.env, scp h:/srv/.env -- security review 2026-11-15)
+        pieces = [w for w in re.split(r"[\s<>|;&()`$=:\"']+", cmd) if w]
         for slot in (_ssh_identity_slots(cmd) if _SSH_PROGRAM.search(cmd) else []):
             if slot in words:                                # the slot once from the words, its pieces once each
                 words.remove(slot)
-            for part in [x for x in re.split(r"[\s<>|;&()`$=\"']+", slot) if x]:
+            for part in [x for x in re.split(r"[\s<>|;&()`$=:\"']+", slot) if x]:
                 if part in pieces:
                     pieces.remove(part)
         words += pieces
         values = [v for k, v in a.items() if k != "command"]
-        if any(_secret_path(v, SECRET_PATTERNS, fnmatch) for v in values + [joined] + words):
-            body = "(withheld: a secret file)"          # never what a secret file holds -- in the output or the args
+        named = [v for v in values + [joined] if is_secret_file(v)]      # the call's own path: its output IS the file
+        used = [w for w in words if is_secret_file(w)]                  # a command that names one
+        raw = str(text or "")[:text_limit + 4000]
+        if named or used:
+            # owner 2026-11-15 (phase 6 decision 1): a secret file's content goes by its form -- a settings file keeps
+            # its keys, every value masked; key material keeps only its line count. A command that used one (`. .env;
+            # ./bench`) loses exactly that file's values, read here; the rest of its output stays a fact. Its args
+            # keep only where it acted
+            from imperal_sdk.secret_mask import is_key_material, mask_values
+            # the files as the shell's punctuation leaves them (`. ./.env;` names ./.env)
+            files = [w for w in pieces if is_secret_file(w)]
+            known = None if named or not files else _local_secret_values(files, cmd, str(a.get("cwd") or ""))
+            if known is not None:
+                body = str(mask_values(str(defensive_scrub(raw)), known)[0])[:text_limit]
+            else:
+                both = named + used
+                form = next((v for v in both if is_key_material(v)), both[0]) if named else ""
+                body = str(scrub_secret_file(str(defensive_scrub(raw)), form))[:text_limit]
             a = _only_safe_args(a, cmd)
         elif cmd and _PRINTS_SECRETS.search(re.sub(r"[\"'`\\]", "", cmd)):    # quotes and escapes cannot hide it
-            body = "(withheld: a command that prints secrets)"   # vault kv get, printenv, gh auth token ...
+            # vault kv get, printenv, gh auth token ...: the output as a settings file (names kept, values masked)
+            body = str(scrub_secret_file(str(defensive_scrub(raw))))[:text_limit]
             a = {k: str(scrub_secrets(str(defensive_scrub(v)))) for k, v in a.items()}
         else:
             # final review C1: credentials (tokens, passwords, keys, URL user-info) go before anything leaves
             code = is_code_path(a.get("path", ""))
             # scrubbed whole, cut after: a secret on the cut line never survives in part (security review)
-            body = str(scrub_secrets(str(defensive_scrub(str(text or "")[:text_limit + 4000])), code=code))[:text_limit]
+            body = str(scrub_secrets(str(defensive_scrub(raw)), code=code))[:text_limit]
             a = {k: str(scrub_secrets(str(defensive_scrub(v)), code=code and k in ("old_string", "new_string",
                                                                                   "content")))[:2000] for k, v in a.items()}
     except Exception:      # recording never breaks a tool; what cannot be checked is not sent
@@ -1227,17 +1178,6 @@ def _ssh_identity_slots(cmd: str) -> list:
     return slots
 
 
-def _secret_path(value: str, patterns: tuple, fnmatch: Any) -> bool:
-    """A path (either slash) whose file name matches a secret file pattern of the code index (``.env*``,
-    ``id_*`` ...) or one of whose folders is a secret folder (``secrets/``, ``.ssh/`` ...)."""
-    parts = [x for x in str(value or "").replace("\\", "/").lower().split("/") if x]
-    if not parts:
-        return False
-    files = [p for p in patterns if not p.endswith("/")]
-    dirs = {p.rstrip("/") for p in patterns if p.endswith("/")}
-    return any(fnmatch.fnmatchcase(parts[-1], pat) for pat in files) or any(d in dirs for d in parts)
-
-
 class ExoskeletonRuntime:
     """Stateful local + cloud bridge for Imperal MCP Exoskeleton tools."""
 
@@ -1268,13 +1208,9 @@ class ExoskeletonRuntime:
         self._units: dict[str, list] = {}     # a non-repository workspace -> [(unit, IntelService)]
         self._refreshed_at: dict[str, float] = {}
         self._index_locks: dict[str, threading.Lock] = {}
-        self._embed_threads: dict[str, threading.Thread] = {}
-        self._shadows: dict[str, Any] = {}
         self._guard_lock = threading.Lock()
         # the kernel's frame for this agent (phase B): its task, its plan and what it did since the last frame
         self._exchange: list[dict[str, Any]] = []
-        self._task_goal = ""
-        self._task_items: list[dict[str, Any]] = []
         self._frame_step = 0
         self._me = ""
         self._started = time.time()
@@ -1301,18 +1237,18 @@ class ExoskeletonRuntime:
     def task(self, goal: str, items: list | None = None, root: str | None = None) -> dict[str, Any]:
         """The agent declares what it was asked and its plan (as Webbee's todo_write); the workspace's state now is
         the baseline its changes are measured from."""
-        self._task_goal = str(goal or "")
-        self._task_items = [dict(i) for i in items or [] if isinstance(i, dict)][:50]
         ws = self.resolve_workspace(None)
-        spool = self._shell_spool(ws)
-        if spool is not None:          # the shell's hooks frame each request with this task (memory plan Task 5)
-            spool.update(goal=self._task_goal, items=self._task_items)
-        recorded = self._record_plan(ws, spool)
+        # the one client cache of the task (state.json of the session's spool -- the shell's hooks read it too); the
+        # kernel's log is the authority, this cache only carries the last declaration (spec III.3, 2026-11-15: the
+        # server kept its own copy beside the spool's)
+        st = self._task_cache(ws).update(goal=str(goal or ""),
+                                         items=[dict(i) for i in items or [] if isinstance(i, dict)][:50])
+        recorded = self._record_plan(ws, self._shell_spool(ws))
         try:
             self._baseline(root)
         except Exception:              # the code tools are off (no webbee): the plan stands, its changes go unmeasured
             pass
-        return {"ok": True, "goal": self._task_goal, "items": len(self._task_items), "recorded": recorded}
+        return {"ok": True, "goal": st["goal"], "items": len(st["items"]), "recorded": recorded}
 
     def _record_plan(self, ws: str, spool) -> bool:
         """The plan reaches the kernel now, with the calls made since the last frame (free): a status changes in the
@@ -1329,7 +1265,7 @@ class ExoskeletonRuntime:
         try:
             step = int(spool.state().get("step") or 0) if spool is not None else self._frame_step
             self._vault("POST", "/v1/memory/frame/record", body={
-                "session_id": self._session(ws), "step": step, "goal": self._task_goal, "items": self._task_items,
+                "session_id": self._session(ws), "step": step, **self._declared(ws),
                 "exchange": pending, "memory": memory[-20:], "session_repo": self._session_repo(ws)})
         except Exception:
             late, ok = allq, False               # nothing is lost: the next frame or the shell's hook sends it
@@ -1378,6 +1314,18 @@ class ExoskeletonRuntime:
             return current_session(ws, server_parent=os.getppid())
         except Exception:
             return ""
+
+    def _task_cache(self, ws: str):
+        """The session's spool -- the shell's when its hooks run, else this server's own session's."""
+        import hashlib
+        from .hooks import Spool
+        # without a shell: this server's own, keyed by its workspace on this machine (no account needed to hold it)
+        return self._shell_spool(ws) or Spool("server-" + hashlib.sha1(ws.encode("utf-8")).hexdigest()[:16])
+
+    def _declared(self, ws: str) -> dict:
+        """The task as last declared: ``{goal, items}`` from the one client cache."""
+        st = self._task_cache(ws).state()
+        return {"goal": str(st.get("goal") or ""), "items": list(st.get("items") or [])[:50]}
 
     def _shell_spool(self, ws: str):
         shell = self._shell_session(ws)
@@ -1472,8 +1420,8 @@ class ExoskeletonRuntime:
                 repo_key = self._repo_key(root, target)
             except Exception:
                 repo_key = ""                   # the frame still comes; its code map says it is not synced
-            body = {"session_id": session, "step": step, "goal": self._task_goal,
-                    "items": self._task_items, "exchange": pending, "cwd": where, "repo_root": where,
+            body = {"session_id": session, "step": step, **self._declared(ws),
+                    "exchange": pending, "cwd": where, "repo_root": where,
                     "repo_key": repo_key or "", "memory": memory[-20:], "session_repo": self._session_repo(ws)}
             ans = self._vault("POST", "/v1/memory/frame", body=body) or {}
         except Exception as exc:
@@ -1538,7 +1486,6 @@ class ExoskeletonRuntime:
             _touched, rebuilt = svc.load_or_build()
             if rebuilt:
                 svc._save_cache()
-            self._start_embed(svc)
             return
         svc.git_ref = _git_ref(svc.root)
         idx = store.load(svc.cache_dir, svc.repo_key, svc.git_ref) if svc.git_ref else None
@@ -1563,23 +1510,6 @@ class ExoskeletonRuntime:
         svc.index = idx
         svc.graph = CodeGraph(idx)
         svc.fresh = True
-        self._start_embed(svc)
-
-    def _start_embed(self, svc: Any) -> None:
-        """Vectors for the index in the background (one thread per folder)."""
-        idx = svc.index
-        ws = svc.root
-        existing_thread = self._embed_threads.get(ws)
-        if existing_thread is None or not existing_thread.is_alive():
-            def _bg_embed() -> None:
-                try:
-                    svc._embed_build(idx)
-                except Exception:
-                    pass
-
-            t = threading.Thread(target=_bg_embed, name=f"imperal-mcp-embed-{os.path.basename(ws)}", daemon=True)
-            self._embed_threads[ws] = t
-            t.start()
 
     def _get_indexer(self, root: str | None = None) -> tuple[str, Any, Any]:
         _ensure_webbee_importable()
@@ -1723,7 +1653,6 @@ class ExoskeletonRuntime:
         return rel if u["root"] == "." else f"{u['root']}/{rel}"
 
     def _units_search(self, ws: str, query: str, k: int, kind: str | None, path_glob: str | None) -> dict:
-        import fnmatch
         from webbee.intel.query import search_code as _search_code
         merged: list = []
         waiting = []
@@ -1737,7 +1666,7 @@ class ExoskeletonRuntime:
                 # every path field named from the folder (06.11 report: each hit came twice -- once with the repo's
                 # path, once with the folder's -- because only ``path`` was prefixed)
                 m = _in_folder(dict(m), u["root"])
-                if path_glob and not fnmatch.fnmatch(str(m.get("path") or ""), path_glob):
+                if path_glob and not path_matches(str(m.get("path") or ""), path_glob):
                     continue
                 merged.append(m)
         seen_ids: set = set()
@@ -1769,17 +1698,27 @@ class ExoskeletonRuntime:
                 "units": self.units_progress(ws), "source": "local index (units)"}
 
     def _units_impact(self, ws: str, sym_list: list) -> dict:
-        from webbee.intel.query import impact_of_change as _impact_of_change
-        items: list = []
-        by_name: list = []
+        """A folder of repositories answered as one: every unit's facts under its folder in ONE resolver (the SDK's
+        Linker with the units as its roots), so a use in one repository of a definition in another is found -- per
+        unit answers missed it (gate 2026-11-15: core/app's use of lib-sdk's re-exported Emitter)."""
+        from imperal_sdk.code_links import Linker, impact
+        from webbee.intel.query import linker as _linker
+        facts: dict = {}
+        configs: list = []
+        roots: list = []
         waiting = []
         for u, svc in self._unit_services(ws):
             if getattr(svc, "index", None) is None:
                 waiting.append(u["root"])
                 continue
-            res = _impact_of_change(svc, sym_list)
-            items += [_in_folder(dict(it), u["root"]) for it in (res.get("data") or {}).get("items", [])]
-            by_name += [_in_folder(dict(b), u["root"]) for b in res.get("by_name") or []]
+            lk = _linker(svc)
+            pre = "" if u["root"] in ("", ".") else u["root"].rstrip("/") + "/"
+            roots.append(u["root"])
+            facts.update({pre + p: f for p, f in lk.facts.items()})
+            configs += [{**c, "path": pre + str(c.get("path") or "")} for c in lk.configs]
+        res = impact(Linker(facts, configs, roots), sym_list, depth=2) if facts else {"data": {"items": []}, "by_name": []}
+        items = [dict(it) for it in (res.get("data") or {}).get("items", [])]
+        by_name = [dict(b) for b in res.get("by_name") or []]
         files = [it.get("title") or it.get("id") for it in items]
         return {**self._units_status(waiting), "workspace": ws, "queried_symbols": sym_list,
                 "dependent_files": files, "items": items, "by_name": by_name, "by_name_count": len(by_name),
@@ -1799,24 +1738,17 @@ class ExoskeletonRuntime:
 
     def _get_shadow(self, root: str | None = None) -> tuple[str, Any]:
         _ensure_webbee_importable()
-        from webbee.checkpoints import ShadowGit, shadow_key
+        from webbee.checkpoints import ShadowGit
 
         ws = self.resolve_workspace(root)
-        sg = self._shadows.get(ws)
-        if sg is None:
-            sg = ShadowGit(ws, shadow_key(ws))
-            sg.ensure()
-            self._shadows[ws] = sg
-        elif not sg.available:
-            sg.ensure()
-        return ws, sg
+        return ws, ShadowGit.at(ws)
 
     def _record_read(self, tool: str, *, returned_text: str, paths: Any = None, root: str | None = None,
                      **_old: Any) -> None:
         """One answer in token_savings: what it returned against the local files it points to (``paths``, else the
         ones its JSON names), each file counted once per session."""
         ret_c = len(returned_text or "")
-        ret_l = max(1, (returned_text or "").count("\n") + 1) if returned_text else 0
+        ret_l = line_count((returned_text or ""))
         if tool in _NO_SAVING_TOOLS:
             files: dict = {}        # their alternative is a grep, about as long as the answer: no saving is claimed
         else:
@@ -2066,9 +1998,7 @@ class ExoskeletonRuntime:
             got = list(pool.map(one, repos))
         for rel, ans, miss in got:
             key = str(ans.get("repo_key") or "") if isinstance(ans, dict) else ""
-            if key and key in units_by_key:
-                continue        # another checkout of the same repository (a worktree, a copy): answered once
-            answers.append((rel, ans))
+            answers.append((rel, ans))      # one identity per machine and folder: no two folders answer under one key
             if key:
                 units_by_key[key] = rel
             if ans is None:
@@ -2108,16 +2038,6 @@ class ExoskeletonRuntime:
                     f"the vault graph holds no synced copy of {root} on {target}"}
         return None
 
-    @staticmethod
-    def _query_vector(query: str) -> str | None:
-        try:
-            import base64
-            from imperal_sdk import code_index as ci
-            vec = ci.embed_query(query)
-            return base64.b64encode(vec).decode() if vec else None
-        except Exception:
-            return None
-
     def _vault_profile(self, root: str | None, target: str | None) -> dict | None:
         ans = self._ask("GET", "/v1/memory/code/profile", root, target)
         items = ((ans or {}).get("data") or {}).get("items") or []
@@ -2153,9 +2073,7 @@ class ExoskeletonRuntime:
             params["kind"] = kind
         if path_glob:
             params["path_glob"] = path_glob
-        vec = self._query_vector(query)
-        if vec:
-            params["vector"] = vec
+        # the vault embeds the query itself (variant A, 2026-11-15: one embedder, one model)
         return self._ask("GET", "/v1/memory/code/search", root, target, params=params)
 
     def orient(self, query: str, k: int = 8, root: str | None = None, target: str | None = None) -> dict[str, Any]:
@@ -2515,9 +2433,6 @@ class ExoskeletonRuntime:
         function body). A server's repo: searched on the server itself (the vault holds the index, never the code); a
         local repo: its indexable files (never a secret, never a dependency tree)."""
         k = max(1, min(int(k or 50), 500))
-        if regex and _NESTED_QUANTIFIER.search(str(pattern or "")):
-            return {"status": "error", "error": "a nested quantifier (a repeated group around a repeated piece) can "
-                                                "run without end -- use a literal or a simpler pattern"}
         if target and target != "local":
             # the code is searched where it lives: the vault holds its index, never its text (owner 2026-11-04)
             if not target.startswith("host:") or not root:
@@ -2535,7 +2450,6 @@ class ExoskeletonRuntime:
                    "total": int(got.get("total") or 0), "truncated": bool(got.get("truncated")),
                    "source": f"{target} (searched there)"}
             return self._grep_out(out, pattern, regex)
-        import fnmatch
         ws = self.resolve_workspace(root)
         if not _is_repository(ws) and not self._is_units_workspace(ws):
             # a folder INSIDE a repository is that repository, narrowed to the folder (MCP audit 2026-10-25: root=
@@ -2550,36 +2464,13 @@ class ExoskeletonRuntime:
             path_glob = f"{sub}/{path_glob}" if path_glob else f"{sub}/*"
             ws = up
         _ensure_webbee_importable()
-        try:
-            rx = re.compile(pattern) if regex else None
-        except re.error as exc:
-            # the engine's own words ("missing ), unterminated subpattern at position 4") with where and how to fix it
-            # (field test 2026-11-13: the raw error came back alone)
-            at = f" at position {exc.pos}: {pattern[:exc.pos]}<HERE>{pattern[exc.pos:]}" if exc.pos is not None else ""
+        from webbee.tools import local_grep
+        got = local_grep(ws, str(pattern or ""), regex=bool(regex), path_glob=path_glob or "", k=k)
+        if got.get("why"):
             return {"status": "error", "workspace": self.resolve_workspace(root), "pattern": pattern,
-                    "error": f"not a valid regular expression ({exc.msg}){at} -- escape ( ) [ ] . * + ? with a backslash "
-                             "to match them literally, or pass regex=false for an exact text"}
-        matches: list[dict[str, Any]] = []
-        total = 0
-        for rel in _grep_files(ws):
-            if path_glob and not fnmatch.fnmatch(rel, path_glob):
-                continue
-            full = os.path.join(ws, rel)
-            real = os.path.realpath(full)
-            if os.path.islink(full) or not (real == ws or real.startswith(ws + os.sep)):
-                continue                       # never a link, never a path that resolves outside the repo
-            try:
-                with open(full, encoding="utf-8", errors="replace") as f:
-                    for n, line in enumerate(f, start=1):
-                        part = line[:2000]
-                        if (rx.search(part) if rx else pattern in part):
-                            total += 1
-                            if len(matches) < k:
-                                matches.append({"path": rel, "line": n, "text": line.rstrip("\n")[:300]})
-            except OSError:
-                continue
-        return self._grep_out({"status": "ok", "workspace": ws, "pattern": pattern, "matches": matches,
-                               "total": total, "truncated": total > len(matches), "source": "local files"},
+                    "error": got["why"]}
+        return self._grep_out({"status": "ok", "workspace": ws, "pattern": pattern, "matches": got["matches"],
+                               "total": got["total"], "truncated": got["truncated"], "source": "local files"},
                               pattern, regex)
 
     def _grep_out(self, out: dict[str, Any], pattern: str, regex: bool) -> dict[str, Any]:
@@ -2676,10 +2567,10 @@ class ExoskeletonRuntime:
             except OSError as exc:
                 return {"status": "error", "workspace": ws, "path": rel, "error": str(exc)}
 
-        total_lines = max(1, source.count("\n") + 1)
+        total_lines = line_count(source)
         nodes = alt["nodes"] if alt is not None else (_outline(rel, source) or [])
         rendered = render_outline(rel, nodes, total_lines)
-        self.tracker.record("outline", returned_chars=len(rendered), returned_lines=max(1, rendered.count("\n") + 1),
+        self.tracker.record("outline", returned_chars=len(rendered), returned_lines=line_count(rendered),
                             files={rel: len(source)})
         return {
             "status": "ok",
@@ -2724,7 +2615,7 @@ class ExoskeletonRuntime:
                         "error": f"Span '{name}' is past the end of {rel} ({total} lines)"}
             rendered = read_card(rel, total, a, b, body)
             self.tracker.record("read_symbol", returned_chars=len(rendered),
-                                returned_lines=max(1, rendered.count("\n") + 1), files={rel: os.path.getsize(full)})
+                                returned_lines=line_count(rendered), files={rel: os.path.getsize(full)})
             return {"status": "ok", "workspace": ws, "path": rel, "symbol": f"L{a}-{b}", "kind": "lines",
                     "start_line": a, "end_line": b, "rendered": rendered}
         if alt is not None and alt["skipped"]:
@@ -2742,7 +2633,7 @@ class ExoskeletonRuntime:
             except OSError as exc:
                 return {"status": "error", "workspace": ws, "path": rel, "error": str(exc)}
 
-        total_lines = max(1, source.count("\n") + 1)
+        total_lines = line_count(source)
         hit = _view_hit(source, alt["nodes"], name) if alt is not None else _read_symbol(rel, source, name)
         if hit is None:
             nodes = alt["nodes"] if alt is not None else (_outline(rel, source) or [])
@@ -2760,7 +2651,7 @@ class ExoskeletonRuntime:
             sym_label = f"L{hit['start']}-{hit['end']}"
         rendered = read_card(rel, total_lines, hit["start"], hit["end"], hit["body"])
         self.tracker.record("read_symbol", returned_chars=len(rendered),
-                            returned_lines=max(1, rendered.count("\n") + 1), files={rel: len(source)})
+                            returned_lines=line_count(rendered), files={rel: len(source)})
         return {
             "status": "ok",
             "workspace": ws,
@@ -2869,8 +2760,12 @@ class ExoskeletonRuntime:
         ws, sg = self._get_shadow(root)
         if not sg.available:
             return {"status": "error", "workspace": ws, "error": "ShadowGit unavailable in this workspace"}
+        from webbee.checkpoints import UnknownCheckpoint
         since = str(target) if target is not None else ""
-        diff_text = _diff_for_paths(sg.diff(since=since), paths)
+        try:
+            diff_text = sg.diff(since=since, paths=paths)
+        except UnknownCheckpoint as exc:
+            return {"status": "error", "workspace": ws, "target": target, "error": str(exc)}
         return {
             "status": "ok",
             "workspace": ws,
@@ -2879,7 +2774,8 @@ class ExoskeletonRuntime:
             "diff": diff_text,
         }
 
-    def checkpoint_rollback(self, target: str | int | None = None, root: str | None = None) -> dict[str, Any]:
+    def checkpoint_rollback(self, target: str | int | None = None, root: str | None = None,
+                            paths: list[str] | None = None, allow_nested: bool = False) -> dict[str, Any]:
         ws, sg = self._get_shadow(root)
         if not sg.available:
             return {"status": "error", "workspace": ws, "error": "ShadowGit unavailable in this workspace"}
@@ -2888,7 +2784,9 @@ class ExoskeletonRuntime:
             to_ref = str(rows[0]["n"]) if rows else "1"
         else:
             to_ref = str(target)
-        res = sg.rollback(to_ref)
+        # the contract's paths and allow_nested reach the one rollback (gate 2026-11-15: its refusal said "pass paths"
+        # and this shell had no way to)
+        res = sg.rollback(to_ref, paths=[str(p) for p in paths or []] or None, allow_nested=bool(allow_nested))
         ok = bool(res.get("ok"))
         return {
             "status": "ok" if ok else "error",

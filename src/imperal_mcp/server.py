@@ -11,7 +11,7 @@ except ImportError:  # mcp >= 2.0 renamed FastMCP -> MCPServer
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
-from .client import ImperalClient
+from .client import ImperalClient, ImperalError
 from .config import Config
 from .gate import is_money, is_read_only, is_synthetic, classify_tier
 from .irkit import (
@@ -54,7 +54,14 @@ async def _find_tool(client: ImperalClient, app_id: str, function: str) -> tuple
     marketplace catalog. Live 2026-11-13: a name the app does not have was told "this MCP runs read-only tools only"
     -- "not found" and "no action_type" were one None."""
     names: list[str] = []
-    app = await client.get_app(app_id)
+    try:
+        app = await client.get_app(app_id)
+    except ImperalError as e:
+        if e.status_code != 404:
+            raise
+        # not one of the caller's own apps -- a system extension (admin, notes) or a marketplace app: its tools are in
+        # the catalog below (gate 2026-11-15: the 404 escaped here and run_write_tool on a system extension failed)
+        app = {}
     for t in _tools_of(app):
         names.append(str(t.get("name")))
         if t.get("name") == function:
@@ -255,69 +262,9 @@ async def run_write_tool_logic(client, ctx, app_id, function, args, autopilot) -
 LIVE_SESSIONS_CHARS = 6000   # live_sessions' overview bound; the field test's answer was 13 500 characters
 _LIST_TOOLS = frozenset({"impact_of_change", "graph_slice", "orient", "search_code", "grep_code", "contract_slice"})
 
-# What a parameter means where its name alone does not say it: (tool, name) first, then the name in any tool.
-# root / target / k / full / path carry none: the protocol says once what root and target are, and a hint
-# repeated in sixteen tools cost 2 521 characters of every session (measured 2026-11-13).
-PARAM_HINTS: dict = {
-    "path_glob": "Only paths matching it, e.g. src/**/*.py.",
-    "kind": "function, class, method or variable.",
-    "symbols": "name, Class.method or path::name each.",
-    "conversation": "Another conversation's id (live_sessions, search_history); empty: this one.",
-    ("read_symbol", "name"): "A symbol (function, Class.method, a section's name) or a line range such as L120-180.",
-    ("grep_code", "pattern"): "The exact text to find; a regular expression when regex=true.",
-    ("graph_slice", "depth"): "How many call hops to follow.",
-    ("task", "items"): "The plan: [{content, status: pending|in_progress|completed}]; a blocked item: status blocked "
-                       "and blocked_on = what it waits for.",
-    ("state_lens", "section"): "law, plan, reality, memory, conversation, path or all.",
-    ("state_lens", "focus"): "A word to narrow the section to.",
-    ("recall", "ref"): "U<n> (a request), A<n> (an answer), last_answers or all.",
-    ("recall", "n"): "How many messages from ref on.",
-    ("vault_log_read", "ref"): "The vault://logs/... reference the frame or a tool gave.",
-    ("vault_log_read", "grep"): "Only the lines holding this text.",
-    ("vault_log_read", "limit"): "Characters to read (0: the default page).",
-    ("live_sessions", "minutes"): "Sessions active within this many minutes.",
-    ("checkpoint", "label"): "A short name for the snapshot.",
-    ("checkpoint_diff", "target"): "A checkpoint's number or id; default: the latest.",
-    ("checkpoint_diff", "paths"): "Only these files or folders, relative to root.",
-    ("checkpoint_rollback", "target"): "A checkpoint's number or id; default: the latest.",
-    ("login", "again"): "true: start a new sign-in even though one is saved (an expired session).",
-    ("remember_fact", "category"): "directive, preference, infra, convention or identity.",
-    ("remember_fact", "scope"): "global, task or surface; empty: decided from the fact itself.",
-    ("save_repo_note", "repo"): "The repository's name; default: the workspace's folder name.",
-    ("save_repo_note", "citations"): "Where the note comes from: file paths, symbols, links.",
-    ("recall_context", "include_resolved"): "true: also the notes marked resolved.",
-    ("smoke_ir", "function"): "The function of the app to run.",
-    ("run_read_tool", "function"): "The tool's name as get_app lists it.",
-    ("run_write_tool", "function"): "The tool's name as get_app lists it.",
-    ("run_read_tool", "tool"): "Same as function.",
-    ("run_write_tool", "tool"): "Same as function.",
-    ("upload_file", "path"): "The file's path on this machine.",
-    ("upload_file", "name"): "The name to store it under; default: the file's own name.",
-}
-
-
-def lean_schema(tool: str, schema: dict) -> dict:
-    """The input schema an agent reads, without the generator's noise: no per-field title, an optional field is its
-    type (not anyOf [type, null] with default null), and each field whose name does not say it carries a hint.
-    Arguments are still checked by the function's own signature; this is only what the listing shows.
-
-    Live 2026-11-13: the 35 schemas were 10 801 characters of the 22 214 every session loads."""
-    def one(name: str, field: dict) -> dict:
-        f = {k: v for k, v in field.items() if k != "title"}
-        alts = f.get("anyOf")
-        if isinstance(alts, list) and {"type": "null"} in alts and f.get("default", 0) is None:
-            rest = [a for a in alts if a != {"type": "null"}]
-            f.pop("anyOf")
-            f.pop("default")
-            f.update(rest[0] if len(rest) == 1 else {"anyOf": rest})
-        hint = PARAM_HINTS.get((tool, name)) or PARAM_HINTS.get(name)
-        if hint and "description" not in f:
-            f["description"] = hint
-        return f
-
-    out = {k: v for k, v in schema.items() if k != "title"}
-    out["properties"] = {n: one(n, f) for n, f in (schema.get("properties") or {}).items()}
-    return out
+def _on(target: str | None, connection_id: str | None) -> str | None:
+    """The contract's ``connection_id`` (a server connection) is the target ``ssh:<id>`` of this shell."""
+    return target or (f"ssh:{connection_id}" if connection_id else None)
 
 
 def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP:
@@ -391,11 +338,12 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         title="Outline a File",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    async def outline(path: str, root: str | None = None, target: str | None = None, full: bool = False) -> dict:
+    async def outline(path: str, root: str | None = None, target: str | None = None, full: bool = False,
+                      connection_id: str | None = None) -> dict:
         """A file's structure without its body: classes, functions, methods and sections with their line ranges. Use it
         before opening a large file; full=true adds the symbols as JSON."""
         # a worker thread like every code tool: its cloud call must never wait for the loop it would block
-        out = await _exo_call(exo.outline, path=path, root=root, target=target)
+        out = await _exo_call(exo.outline, path=path, root=root, target=_on(target, connection_id))
         if not full and isinstance(out, dict) and out.get("rendered"):
             # live 2026-11-13: each symbol came twice, as JSON and in `rendered` (exoskeleton.py: 20 562 -> 6 906 chars)
             out = {k: v for k, v in out.items() if k != "symbols"}
@@ -405,10 +353,11 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         title="Read a Symbol",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    async def read_symbol(path: str, name: str, root: str | None = None, target: str | None = None) -> dict:
+    async def read_symbol(path: str, name: str, root: str | None = None, target: str | None = None,
+                          connection_id: str | None = None) -> dict:
         """Read one symbol (function, class, Class.method, section) or a line range such as "L120-180" from a file,
         instead of the whole file."""
-        return await _exo_call(exo.read_symbol, path=path, name=name, root=root, target=target)
+        return await _exo_call(exo.read_symbol, path=path, name=name, root=root, target=_on(target, connection_id))
 
     @mcp.tool(
         title="Callers and Callees",
@@ -422,10 +371,11 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         title="API Contracts",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    async def contract_slice(symbols: list[str], root: str | None = None, target: str | None = None) -> dict:
+    async def contract_slice(symbols: list[str] | None = None, query: str = "", k: int = 50, root: str | None = None,
+                             target: str | None = None) -> dict:
         """The endpoints and routes across the user's repositories and who calls them, plus the given symbols with
         their callers. Use it before changing an API either side depends on."""
-        return await _exo_call(exo.contract_slice, symbols=symbols, root=root, target=target)
+        return await _exo_call(exo.contract_slice, symbols=symbols, query=query, k=k, root=root, target=target)
 
     @mcp.tool(
         title="Impact of a Change",
@@ -557,10 +507,11 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         title="Roll Back to a Checkpoint",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True),
     )
-    def checkpoint_rollback(target: str | int | None = None, root: str | None = None) -> dict:
+    def checkpoint_rollback(target: str | int | None = None, root: str | None = None, paths: list[str] | None = None,
+                            allow_nested: bool = False) -> dict:
         """Restore the workspace to a checkpoint (default: the latest). A safety snapshot is taken first, so the
         rollback itself can be undone."""
-        return exo.checkpoint_rollback(target=target, root=root)
+        return exo.checkpoint_rollback(target=target, root=root, paths=paths, allow_nested=allow_nested)
 
     @mcp.tool(
         title="Token Savings",
@@ -783,10 +734,16 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         """Guidance for building an Imperal app from intent."""
         return build_prompt_text()
 
+    # what an agent reads of each tool is the SDK's one contract (ICNLI §3.5: the kernel's LOCAL_TOOL_DEFS and webbee's
+    # executor read the same data); the function's own signature still checks the arguments
+    from imperal_sdk import tool_contract
+    contract = {t.name: t for t in tool_contract.shell_tools("mcp")}
     for name, tool in (getattr(getattr(mcp, "_tool_manager", None), "_tools", None) or {}).items():
-        tool.parameters = lean_schema(name, tool.parameters)
-        # a docstring's own indentation reached every agent as runs of spaces after each line break
-        tool.description = " ".join((tool.description or "").split())
+        if name in contract:
+            tool.parameters = tool_contract.as_mcp_schema(contract[name])["inputSchema"]
+            tool.description = contract[name].description
+        else:   # a tool the installed SDK does not know yet: its own words, one line
+            tool.description = " ".join((tool.description or "").split())
     return mcp
 
 

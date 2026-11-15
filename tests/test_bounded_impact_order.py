@@ -19,14 +19,14 @@ def test_code_of_any_repo_comes_before_tests():
                                                        "lib/tests/t2.py"]
 
 
-def test_folder_merge_one_file_once_code_first_newest_sync():
+def test_folder_merge_code_first_newest_sync():
+    """A folder's map no longer holds its repositories' files (the vault retires it, 2026-11-15): no copy comes in to
+    filter; the merge still puts code before tests and takes the newest sync."""
     own = {"ok": True, "synced_at": 100.0, "data": {"items": [
         {"id": "tests/t.py", "title": "tests/t.py", "path": "tests/t.py", "group": "tests"},
         {"id": "app/x.py", "title": "app/x.py", "path": "app/x.py", "group": "code"}]}}
     other = {"ok": True, "synced_at": 300.0, "data": {"items": [
-        {"id": "m.py", "title": "m.py", "path": "m.py", "group": "code"},
-        {"id": "p", "title": "p", "path": "core/gw/app/x.py", "origin": "package", "repo": "folderkey",
-         "repo_name": "wpanel", "group": "code"}]}}
+        {"id": "m.py", "title": "m.py", "path": "m.py", "group": "code"}]}}
     out = ex._merge_folder_answers([("core/gw", own), ("mods/a", other)], units_by_key={"k1": "core/gw"})
     paths = [i["path"] for i in out["data"]["items"]]
     assert sum(p.endswith("app/x.py") for p in paths) == 1

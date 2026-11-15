@@ -489,7 +489,9 @@ def test_impact_asks_vault_and_returns_its_items(sample_workspace: Path):
     assert impact[3]["repo_key"] == "rk1" and impact[3]["symbols"] == ["compute_total"]
 
 
-def test_search_code_sends_vector_when_embedder_present(sample_workspace: Path, monkeypatch):
+def test_search_code_lets_the_vault_embed_the_query(sample_workspace: Path, monkeypatch):
+    """Variant A (2026-11-15): the vault is the one embedder -- the client sends the query's words, never a vector,
+    even with a model of its own."""
     import imperal_sdk.code_index as ci
     monkeypatch.setattr(ci, "embed_query", lambda text: b"\x00\x00\x80?")
     cloud = _Cloud({"/code/search": {"ok": True, "semantic": "on", "data": {"items": [
@@ -498,7 +500,7 @@ def test_search_code_sends_vector_when_embedder_present(sample_workspace: Path, 
     exo = ExoskeletonRuntime(workspace=str(sample_workspace), client=cloud)
     out = exo.search_code("compute_total")
     search = [c for c in cloud.calls if c[1].endswith("/code/search")][0]
-    assert search[2]["vector"] and search[2]["q"] == "compute_total"
+    assert "vector" not in search[2] and search[2]["q"] == "compute_total"
     assert out["matches"][0]["title"] == "compute_total" and out["semantic"] == "on"
 
 
@@ -651,29 +653,32 @@ def test_the_exchange_never_carries_a_secret_file_or_raw_pii(tmp_path: Path):
     exo = ExoskeletonRuntime(workspace=str(tmp_path))
     exo.record_call("read_symbol", {"path": "config/.env.local", "name": "L1-5"}, ok=True, text="DB_PASS=hunter2")
     exo.record_call("search_code", {"query": "mail"}, ok=True, text="owner: someone@example.com")
-    assert exo._exchange[0]["text"] == "(withheld: a secret file)" and "hunter2" not in str(exo._exchange[0])
+    # owner 2026-11-15 (phase 6 decision 1): a secret file goes by its form -- the key stays, its value never
+    assert exo._exchange[0]["text"] == "DB_PASS=<redacted:secret-file-value>" and "hunter2" not in str(exo._exchange[0])
     assert "someone@example.com" not in exo._exchange[1]["text"]
 
 
-def test_a_secret_directory_or_a_windows_path_is_withheld_too(tmp_path: Path):
+def test_a_secret_directory_or_a_windows_path_is_masked_by_its_form_too(tmp_path: Path):
     exo = ExoskeletonRuntime(workspace=str(tmp_path))
     exo.record_call("read_symbol", {"path": "deploy/secrets/db.yaml", "name": "L1-3"}, ok=True, text="pw: x1")
     exo.record_call("read_symbol", {"path": "C:\\Users\\me\\.ssh\\config", "name": "L1-3"}, ok=True, text="Host x")
     exo.record_call("read_symbol", {"path": "keys\\ID_RSA", "name": "L1-3"}, ok=True, text="-----BEGIN")
-    assert [e["text"] for e in exo._exchange] == ["(withheld: a secret file)"] * 3
+    assert [e["text"] for e in exo._exchange] == ["pw: <redacted:secret-file-value>", "<redacted:key-file>",
+                                                  "<redacted:key-file>"]
 
 
-def test_a_secret_folder_named_by_the_root_is_withheld(tmp_path: Path):
+def test_a_secret_folder_named_by_the_root_is_masked(tmp_path: Path):
     exo = ExoskeletonRuntime(workspace=str(tmp_path))
     exo.record_call("outline", {"path": "config", "root": "/home/me/.ssh"}, ok=True, text="Host x")
     exo.record_call("outline", {"root": "deploy/secrets"}, ok=True, text="pw")
-    assert [e["text"] for e in exo._exchange] == ["(withheld: a secret file)"] * 2
+    assert [e["text"] for e in exo._exchange] == ["<redacted:key-file>", "<redacted:secret-file-line>"]
 
 
 def test_recording_never_breaks_a_tool_and_withholds_when_it_cannot_check(tmp_path: Path, monkeypatch):
-    """Final review I6: an older imperal-sdk without SECRET_PATTERNS must not fail the code tools."""
+    """Final review I6: what cannot be checked is not sent, and the code tool still runs (the SDK's secret rules
+    missing stands for any failure of the check)."""
     import sys
-    monkeypatch.setitem(sys.modules, "imperal_sdk.code_index", None)      # import fails like an old sdk
+    monkeypatch.setitem(sys.modules, "imperal_sdk.secret_mask", None)     # the check cannot run
     exo = ExoskeletonRuntime(workspace=str(tmp_path))
     exo.record_call("outline", {"path": "a.py"}, ok=True, text="def x(): pass")
     assert exo._exchange[-1]["tool"] == "outline" and exo._exchange[-1]["text"] == "(withheld: secrets not checked)"
@@ -1239,7 +1244,8 @@ def _fake_units(exo, ws, monkeypatch, ready_items: list):
     monkeypatch.setattr(exo, "units_progress", lambda _ws=None: [])
     import webbee.intel.query as q
     monkeypatch.setattr(q, "search_code", lambda svc, query, k=10, kind=None: {"data": {"items": ready_items}})
-    monkeypatch.setattr(q, "impact_of_change", lambda svc, syms: {"data": {"items": []}, "by_name": []})
+    from imperal_sdk.code_links import Linker
+    monkeypatch.setattr(q, "linker", lambda svc: Linker({}, [], []))      # the units' one resolver: nothing in it
 
 
 def test_units_not_ready_say_partial_never_empty_ok(tmp_path: Path, monkeypatch):
@@ -1260,3 +1266,39 @@ def test_units_search_one_path_per_hit_exact_first(tmp_path: Path, monkeypatch):
     ids = [m["id"] for m in out["matches"]]
     assert ids == ["alpha/m.py::f", "alpha/m.py::f_long"]                    # exact first, no duplicate
     assert out["matches"][0]["file"] == "alpha/m.py" and out["matches"][0]["subtitle"] == "alpha/m.py:1"
+
+
+def test_an_ordinary_call_is_sent_and_a_secret_one_masked_by_the_sdk_rule(tmp_path, monkeypatch):
+    """2026-11-15: the door imported a name the SDK had moved (SECRET_PATTERNS) -- every call left "withheld". The one
+    rule is imperal_sdk.secret_mask: a secret file or folder goes by its form (owner 2026-11-15), ``.git`` is not a
+    secret."""
+    from imperal_mcp.exoskeleton import exchange_item
+    monkeypatch.setenv("HOME", str(tmp_path))      # no ~/.ssh of this machine: the output goes as a settings file
+    assert exchange_item("outline", {"path": "app/main.py"}, text="def run(): pass")["text"] == "def run(): pass"
+    assert exchange_item("read_file", {"path": "app/.env"}, text="TOKEN=x")["text"] == "TOKEN=<redacted:secret-file-value>"
+    assert exchange_item("bash", {"command": "tar czf - ~/.ssh"}, text="...")["text"] == "<redacted:secret-file-line>"
+    assert exchange_item("read_file", {"path": ".git/config"}, text="[core]")["text"] == "[core]"
+
+
+def test_a_folder_of_repositories_finds_a_use_across_its_repositories(tmp_path: Path):
+    """Gate 2026-11-15 (impact-reexport): each repository of a folder was asked alone, so core/app's use of lib-sdk's
+    re-exported Emitter was missing; the units are now one resolver (the SDK Linker with them as roots)."""
+    import time
+    lib = tmp_path / "lib-sdk"
+    (lib / "lib_sdk").mkdir(parents=True)
+    (lib / "pyproject.toml").write_text("[project]\nname = 'lib-sdk'\n")
+    (lib / "lib_sdk" / "emit.py").write_text("class Emitter:\n    def send(self):\n        return 1\n")
+    (lib / "lib_sdk" / "__init__.py").write_text("from .emit import Emitter\n")
+    app = tmp_path / "core" / "app"
+    (app / "app").mkdir(parents=True)
+    (app / "pyproject.toml").write_text("[project]\nname = 'app'\n")
+    (app / "app" / "use.py").write_text("from lib_sdk import Emitter\n\n\ndef run():\n    return Emitter().send()\n")
+    exo = ExoskeletonRuntime(workspace=str(tmp_path))
+    out = {}
+    for _ in range(60):
+        out = exo.impact_of_change(["Emitter"])
+        if out.get("status") != "partial":
+            break
+        time.sleep(1)
+    ids = [i.get("id") for i in out.get("items", [])]
+    assert "core/app/app/use.py" in ids, out

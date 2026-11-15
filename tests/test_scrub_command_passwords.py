@@ -1,5 +1,5 @@
 """A password given on a command line never leaves this machine (kernel a54e2f72; Ignat 11-06: `mysql -p'...'`)."""
-from imperal_mcp.secrets_scrub import scrub_secrets
+from imperal_sdk.secret_mask import scrub_secrets
 
 
 def test_mysql_short_option_password_is_redacted():

@@ -7,6 +7,27 @@ a live code map, undo for every change and a fact check of every name, file and 
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.20 - 2026-11-15
+
+The truth architecture (spec 2026-11-14): the client is thin -- what the SDK, the vault and the kernel compute, it takes
+from them. Needs imperal-sdk 6.7.1, webbee 0.7.17 (the [code] extra) and the kernel, gateway and vault of the same day.
+
+- One tool contract (`imperal_sdk.tool_contract`): names, descriptions and parameters of every tool come from it; the
+  same set as Webbee's.
+- Lines are counted by the SDK (`wc -l`): outline, read_symbol and the hooks agree with the file (a file ending in a
+  newline was one line longer).
+- checkpoint_diff of an unknown checkpoint is an error naming the ones that exist; checkpoint_rollback takes `paths`
+  and rolls back a file in a nested repository.
+- Hooks: every tool's text goes through the one masking door (another MCP server's too -- its secrets and a person's
+  data masked, never only its name); the request goes whole (`given`); the steps wait in an outbox under their
+  `client_event_id` until the kernel answers their `seq`; the kernel's marks come back as `systemMessage`.
+- A secret file reaches the kernel by its form (owner 2026-11-15): a settings file's keys with every value masked, key
+  material as its line count; a command that used a secret file of this machine loses exactly that file's values; one
+  that may read it elsewhere or from history (ssh, docker, cd, git, -C) goes as a settings file. The withheld-words
+  fingerprints are gone.
+- No embedding on the client: the vault embeds every chunk and query with one multilingual model.
+- run_write_tool / get_app: an app of the marketplace (a system extension) is found when it is not the user's own.
+
 ## 0.9.19 - 2026-11-14
 
 Found by the live check of 0.9.18, with the kernel of the same day. Floors unchanged.

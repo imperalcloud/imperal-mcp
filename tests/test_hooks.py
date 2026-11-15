@@ -103,12 +103,12 @@ def test_with_hooks_the_server_does_not_record_its_calls_twice(spool, tmp_path):
     assert len(exo._exchange) == 1
 
 
-def test_a_secret_file_is_withheld_in_the_spool(spool):
+def test_a_secret_file_is_masked_by_its_form_in_the_spool(spool):
     read = {**CLAUDE_BASH, "tool_name": "Read", "tool_input": {"file_path": "/w/.env"},
             "tool_response": {"file": {"content": "DB_PASS=hunter2"}}}
     H.run_hook("post-tool", read, gateway=_Gateway())
     raw = "".join(p.read_text() for p in spool.glob("*.jsonl"))
-    assert "hunter2" not in raw and "withheld" in raw
+    assert "hunter2" not in raw and "DB_PASS=<redacted:secret-file-value>" in raw
 
 
 def test_a_prompt_records_the_request_and_answers_with_the_frame(spool):
@@ -254,11 +254,11 @@ def test_antigravity_s_tool_call_and_its_words(spool):
     assert stop["decision"] == "continue" and "blocked_on" in stop["reason"]
 
 
-def test_a_secret_touched_through_shell_punctuation_is_withheld_with_unknown_args():
+def test_a_secret_touched_through_shell_punctuation_is_masked_with_unknown_args():
     for cmd in ("cat<.env", "x=$(cat .env) && echo $x", "grep pw config/.env.local|head", "cat ~/.ssh/id_rsa;ls"):
         [it] = H.tool_items({**CLAUDE_BASH, "tool_input": {"command": cmd}, "tool_response": {"stdout": "PW=hunter2"}})
         assert "hunter2" not in json.dumps(it) and ".env" not in it["args"].get("command", "")[:0] + "x"
-        assert it["text"].startswith("(withheld")
+        assert it["text"] == "PW=<redacted:secret-file-value>"     # not this machine's file: a settings view
     [w] = H.tool_items({**CLAUDE_BASH, "tool_name": "Write", "tool_input": {"file_path": "/w/.env", "content": "a",
                                                                            "body_text": "PW=hunter2"}, "tool_response": {}})
     assert "hunter2" not in json.dumps(w) and w["args"]["path"] == "/w/.env"
@@ -293,10 +293,23 @@ def test_commands_outputs_and_reads_lose_their_credentials():
         _assert_clean(H.tool_items(c))
 
 
-def test_an_unknown_tool_keeps_only_its_name_and_result_flag():
-    [it] = H.tool_items({**CLAUDE_BASH, "tool_name": "mcp__other__do", "tool_input": {"q": "x"},
-                         "tool_response": "anything"})
-    assert it["tool"] == "mcp__other__do" and it["args"] == {} and it["text"] == ""
+def test_any_tool_goes_through_the_one_scrubbing_door_with_its_words():
+    """Spec I (2026-11-15): a message sent to another session was a bare name -- the answer quoting it was "not
+    shown". Its words and answer now go through the door that masks secrets and withholds secret files."""
+    [it] = H.tool_items({**CLAUDE_BASH, "tool_name": "SendMessage", "tool_input": {"to": "a1", "message": "check 7239a56"},
+                         "tool_response": "delivered"})
+    assert it["tool"] == "SendMessage" and it["args"]["message"] == "check 7239a56" and it["text"] == "delivered"
+    [sec] = H.tool_items({**CLAUDE_BASH, "tool_name": "mcp__other__do", "tool_input": {"q": "password=hunter2hunter2"},
+                          "tool_response": "token: ghp_abcdefghijklmnopqrstuvwxyz12"})
+    assert "hunter2" not in json.dumps(sec) and "ghp_abcdefghijklmnopqrstuvwxyz12" not in json.dumps(sec)
+    # owner 2026-11-15 (phase 6 decision 4): another server's text reaches the kernel whole, its secrets and a person's
+    # data masked -- never only its name
+    [pii] = H.tool_items({**CLAUDE_BASH, "tool_name": "mcp__crm__lookup", "tool_input": {"q": "acme"},
+                          "tool_response": "contact someone@example.com, deal 7239 closed"})
+    assert "someone@example.com" not in json.dumps(pii) and "deal 7239 closed" in pii["text"]
+    [env] = H.tool_items({**CLAUDE_BASH, "tool_name": "mcp__other__read", "tool_input": {"file": "app/.env"},
+                          "tool_response": "TOKEN=x"})
+    assert env["text"] == "TOKEN=<redacted:secret-file-value>"
 
 
 def test_prompts_and_finals_lose_their_credentials(spool):
@@ -394,7 +407,7 @@ def test_secret_dumps_hidden_behind_quotes_or_flags_are_withheld():
 
 
 def test_a_token_alone_in_a_url_and_a_secret_on_the_cut_are_redacted():
-    from imperal_mcp.secrets_scrub import scrub_secrets
+    from imperal_sdk.secret_mask import scrub_secrets
     assert "ghp_abcdefghijklmnopqrstuvwxyz12" not in scrub_secrets("git clone https://ghp_abcdefghijklmnopqrstuvwxyz12@github.com/x")
     long_out = "x" * 7990 + " password=hunter2hunter2hunter2"
     [it] = H.tool_items({**CLAUDE_BASH, "tool_input": {"command": "ls"}, "tool_response": {"stdout": long_out}})
@@ -561,35 +574,34 @@ def test_a_message_cannot_forge_a_boundary_or_its_source(spool):
     assert body.startswith(f"<<message {tag} from=agent>>") and body.endswith(f"<<end {tag}>>")
 
 
-ENV_BENCH = {**CLAUDE_BASH, "tool_input": {"command": "set -a; . /srv/app/.env; set +a; python bench.py"},
-             "tool_response": {"stdout": "claims 65 held 53 bad 7\nwall 28s", "stderr": "", "interrupted": False}}
+def _bench(tmp_path, out="claims 65 held 53 bad 7\nwall 28s token=hunter2 b64 aHVudGVyMmh1bnRlcjJodW50ZXIy"):
+    (tmp_path / ".env").write_text("# bench\nAPI_KEY=hunter2\nN=65x\n")
+    return {**CLAUDE_BASH, "tool_input": {"command": "set -a; . ./.env; set +a; python bench.py"},
+            "cwd": str(tmp_path), "tool_response": {"stdout": out, "stderr": "", "interrupted": False}}
 
 
-def _final_after(spool, answer):
-    gw = _Gateway()
-    H.run_hook("post-tool", ENV_BENCH, gateway=gw)
-    H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": answer}, gateway=gw)
-    return [b for n, b in gw.calls if n == "final"][0], gw
+def test_a_command_that_used_a_secret_file_loses_only_its_values(spool, tmp_path):
+    # live 2026-11-07: a bench that sourced .env printed "claims 65"; the kernel saw "(withheld: a secret file)" and
+    # called the answer's 65 unseen. Owner 2026-11-15 (phase 6 decision 1): the file's own values are masked, read on
+    # this machine; a random-looking token too (the value through base64); the bench's numbers stay facts
+    [it] = H.tool_items(_bench(tmp_path))
+    assert "claims 65 held 53 bad 7" in it["text"] and "wall 28s" in it["text"]
+    assert "hunter2" not in json.dumps(it) and "aHVudGVyMmh1bnRlcjJodW50ZXIy" not in it["text"]
 
 
-def test_a_withheld_output_never_leaves_but_the_answer_s_words_it_held_are_named(spool):
-    # live 2026-11-07: a bench that sourced .env printed "claims 65"; the kernel saw "(withheld: a secret file)" and called
-    # the answer's 65 unseen -- now the answer's words the withheld output held ride the final, nothing else of it
-    body, gw = _final_after(spool, "The bench found 65 claims, 53 held, in 28s; 99 were invented.")
-    assert "65" in body["withheld_seen"] and "53" in body["withheld_seen"] and "28s" in body["withheld_seen"]
-    assert "99" not in body["withheld_seen"] and "invented" not in body["withheld_seen"]
-    sent = json.dumps(gw.calls)
-    assert "bad 7" not in sent and "claims 65 held" not in sent         # the output itself never left
-    stored = "".join(p.read_text() for p in spool.iterdir() if p.is_file() and not p.name.endswith(".key"))
-    # on disk only fingerprints of its words -- whole words: a hex fingerprint may hold the letters b-a-d (flaked 1 in 10)
-    assert not re.search(r"\bclaims\b", stored) and not re.search(r"\bbad\b", stored)
+def test_a_secret_file_the_command_may_read_elsewhere_goes_as_a_settings_file(tmp_path):
+    for cmd in ("ssh h '. ./.env; ./bench'", "cd /srv && . ./.env; ./bench", ". ./missing/.env; ./bench",
+                # history prints a secret file's OLD values; -C reads another folder (security review 2026-11-15)
+                "git diff ./.env; ./bench", "git show HEAD:.env; ./bench", "make -C sub .env; ./bench"):
+        [it] = H.tool_items({**_bench(tmp_path), "tool_input": {"command": cmd}})
+        assert "65" not in it["text"] and "<redacted:secret-file-line>" in it["text"], cmd
 
 
-def test_a_session_with_no_withheld_output_says_so_with_an_empty_list(spool):
+def test_the_final_carries_no_withheld_words_any_more(spool):
     gw = _Gateway()
     H.run_hook("post-tool", CLAUDE_BASH, gateway=gw)
     H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "1 passed"}, gateway=gw)
-    assert [b for n, b in gw.calls if n == "final"][0]["withheld_seen"] == []
+    assert "withheld_seen" not in [b for n, b in gw.calls if n == "final"][0]
 
 
 CLAUDE_FAILED_BASH = {"session_id": "s1", "transcript_path": "/t", "cwd": "/w", "hook_event_name": "PostToolUseFailure",
@@ -644,3 +656,53 @@ def test_the_final_check_gets_the_time_left_of_the_stop_budget(monkeypatch):
     monkeypatch.setattr(H.time, "monotonic", lambda: next(clock))
     assert H._final_wait(H.time.monotonic()) == H.STOP_BUDGET_S - 30.0
     assert H._final_wait(H.time.monotonic()) == H.FINAL_WAIT_MIN_S
+
+
+# ── the outbox, the request whole and the marks (truth architecture 2026-11-15) ──
+
+def test_a_lost_ack_resends_the_same_batch_under_the_same_id(spool):
+    """Spec III.2: a batch stays held with its client id until the answer comes; the resend is the SAME batch under the
+    same id (the vault keeps it once), never one re-mixed with newer calls."""
+    sp = H.Spool("s-out")
+    sp.add_items([{"tool": "bash", "text": "first"}])
+    sent = []
+
+    def lost(items, memory, cid):
+        sent.append((cid, [i["text"] for i in items]))
+        raise RuntimeError("timeout")           # the request may have landed; the answer did not
+    with pytest.raises(RuntimeError):
+        H._send(sp, lost)
+    sp.add_items([{"tool": "bash", "text": "newer"}])
+    got = H._send(sp, lambda items, memory, cid: sent.append((cid, [i["text"] for i in items])) or {"seq": 4})
+    assert got == {"seq": 4} and sent[0] == sent[1] and sent[1][1] == ["first"]
+    H._send(sp, lambda items, memory, cid: sent.append((cid, [i["text"] for i in items])))
+    assert sent[2][1] == ["newer"] and sent[2][0] != sent[0][0] and sp.inflight() is None
+
+
+def test_a_refusal_for_good_drops_the_held_batch(spool):
+    sp = H.Spool("s-drop")
+    sp.add_items([{"tool": "bash", "text": "x"}])
+
+    class Refused(Exception):
+        status_code = 422
+    with pytest.raises(Refused):
+        H._send(sp, lambda items, memory, cid: (_ for _ in ()).throw(Refused()))
+    assert sp.inflight() is None
+
+
+def test_the_request_whole_reaches_the_final_and_the_marks_are_said(spool):
+    big = "report: " + "x" * 9000 + " the tail line 7239a56"
+
+    class Marked(_Gateway):
+        def final(self, body, timeout=None):
+            self._go("final", body)
+            return {"hold": False, "open": [], "marks": ["`7239a56` -- no read shows it"]}
+    gw = Marked()
+    H.run_hook("prompt", {**CLAUDE_BASH, "hook_event_name": "UserPromptSubmit", "prompt": big}, gateway=gw)
+    out = H.run_hook("stop", {**CLAUDE_BASH, "hook_event_name": "Stop", "last_assistant_message": "done: 7239a56"},
+                     gateway=gw)
+    final = [b for n, b in gw.calls if n == "final"][-1]
+    assert final["given"].endswith("7239a56") and len(final["given"]) > 9000
+    assert "not shown by what ran" in out["systemMessage"] and "7239a56" in out["systemMessage"]
+    records = [b for n, b in gw.calls if n == "record"]
+    assert records and all(b.get("client_event_id") for b in records)
