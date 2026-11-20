@@ -43,7 +43,8 @@ def test_the_pins_carry_what_the_frame_needs():
     webbee 0.7.17+ (the contract's tool names, refused_local secret view, the field gate's local_grep)."""
     from pathlib import Path
     text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
-    assert "imperal-sdk>=6.7.1" in text and "webbee>=0.7.17" in text and "imperal-sdk[universal-index]>=6.7.1" in text
+    # 0.9.21 (the work that can wait): the contract's web tools in 6.8.1+, a run's end and the stop report in 0.7.18+
+    assert "imperal-sdk>=6.8.1" in text and "webbee>=0.7.18" in text and "imperal-sdk[universal-index]>=6.8.1" in text
 
 
 def _pyproject_description() -> str:

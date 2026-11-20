@@ -7,6 +7,15 @@ a live code map, undo for every change and a fact check of every name, file and 
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.21 - 2026-11-20
+
+The work that can wait (spec 2026-11-19). Needs imperal-sdk 6.8.1, webbee 0.7.18 (the [code] extra) and the kernel of
+the same day.
+
+- The plan's rule names the item that waits: an item that waits or cannot be finished is marked blocked or cancelled
+  with `blocked_on` = what for. The kernel never held a turn on such an item; the rule named only an item that cannot
+  be finished, so an item waiting for a background run stayed in progress and held the turn.
+
 ## 0.9.20 - 2026-11-15
 
 The truth architecture (spec 2026-11-14): the client is thin -- what the SDK, the vault and the kernel compute, it takes
