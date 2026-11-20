@@ -771,7 +771,7 @@ answer from the exact code graph and the user's memory, so you read less, miss f
    `frame` again only after a change (not until you change something). It needs an account: `login` gives a link and
    a code to show the user, once.
 2. `task(goal, items)` - your plan; an item closes only by a proof the kernel saw (a diff, a check that exits 0, a
-   finding with its sources). One you cannot finish: status blocked or cancelled, the reason in blocked_on.
+   finding with its sources). One that waits or cannot be finished: blocked or cancelled, blocked_on = what for.
 3. Code, no account needed: `orient(query)` -> `outline(path)` -> `read_symbol(path, name | "L120-180")`;
    `search_code`, `grep_code` for an exact text, `graph_slice`, `contract_slice`, `repo_profile`, `coding_context`;
    `impact_of_change(symbols)` before editing a shared symbol, `check_syntax` after. root is the repository (default:
