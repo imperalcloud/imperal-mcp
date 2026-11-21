@@ -368,6 +368,18 @@ a single byte leaves your machine.
 
 ---
 
+## Want a standalone terminal agent? Try Webbee 🐝
+
+If you want the same code map, Shadow Git checkpoints, cross-surface memory and fact-checked execution in a standalone open-source terminal agent (no external IDE or shell required), try **[Webbee](https://github.com/imperalcloud/webbee-code)** ([PyPI](https://pypi.org/project/webbee/)):
+
+```bash
+pipx install webbee
+```
+
+`imperal-mcp` and `webbee` share the same Imperal Cloud account, memory vault and live sessions - start a task in Claude Code or Cursor, continue it in Webbee, the web panel or Telegram without losing context.
+
+---
+
 ## FAQ
 
 **Does it replace Claude Code / Cursor / Codex?**

@@ -477,41 +477,41 @@ def build_server(client: ImperalClient, workspace: str | None = None) -> FastMCP
         title="Workspace Overview",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def coding_context(root: str | None = None) -> dict:
+    async def coding_context(root: str | None = None) -> dict:
         """The workspace's file tree (respecting .gitignore, without dependency and build folders) and its git status."""
-        return exo.coding_context(root=root)
+        return await _exo_call(exo.coding_context, root=root)
 
     @mcp.tool(
         title="Checkpoint",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
     )
-    def checkpoint(label: str = "checkpoint", root: str | None = None) -> dict:
+    async def checkpoint(label: str = "checkpoint", root: str | None = None) -> dict:
         """Snapshot the workspace before a risky edit, in a hidden shadow git: your own .git history is untouched.
         Returns its id and the recent checkpoints."""
-        return exo.checkpoint(label=label, root=root)
+        return await _exo_call(exo.checkpoint, label=label, root=root)
 
     @mcp.tool(
         title="Diff Since a Checkpoint",
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    def checkpoint_diff(
+    async def checkpoint_diff(
         target: str | int | None = None,
         paths: list[str] | None = None,
         root: str | None = None,
     ) -> dict:
         """Unified diff of the workspace since a checkpoint (default: the latest); paths narrows it to those files or
         folders."""
-        return exo.checkpoint_diff(target=target, paths=paths, root=root)
+        return await _exo_call(exo.checkpoint_diff, target=target, paths=paths, root=root)
 
     @mcp.tool(
         title="Roll Back to a Checkpoint",
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True),
     )
-    def checkpoint_rollback(target: str | int | None = None, root: str | None = None, paths: list[str] | None = None,
+    async def checkpoint_rollback(target: str | int | None = None, root: str | None = None, paths: list[str] | None = None,
                             allow_nested: bool = False) -> dict:
         """Restore the workspace to a checkpoint (default: the latest). A safety snapshot is taken first, so the
         rollback itself can be undone."""
-        return exo.checkpoint_rollback(target=target, root=root, paths=paths, allow_nested=allow_nested)
+        return await _exo_call(exo.checkpoint_rollback, target=target, root=root, paths=paths, allow_nested=allow_nested)
 
     @mcp.tool(
         title="Token Savings",

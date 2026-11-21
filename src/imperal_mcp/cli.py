@@ -356,11 +356,22 @@ def main(argv=None) -> None:
     cfg = Config.from_env()
 
     if args.cmd == "login":
-        email = asyncio.run(auth.login_device(cfg, open_browser=not args.no_browser))
+        try:
+            email = asyncio.run(auth.login_device(cfg, open_browser=not args.no_browser))
+        except KeyboardInterrupt:
+            print("\nLogin cancelled.", file=sys.stderr)
+            raise SystemExit(130)
+        except Exception as exc:
+            print(f"Login failed: {exc}", file=sys.stderr)
+            raise SystemExit(1)
         print(f"Logged in as {email}.")
         return
     if args.cmd == "logout":
-        asyncio.run(auth.logout(cfg))
+        try:
+            asyncio.run(auth.logout(cfg))
+        except KeyboardInterrupt:
+            print("\nLogout cancelled.", file=sys.stderr)
+            raise SystemExit(130)
         print("Logged out.")
         return
     if args.cmd == "claude-setup":

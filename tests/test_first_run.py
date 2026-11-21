@@ -44,6 +44,36 @@ async def test_a_code_tool_without_the_code_extra_says_what_to_install(tmp_path,
     text = _text(await srv.call_tool("orient", {"query": "x"}))
     assert MISSING_CODE_DEPENDENCY_MESSAGE in text and "--with 'imperal-mcp[code]'" in text
 
+    monkeypatch.setattr(srv._exoskeleton, "coding_context", no_webbee)
+    ctx_text = _text(await srv.call_tool("coding_context", {}))
+    assert MISSING_CODE_DEPENDENCY_MESSAGE in ctx_text
+
+    monkeypatch.setattr(srv._exoskeleton, "checkpoint", no_webbee)
+    cp_text = _text(await srv.call_tool("checkpoint", {}))
+    assert MISSING_CODE_DEPENDENCY_MESSAGE in cp_text
+
+
+def test_cli_login_handles_cancel_and_errors_without_traceback(monkeypatch, capsys):
+    from imperal_mcp.cli import main as cli_main
+
+    async def cancelled(_cfg, *, open_browser: bool = True):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(auth, "login_device", cancelled)
+    with pytest.raises(SystemExit) as exc_cancel:
+        cli_main(["login", "--no-browser"])
+    assert exc_cancel.value.code == 130
+    assert "Login cancelled." in capsys.readouterr().err
+
+    async def boom(_cfg, *, open_browser: bool = True):
+        raise RuntimeError("could not reach https://auth.imperal.io")
+
+    monkeypatch.setattr(auth, "login_device", boom)
+    with pytest.raises(SystemExit) as exc_fail:
+        cli_main(["login", "--no-browser"])
+    assert exc_fail.value.code == 1
+    assert "Login failed: could not reach" in capsys.readouterr().err
+
 
 @pytest.mark.asyncio
 async def test_any_other_import_error_stays_an_error(tmp_path, monkeypatch):
