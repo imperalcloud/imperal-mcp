@@ -34,7 +34,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://imperal.io"
+Homepage = "https://imperal.io/imperal-mcp"
 Repository = "https://github.com/imperalcloud/imperal-mcp"
 Documentation = "https://github.com/imperalcloud/imperal-mcp#readme"
 Protocol = "https://icnli.org"
