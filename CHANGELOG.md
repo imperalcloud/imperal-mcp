@@ -7,6 +7,20 @@ a live code map, undo for every change and a fact check of every name, file and 
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.22 - 2026-11-26
+
+Signing out by itself. One day of the gateway's access log: the token refresh was refused 1381 times and granted
+703 times, every refusal from four addresses of these clients. No kernel or gateway change is needed.
+
+- **One refresh at a time on a machine.** A machine holds one credentials file and several processes read it - the
+  terminal, the MCP server, the watch, a hook on every turn. The lock on a refresh reached one process only; two
+  processes refreshing the same token more than the gateway's 30 s apart looked like a stolen token and the whole
+  session was revoked. A lock file beside the credentials now serialises the refresh across processes, and under
+  it the disk is read again: a sibling that refreshed meanwhile leaves nothing to ask for.
+- **A refusal is heard once.** A token the gateway refused is remembered by its hash; no process of the machine
+  asks for it again until a sign-in writes a new one. A failure that is no verdict (5xx, network) is not
+  remembered.
+
 ## 0.9.21 - 2026-11-20
 
 The work that can wait (spec 2026-11-19). Needs imperal-sdk 6.8.1, webbee 0.7.18 (the [code] extra) and the kernel of
