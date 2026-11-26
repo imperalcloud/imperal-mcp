@@ -109,6 +109,99 @@ def load_creds() -> dict | None:
         return None
 
 
+# ── one refresh at a time on this MACHINE, and a refusal that is heard once ──
+# Live 2026-11-26 (the gateway's access log, one day): /v1/auth/refresh answered 401 1381 times and 200 703 times;
+# every refusal came from four addresses, all of them these clients. One machine holds ONE credentials file and
+# several processes read it -- the terminal, the MCP server, `imperal-mcp watch`, a hook on every turn. The lock
+# below this block serialises one process only; two processes that refresh the same token more than the gateway's
+# 30 s apart look like a stolen token to it, and it revokes the whole session (RFC 9700 reuse detection). And a
+# process holding a refused token asked again on every call, without end.
+LOCK_WAIT_S = 45.0          # longer than one refresh call (30 s): a holder that hangs is not waited for longer
+
+
+def _lock_path() -> Path:
+    return creds_path().with_name("credentials.lock")
+
+
+def _refused_path() -> Path:
+    return creds_path().with_name("refresh-refused")
+
+
+def _try_lock(fd: int) -> bool:
+    try:
+        if _IS_WINDOWS:
+            import msvcrt
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _machine_lock(wait: float = None):
+    """The lock file's descriptor once this process holds the machine's refresh lock; None when it could not be
+    taken in ``wait`` seconds or the platform gives none -- the refresh then goes on as it did before the lock (a
+    lock must never be the reason nobody can sign in). The OS lets go of it when the process dies."""
+    deadline = time.time() + (LOCK_WAIT_S if wait is None else wait)
+    try:
+        p = _lock_path()
+        p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd = os.open(str(p), os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        return None
+    while True:
+        if _try_lock(fd):
+            return fd
+        if time.time() >= deadline:
+            os.close(fd)
+            return None
+        time.sleep(0.1)
+
+
+def _machine_unlock(fd) -> None:
+    if fd is None:
+        return
+    try:
+        if _IS_WINDOWS:
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def _mark(token: str) -> str:
+    return hashlib.sha256((token or "").encode()).hexdigest()
+
+
+def _refused(token: str) -> bool:
+    """The gateway already refused THIS refresh token: it will never be good again, so it is not asked again."""
+    try:
+        return bool(token) and _refused_path().read_text().strip() == _mark(token)
+    except OSError:
+        return False
+
+
+def _remember_refused(token: str) -> None:
+    try:
+        p = _refused_path()
+        p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        p.write_text(_mark(token))
+        os.chmod(str(p), 0o600)
+    except OSError:
+        pass
+
+
 async def _refresh(api_url: str, refresh_token: str) -> dict:
     try:
         async with httpx.AsyncClient(timeout=30) as cli:
@@ -151,48 +244,59 @@ async def ensure_access_token(cfg, force: bool = False) -> str:
         return creds["access_token"]
 
     async with _refresh_lock:
-        # Re-read: a sibling in-process caller may have already refreshed
-        # (and saved) while we were waiting for the lock — nothing to do.
-        fresh = load_creds() or creds
-        now = time.time()
-        if not force and fresh.get("access_token") and fresh.get("access_expires_at", 0) - _REFRESH_SKEW > now:
-            return fresh["access_token"]
-        if not fresh.get("refresh_token"):
-            raise NotLoggedInError("not logged in - " + SIGN_IN_HINT)
+        # one refresh at a time on this machine: the wait runs in a thread, the loop stays free
+        lock = await asyncio.get_running_loop().run_in_executor(None, _machine_lock)
+        try:
+            return await _refresh_and_save(cfg, creds, force)
+        finally:
+            _machine_unlock(lock)
 
-        attempted = fresh["refresh_token"]
-        presented = attempted
+
+async def _refresh_and_save(cfg, creds: dict, force: bool) -> str:
+    """Under both locks: what the disk holds NOW decides -- a sibling process may have refreshed while this one
+    waited for the lock, and then there is nothing to ask the gateway for."""
+    fresh = load_creds() or creds
+    now = time.time()
+    if not force and fresh.get("access_token") and fresh.get("access_expires_at", 0) - _REFRESH_SKEW > now:
+        return fresh["access_token"]
+    if not fresh.get("refresh_token"):
+        raise NotLoggedInError("not logged in - " + SIGN_IN_HINT)
+
+    attempted = fresh["refresh_token"]
+    if _refused(attempted):
+        # heard once: the gateway is not asked again for a token it refused (until a sign-in writes a new one)
+        raise NotLoggedInError("session expired - " + SIGN_IN_HINT)
+    presented = attempted
+    try:
+        tok = await _refresh(cfg.api_url, presented)
+    except NotLoggedInError:
+        # A sibling of an OLDER version (it takes no machine lock) may have won the single-use rotation: give its
+        # save a moment to land and look at the disk again. A token that moved: not a logout, ask once with it.
+        # The same token: the gateway's verdict -- remembered, so no process of this machine asks again.
+        await asyncio.sleep(_SIBLING_RETRY_DELAY_S)
+        sibling = load_creds()
+        sibling_token = sibling.get("refresh_token") if sibling else None
+        if not sibling_token or sibling_token == attempted:
+            _remember_refused(attempted)
+            raise
+        presented = sibling_token
         try:
             tok = await _refresh(cfg.api_url, presented)
         except NotLoggedInError:
-            # Cross-PROCESS race: a sibling process sharing this on-disk
-            # credentials file may have already won the single-use rotation.
-            # Give its save() a moment to land, then check whether the
-            # refresh_token on disk moved out from under us. If it did,
-            # this wasn't a real logout — retry once with the fresh token.
-            # If it's still identical, we really are logged out; re-raise.
-            await asyncio.sleep(_SIBLING_RETRY_DELAY_S)
-            sibling = load_creds()
-            sibling_token = sibling.get("refresh_token") if sibling else None
-            if not sibling_token or sibling_token == attempted:
-                raise
-            presented = sibling_token
-            tok = await _refresh(cfg.api_url, presented)
+            _remember_refused(presented)
+            raise
 
-        # Save FIRST, then return: the death-window between the gateway's
-        # rotation (which already happened server-side, inside _refresh's
-        # HTTP call) and this save is the one place a hard-killed process can
-        # still strand a revoked refresh_token on disk — that residual risk
-        # is closed server-side (grace-window task), not here; minimizing the
-        # gap client-side is all the SDK can do.
-        now = time.time()
-        new_creds = {
-            "access_token": tok["access_token"],
-            "refresh_token": tok.get("refresh_token", presented),
-            "access_expires_at": now + int(tok.get("expires_in", 900)),
-        }
-        save_creds(new_creds)
-        return new_creds["access_token"]
+    # Save FIRST, then return: between the gateway's rotation (already done server-side, inside _refresh's call)
+    # and this save a hard-killed process can still leave a revoked refresh_token on disk -- the next caller then
+    # hears the refusal once and is told to sign in.
+    now = time.time()
+    new_creds = {
+        "access_token": tok["access_token"],
+        "refresh_token": tok.get("refresh_token", presented),
+        "access_expires_at": now + int(tok.get("expires_in", 900)),
+    }
+    save_creds(new_creds)
+    return new_creds["access_token"]
 
 
 # ── Device-authorization-grant login (RFC 8628) ───────────────────────────────
