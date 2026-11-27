@@ -62,6 +62,11 @@ def keep_whole(item: dict, conversation: str, root: str = "", now: Callable[[], 
     try:
         d = inbox_dir(conversation, root)
         os.makedirs(d, mode=0o700, exist_ok=True)
+        for own in (os.path.dirname(d), d):       # the folder of every session too: the names of sessions are
+            try:                                  # the user's own (0.9.23 left the parent readable by others)
+                os.chmod(own, 0o700)
+            except OSError:
+                pass
         stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime(now()))
         n = 0
         while True:

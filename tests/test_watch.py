@@ -32,6 +32,9 @@ def test_a_long_message_is_kept_whole_and_its_address_comes_before_its_words(tmp
     assert open(path, encoding="utf-8").read() == text                        # as it arrived, to the last word
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     assert stat.S_IMODE(os.stat(os.path.dirname(path)).st_mode) == 0o700
+    os.chmod(str(tmp_path), 0o755)                                            # a parent left open by 0.9.23
+    w.keep_whole(item, "mcp-imp_u_a-129a", root=str(tmp_path), now=lambda: 1795780001.0)
+    assert stat.S_IMODE(os.stat(str(tmp_path)).st_mode) == 0o700               # is closed by the next message
     assert w.keep_whole(item, "mcp-imp_u_a-129a", root=str(tmp_path), now=lambda: 1795780000.0) != path   # never over another
     line = w.line_of(item, path)
     assert "\n" not in line and "ПОСЛЕДНЕЕ СЛОВО" not in line

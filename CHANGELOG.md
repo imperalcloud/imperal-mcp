@@ -7,6 +7,12 @@ a live code map, undo for every change and a fact check of every name, file and 
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.24 - 2026-11-27
+
+- **The inbox folder is the user's alone.** 0.9.23 closed each session's folder but left `~/.imperal/inbox`
+  itself readable by other users of the machine: they could not read a message, they could see the names of the
+  sessions. Both are now closed, and a folder left open by 0.9.23 is closed by the next message.
+
 ## 0.9.23 - 2026-11-27
 
 A message between sessions arrives whole. No kernel or gateway change is needed.
