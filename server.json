@@ -3,7 +3,7 @@
   "name": "io.github.imperalcloud/imperal-mcp",
   "title": "Imperal MCP",
   "description": "Memory across sessions, a live code map, undo for every change and a fact check",
-  "version": "0.9.22",
+  "version": "0.9.23",
   "websiteUrl": "https://imperal.io/imperal-mcp",
   "repository": {
     "url": "https://github.com/imperalcloud/imperal-mcp",
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "imperal-mcp",
-      "version": "0.9.22",
+      "version": "0.9.23",
       "runtimeHint": "uvx",
       "runtimeArguments": [
         {

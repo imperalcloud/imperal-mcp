@@ -7,6 +7,18 @@ a live code map, undo for every change and a fact check of every name, file and 
 Needs the kernel and gateway of the same day (package 0.8.5: a new message is decided first, a run started in the
 background is proven by the read of its log, WORLD takes the code map's commit, and more).
 
+## 0.9.23 - 2026-11-27
+
+A message between sessions arrives whole. No kernel or gateway change is needed.
+
+- **`imperal-mcp watch` keeps every message whole and says where.** A shell shows about 500 characters of a
+  notification line, and the watch itself cut a message at 700: an agent read the first third of what its peer
+  wrote and answered that. Every message is now written whole to a file of its own
+  (`~/.imperal/inbox/<session>/<time>.md`, readable by the user only, the newest 300 kept), and the line says
+  first who wrote, how long the message is and where the whole of it is - then how it starts. A message of up to
+  260 characters rides whole in the line. Nothing about what is stored or sent changes: the kernel already kept
+  each message whole in the session's conversation.
+
 ## 0.9.22 - 2026-11-26
 
 Signing out by itself. One day of the gateway's access log: the token refresh was refused 1381 times and granted
